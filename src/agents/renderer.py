@@ -4,16 +4,16 @@ powerpoint rendering using python-pptx
 
 import re
 import qrcode
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Dict, Any, Optional
 import json
 
-from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN, MSO_AUTO_SIZE, MSO_VERTICAL_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.dml.color import RGBColor
-from PIL import Image
 
 from src.state.poster_state import PosterState
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error
@@ -39,11 +39,17 @@ class Renderer:
         
         try:
             self.styling_interfaces = self._load_styling_interfaces(state)
-            output_path = Path(state["output_dir"]) / f"{state['poster_name']}.pptx"
+            render_stage = state.get("render_stage", "final")
+            suffix = "_draft" if render_stage == "draft" else ""
+            output_path = Path(state["output_dir"]) / f"{state['poster_name']}{suffix}.pptx"
             self._render_presentation(state, output_path)
+            state["pptx_output_path"] = str(output_path)
+            state["current_agent"] = self.name
             
             # convert to png if possible
             png_path = self._convert_to_png(output_path)
+            state["poster_preview_path"] = png_path
+            state["final_poster_accepted"] = render_stage == "final" and state.get("draft_status") == "accepted"
             
             log_agent_success(self.name, f"rendered poster: {output_path}")
             if png_path:
@@ -57,6 +63,11 @@ class Renderer:
 
     def _load_styling_interfaces(self, state: PosterState) -> Dict[str, Any]:
         """load styling interfaces from font agent output file"""
+        if state.get("styling_interfaces"):
+            interfaces = dict(state["styling_interfaces"])
+            interfaces["line_spacing"] = 1.0
+            return interfaces
+
         styling_path = Path(state["output_dir"]) / "content" / "styling_interfaces.json"
         if styling_path.exists():
             with open(styling_path, 'r', encoding='utf-8') as f:
@@ -79,10 +90,10 @@ class Renderer:
 
     def _render_presentation(self, state: PosterState, output_path: Path):
         """render complete presentation"""
-        prs = Presentation()
-        prs.slide_width = Inches(state["poster_width"])
-        prs.slide_height = Inches(state["poster_height"])
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        from src.tools.pptx_api import PPTXDirector
+        self.director = PPTXDirector()
+        self.director.set_slide_dimensions(state["poster_width"], state["poster_height"])
+        slide = self.director.slide
 
         # TODO: generate QR code if needed
         qr_code_path = None
@@ -100,7 +111,7 @@ class Renderer:
         for element in sorted_elements:
             self._render_element(slide, element, state, qr_code_path)
         
-        prs.save(output_path)
+        self.director.save(str(output_path))
 
     def _render_element(self, slide, element: Dict, state: PosterState, qr_code_path: Optional[str]):
         """render individual element based on type"""
@@ -113,12 +124,17 @@ class Renderer:
         
         # get appropriate renderer
         renderer_map = {
+            "template_background": self._render_template_shape,
+            "template_header_background": self._render_template_shape,
+            "template_footer_background": self._render_template_shape,
             "title": self._render_title,
             "section_title": self._render_section_title,
             "title_accent_block": self._render_title_accent_block,
             "title_accent_line": self._render_title_accent_line,
             "conf_logo": self._render_conf_logo,
             "aff_logo": self._render_aff_logo,
+            "institution_logo": self._render_institution_logo,
+            "logo_divider": self._render_logo_divider,
             "section_container": self._render_section_container,
             "text": self._render_text,
             "visual": self._render_visual,
@@ -130,6 +146,21 @@ class Renderer:
             renderer(slide, element, state)
         else:
             log_agent_error(self.name, f"unknown element type: {element_type}")
+
+    def _render_template_shape(self, slide, element: Dict, state: PosterState):
+        fill_color = element.get("fill_color", "#FFFFFF")
+        border_color = element.get("border_color")
+        border_width = element.get("border_width", 0.0)
+        self.director.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            element["x"],
+            element["y"],
+            element["width"],
+            element["height"],
+            fill_color=fill_color,
+            border_color=border_color,
+            border_width=border_width,
+        )
 
     def _render_title(self, slide, element: Dict, state: PosterState):
         """render poster title with authors"""
@@ -227,11 +258,7 @@ class Renderer:
         
         log_agent_info(self.name, f"rendering title accent block: {fill_color} at ({x.inches:.2f}, {y.inches:.2f})")
         
-        # create rectangle shape
-        rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, y, w, h)
-        rect.fill.solid()
-        rect.fill.fore_color.rgb = self._parse_color(fill_color)
-        rect.line.fill.background()  # no border
+        self.director.add_shape(MSO_SHAPE.RECTANGLE, element["x"], element["y"], element["width"], element["height"], fill_color=fill_color)
 
     def _render_title_accent_line(self, slide, element: Dict, state: PosterState):
         """render underline accent for section titles"""
@@ -242,11 +269,7 @@ class Renderer:
         
         log_agent_info(self.name, f"rendering title accent line: {fill_color} at ({x.inches:.2f}, {y.inches:.2f})")
         
-        # create thin rectangle for line
-        line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, y, w, h)
-        line.fill.solid()
-        line.fill.fore_color.rgb = self._parse_color(fill_color)
-        line.line.fill.background()  # no border
+        self.director.add_shape(MSO_SHAPE.RECTANGLE, element["x"], element["y"], element["width"], element["height"], fill_color=fill_color)
 
     def _render_section_container(self, slide, element: Dict, state: PosterState):
         """render section container with optional debug border and mono_light background for critical sections"""
@@ -254,30 +277,32 @@ class Renderer:
         
         is_debug = element.get("debug_border", False)
         importance_level = element.get("importance_level", 2)
-        
-        # create base rectangle
-        container = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, y, w, h)
+        template_meta = state.get("layout_template_metadata") or {}
+        is_extracted_template = bool(template_meta.get("extracted_template"))
+        if not is_debug and not is_extracted_template:
+            return
         
         # apply background fill based on importance level
-        if importance_level == 1:
+        fill_color = element.get("fill_color")
+        if not fill_color and importance_level == 1:
             # critical section gets mono_light background color
             color_scheme = state.get("color_scheme", {})
-            mono_light = color_scheme.get("mono_light", "#e6eaef")
-            container.fill.solid()
-            container.fill.fore_color.rgb = self._parse_color(mono_light)
-            log_agent_info(self.name, f"applied mono_light background ({mono_light}) to critical section")
-        else:
-            # non-critical sections remain transparent
-            container.fill.background()
-        
+            fill_color = color_scheme.get("mono_light", "#e6eaef")
+            log_agent_info(self.name, f"applied mono_light background ({fill_color}) to critical section")
+
+        border_color = element.get("border_color")
+        border_width = element.get("border_width", 1.0)
         # apply border based on debug mode
         if is_debug:
-            # prominent debug border
-            container.line.color.rgb = RGBColor(255, 0, 0)  # red border
-            container.line.width = Pt(2)
+            border_color = "#FF0000"
+            border_width = 2.0
             log_agent_info(self.name, f"added debug section border")
-        else:
-            container.line.fill.background()
+
+        if not fill_color and not border_color:
+            return
+
+        self.director.add_shape(MSO_SHAPE.RECTANGLE, element["x"], element["y"], element["width"], element["height"], 
+                                fill_color=fill_color, border_color=border_color, border_width=border_width)
 
     def _render_text(self, slide, element: Dict, state: PosterState):
         """render text elements with enhanced formatting"""
@@ -299,18 +324,12 @@ class Renderer:
         )
 
     def _render_visual(self, slide, element: Dict, state: PosterState):
-        """render visual elements with proper aspect ratio and scaling"""
-        x, y, w, h = (Inches(element[k]) for k in ["x", "y", "width", "height"])
+        """Render visual elements using only resolved visual assets."""
         visual_id = element.get("visual_id")
-        scale_factor = element.get("scale_factor", 1.0)  # default to no scaling
+        slot_id = element.get("slot_id") or element.get("id")
         
-        if visual_id:
-            # layout agent already calculated padding, use exact positioning
-            self._add_visual_with_aspect_ratio(
-                slide, visual_id, 
-                x, y, w, h,
-                state, scale_factor
-            )
+        if visual_id and slot_id:
+            self._add_resolved_visual(slot_id, visual_id, element, state)
 
     def _render_mixed(self, slide, element: Dict, state: PosterState):
         """render mixed elements (text and visual)"""
@@ -328,6 +347,23 @@ class Renderer:
         aff_logo_path = state.get("aff_logo_path")
         if aff_logo_path and Path(aff_logo_path).exists():
             self._render_logo_with_aspect_ratio(slide, element, aff_logo_path)
+
+    def _render_institution_logo(self, slide, element: Dict, state: PosterState):
+        """render an auto-resolved institution logo."""
+        logo_path = element.get("image_path")
+        if logo_path and Path(logo_path).exists():
+            self._render_logo_with_aspect_ratio(slide, element, logo_path)
+
+    def _render_logo_divider(self, slide, element: Dict, state: PosterState):
+        """Render a thin vertical rule between affiliation logos and conference logo."""
+        color_scheme = state.get("color_scheme") or {}
+        line_color = color_scheme.get("theme", "#AAAAAA")
+        self.director.add_connector(
+            element["x"], element["y"],
+            element["x"], element["y"] + element["height"],
+            color=line_color,
+            width_pt=1.2,
+        )
 
     def _add_enhanced_text(self, slide, text: str, left, top, width, height, element: Dict):
         """add text with enhanced formatting support"""
@@ -394,7 +430,7 @@ class Renderer:
             
             # set paragraph properties - force 1.0 line spacing
             p.alignment = PP_ALIGN.LEFT
-            p.line_spacing = self.typography_config["line_spacing"]  # fixed 1.0 line spacing
+            p.line_spacing = line_spacing
 
     def _add_formatted_runs(self, paragraph, text: str, font_family: str, 
                           base_font_size, base_color):
@@ -576,78 +612,44 @@ class Renderer:
         
         return segments
 
-    def _add_visual_with_aspect_ratio(self, slide, visual_id: str, left, top, width, height, state, scale_factor: float = 1.0):
-        """add visual with proper aspect ratio preservation and optional scaling"""
-        visual_path = self._get_visual_path(visual_id, state)
-        
-        if visual_path and Path(visual_path).exists():
-            try:
-                # calculate proper size maintaining aspect ratio
-                with Image.open(visual_path) as img:
-                    orig_width, orig_height = img.size
-                    aspect_ratio = orig_width / orig_height
-                
-                # get allocated space from layout
-                available_width = width.inches if hasattr(width, 'inches') else float(width)
-                available_height = height.inches if hasattr(height, 'inches') else float(height)
-                
-                # always use exact dimensions and positioning from JSON
-                final_width = Inches(available_width)
-                final_height = Inches(available_height)
-                centered_left = left
-                centered_top = top
-                
-                slide.shapes.add_picture(visual_path, centered_left, centered_top, width=final_width, height=final_height)
-                
-                if scale_factor < 1.0:
-                    log_agent_info(self.name, f"visual {visual_id} uses layout-calculated dimensions (scale_factor={scale_factor:.1f} already applied)")
-                                       
-            except Exception as e:
-                log_agent_error(self.name, f"failed to add visual {visual_id}: {e}")
+    def _add_resolved_visual(self, slot_id: str, visual_id: str, element: Dict[str, Any], state: PosterState):
+        """Render a resolved visual slot without any image decision logic."""
+        resolved_entry = self._get_resolved_visual_entry(slot_id, visual_id, state)
+        if not resolved_entry:
+            raise ValueError(f"missing resolved visual asset for slot '{slot_id}'")
+
+        visual_path = resolved_entry.get("resolved_path")
+        if not visual_path or not Path(visual_path).exists():
+            raise ValueError(f"resolved visual path not found for slot '{slot_id}': {visual_path}")
+
+        try:
+            self.director.add_image(
+                visual_path,
+                element["x"],
+                element["y"],
+                element["width"],
+                element["height"],
+                keep_aspect_ratio=False,
+            )
+        except Exception as e:
+            log_agent_error(self.name, f"failed to render visual slot {slot_id}: {e}")
 
     def _render_logo_with_aspect_ratio(self, slide, element: Dict, image_path: str):
         """render logo with proper aspect ratio preservation"""
         x, y, w, h = (Inches(element[k]) for k in ["x", "y", "width", "height"])
         
         try:
-            # calculate dimensions while preserving aspect ratio
-            with Image.open(image_path) as img:
-                orig_width, orig_height = img.size
-                aspect_ratio = orig_width / orig_height
-            
-            available_width = w.inches if hasattr(w, 'inches') else float(w)
-            available_height = h.inches if hasattr(h, 'inches') else float(h)
-            
-            # fit image within available space
-            if available_width / aspect_ratio <= available_height:
-                final_width = Inches(available_width)
-                final_height = Inches(available_width / aspect_ratio)
-            else:
-                final_height = Inches(available_height)
-                final_width = Inches(available_height * aspect_ratio)
-            
-            # center the image
-            centered_left = x + (w - final_width) / 2
-            centered_top = y + (h - final_height) / 2
-            
-            slide.shapes.add_picture(image_path, centered_left, centered_top, 
-                                   width=final_width, height=final_height)
+            self.director.add_image(image_path, element["x"], element["y"], element["width"], element["height"], keep_aspect_ratio=True)
                                    
         except Exception as e:
             log_agent_error(self.name, f"failed to render logo: {e}")
 
-    def _get_visual_path(self, visual_id: str, state: PosterState) -> Optional[str]:
-        """get path to visual asset"""
-        images = state.get("images", {})
-        tables = state.get("tables", {})
-        vid = (visual_id or "").split('_')[-1]
-        
-        if visual_id.startswith("figure"):
-            return images.get(vid, {}).get("path")
-        if visual_id.startswith("table"):
-            return tables.get(vid, {}).get("path")
-        
-        return None
+    def _get_resolved_visual_entry(self, slot_id: str, visual_id: str, state: PosterState) -> Optional[Dict[str, Any]]:
+        """Resolve a slot-level visual entry from the visual asset agent output."""
+        resolved_visual_assets = state.get("resolved_visual_assets") or {}
+        if slot_id in resolved_visual_assets:
+            return resolved_visual_assets[slot_id]
+        return resolved_visual_assets.get(visual_id)
 
     def _parse_color(self, color_str: str) -> RGBColor:
         """parse color string to RGBColor"""
@@ -678,9 +680,8 @@ class Renderer:
         slide.shapes.add_picture(qr_code_path, x, y, w, h)
 
     def _convert_to_png(self, pptx_path: Path) -> Optional[str]:
-        """convert PPTX to PNG using LibreOffice"""
+        """Convert PPTX to PNG using LibreOffice, with macOS QuickLook as fallback."""
         try:
-            import subprocess
             output_dir = pptx_path.parent
             
             import platform
@@ -738,14 +739,58 @@ class Renderer:
             
         except Exception as e:
             log_agent_error(self.name, f"PNG conversion failed: {e}")
-            
-        return None
+
+        return self._convert_to_png_with_quicklook(pptx_path)
+
+    def _convert_to_png_with_quicklook(self, pptx_path: Path) -> Optional[str]:
+        """Generate a preview image on macOS when LibreOffice is unavailable."""
+        if shutil.which("qlmanage") is None:
+            return None
+
+        preview_dir = pptx_path.parent / "preview"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            result = subprocess.run(
+                [
+                    "qlmanage",
+                    "-t",
+                    "-s",
+                    "2000",
+                    "-o",
+                    str(preview_dir),
+                    str(pptx_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                log_agent_error(self.name, f"QuickLook preview failed: {result.stderr.strip()}")
+                return None
+
+            candidates = sorted(preview_dir.glob(f"{pptx_path.name}*.png"))
+            if not candidates:
+                candidates = sorted(preview_dir.glob("*.png"))
+            if not candidates:
+                return None
+
+            final_path = pptx_path.with_suffix(".png")
+            candidates[0].replace(final_path)
+            return str(final_path)
+        except Exception as e:
+            log_agent_error(self.name, f"QuickLook preview failed: {e}")
+            return None
 
 
 def renderer_node(state: PosterState) -> Dict[str, Any]:
     result = Renderer()(state)
     return {
         **state,
+        "pptx_output_path": result.get("pptx_output_path"),
+        "poster_preview_path": result.get("poster_preview_path"),
+        "render_stage": result.get("render_stage", state.get("render_stage")),
+        "draft_status": result.get("draft_status", state.get("draft_status")),
+        "final_poster_accepted": result.get("final_poster_accepted", state.get("final_poster_accepted", False)),
         "tokens": result["tokens"],
         "current_agent": result["current_agent"],
         "errors": result["errors"]

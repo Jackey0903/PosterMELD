@@ -26,6 +26,30 @@ class LayoutWithBalancerAgent:
             initial_state = self.layout_agent(state, mode="initial")
             if initial_state.get("errors"):
                 return initial_state
+
+            if initial_state.get("template_layout_mode") == "template_prior":
+                log_agent_info(self.name, "template prior mode: skipping legacy three-column balancer")
+                slot_pressure_report = self._build_slot_pressure_report(
+                    initial_state["initial_layout_data"],
+                    initial_state["column_analysis"],
+                    initial_state.get("layout_template_metadata") or {},
+                )
+                initial_state["slot_pressure_report"] = slot_pressure_report
+                initial_state["optimized_story_board"] = initial_state.get("story_board")
+                initial_state["balancer_decisions"] = {
+                    "mode": "template_block_passthrough",
+                    "reason": "slot-driven templates already map one section per slot",
+                }
+                self._save_balancer_output(
+                    {
+                        "optimized_story_board": initial_state["optimized_story_board"],
+                        "balancer_decisions": initial_state["balancer_decisions"],
+                    },
+                    initial_state,
+                )
+                final_state = self.layout_agent(initial_state, mode="final")
+                final_state["slot_pressure_report"] = slot_pressure_report
+                return final_state
             
             # phase 2: balancer optimization  
             log_agent_info(self.name, "phase 2: optimizing with balancer")
@@ -59,7 +83,7 @@ class LayoutWithBalancerAgent:
             
         except Exception as e:
             log_agent_error(self.name, f"3-phase optimization error: {e}")
-            return {"errors": [f"{self.name}: {e}"]}
+            return {**state, "errors": state.get("errors", []) + [f"{self.name}: {e}"]}
 
     def _save_balancer_output(self, balancer_result: Dict, state: PosterState):
         """save balancer optimization results"""
@@ -72,6 +96,28 @@ class LayoutWithBalancerAgent:
         with open(output_dir / "balancer_decisions.json", "w", encoding='utf-8') as f:
             json.dump(balancer_result["balancer_decisions"], f, indent=2)
 
+    def _build_slot_pressure_report(
+        self,
+        initial_layout_data: Any,
+        column_analysis: Dict[str, Any],
+        template_layout: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        slot_report: Dict[str, Any] = {}
+        columns = column_analysis.get("columns", {})
+        for lane in template_layout.get("lanes", []):
+            lane_id = lane["id"]
+            column = columns.get(lane_id, {})
+            available = float(column.get("available_height", lane.get("h", 0.0)) or lane.get("h", 0.0) or 0.1)
+            used = float(column.get("total_height", 0.0) or 0.0)
+            slot_report[lane_id] = {
+                "slot_id": lane_id,
+                "pressure": round(used / max(available, 0.1), 4),
+                "used_height": round(used, 4),
+                "available_height": round(available, 4),
+                "available_width": round(float(column.get("width", lane.get("w", 0.0))), 4),
+            }
+        return {"slots": slot_report}
+
 
 def layout_with_balancer_node(state: PosterState) -> Dict[str, Any]:
     """layout with balancer node for langgraph"""
@@ -81,10 +127,21 @@ def layout_with_balancer_node(state: PosterState) -> Dict[str, Any]:
         
         return {
             **state,
+            "initial_layout_data": result.get("initial_layout_data"),
+            "column_analysis": result.get("column_analysis"),
             "design_layout": result.get("design_layout"),
+            "final_column_analysis": result.get("final_column_analysis"),
             "optimized_column_assignment": result.get("optimized_column_assignment"),
             "optimized_story_board": result.get("optimized_story_board"),
             "balancer_decisions": result.get("balancer_decisions"),
+            "resolved_layout_template": result.get("resolved_layout_template"),
+            "layout_template_metadata": result.get("layout_template_metadata"),
+            "template_selection_report": result.get("template_selection_report"),
+            "adaptive_lane_widths": result.get("adaptive_lane_widths"),
+            "template_layout_mode": result.get("template_layout_mode"),
+            "template_block_plan": result.get("template_block_plan"),
+            "layout_intent": result.get("layout_intent"),
+            "slot_pressure_report": result.get("slot_pressure_report"),
             "tokens": result.get("tokens"),
             "current_agent": result.get("current_agent"),
             "errors": result.get("errors", [])

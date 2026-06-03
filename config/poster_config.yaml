@@ -139,6 +139,134 @@ rendering:
   slide_layout_index: 6           # blank slide
   default_shape_fill: "#FFFFFF"
 
+affiliation_logos:
+  enabled: false
+  max_logos: 5
+  request_timeout_seconds: 20
+  include_placeholders: false
+  clearbit_base_url: "https://logo.clearbit.com"
+  min_logo_long_edge: 320
+  normalized_max_size: [1800, 720]
+  monochrome_logo_color: "#1E3A8A"
+  logo_box_gap: 0.24
+  max_logo_height: 1.55
+  local_dirs:
+    - "affiliation_logos"
+    - "logos"
+  known_domains:
+    "Washington University in St. Louis": "wustl.edu"
+    "Brown School at Washington University in St. Louis": "brownschool.wustl.edu"
+    "George Mason University": "gmu.edu"
+    "Tsinghua University": "tsinghua.edu.cn"
+    "Beijing University of Posts and Telecommunications": "bupt.edu.cn"
+    "The Chinese University of Hong Kong": "cuhk.edu.hk"
+    "University of Illinois Chicago": "uic.edu"
+    "Hong Kong University of Science and Technology (Guangzhou)": "hkust-gz.edu.cn"
+    "Hong Kong University of Science and Technology": "hkust.edu.hk"
+  official_logo_urls:
+    "Beijing University of Posts and Telecommunications":
+      - "https://english.bupt.edu.cn/images/logo.png"
+      - "https://www.bupt.edu.cn/images/logo.png"
+    "The Chinese University of Hong Kong":
+      - "https://www.cuhk.edu.hk/english/images/cuhk_logo_2x.png?20221027"
+    "Hong Kong University of Science and Technology (Guangzhou)":
+      - "https://upload.wikimedia.org/wikipedia/en/thumb/8/85/Hong_Kong_University_of_Science_and_Technology_symbol.svg/1280px-Hong_Kong_University_of_Science_and_Technology_symbol.svg.png"
+      - "https://www.hkust-gz.edu.cn/wp-content/themes/hkust-gz/assets/images/logo.svg"
+      - "https://www.hkust-gz.edu.cn/wp-content/themes/hkust-gz/assets/img/logo.svg"
+  known_commons_files:
+    "Washington University in St. Louis": "Washu textlogo.png"
+    "Brown School at Washington University in St. Louis": "Washu textlogo.png"
+    "George Mason University": "George Mason University logo.svg"
+    "Tsinghua University": "Tsinghua University Logo.svg"
+    "Beijing University of Posts and Telecommunications": "BUPT LOGO.png"
+    "The Chinese University of Hong Kong": "CUHK banner.svg"
+    "University of Illinois Chicago": "University of Illinois at Chicago circle logo.svg"
+    "Hong Kong University of Science and Technology": "Hong Kong University of Science and Technology symbol.svg"
+    "Hong Kong University of Science and Technology (Guangzhou)": "Hong Kong University of Science and Technology symbol.svg"
+
+conference_logos:
+  directory: "assets/conference_logos"
+  # Combined layout proportions (when both conf + aff logos present)
+  conf_zone_fraction: 0.38   # fraction of logo region reserved for conf logo
+  divider_width: 0.04        # inches, thin vertical rule between zones
+  divider_gap: 0.30          # inches, padding on each side of divider
+
+visual_refinement:
+  enabled: false
+  max_reflow_count: 1
+  dpi: 300
+  edit_aspect_mismatch_threshold: 0.35
+
+vlm_layout_review:
+  enabled: false
+  max_iterations: 1
+  template_prior_min_accept_score: 70
+  max_move_inches: 0.4
+  container_bottom_padding: 0.2
+  min_font_size: 24
+  max_font_size: 120
+  temperature: 0.1
+  max_tokens: 1600
+  timeout_seconds: 120
+
+visual_legibility_review:
+  enabled: false
+  max_relayout_count: 1
+  temperature: 0.1
+  max_tokens: 1600
+  timeout_seconds: 120
+  min_wide_visual_aspect: 2.2
+  max_width_for_wide_visual: 18.0
+
+adaptive_column_width:
+  enabled: false
+  max_relayout_count: 1
+  min_ratio: 0.75
+  max_ratio: 1.40
+  default_ratios:
+    left:
+      left: 1.20
+      middle: 0.90
+      right: 0.90
+    middle:
+      left: 0.85
+      middle: 1.30
+      right: 0.85
+    right:
+      left: 0.90
+      middle: 0.90
+      right: 1.20
+
+micro_layout_refinement:
+  min_body_font_size: 36
+  min_section_title_font_size: 46
+  min_title_font_size: 72
+  max_body_font_size: 54
+  max_section_title_font_size: 72
+  min_visual_scale: 0.72
+  max_visual_scale: 1.08
+  min_section_gap: 0.2
+  max_section_gap: 1.6
+  min_title_to_content_gap: 0.15
+  min_visual_gap: 0.12
+  min_text_padding: 0.18
+  title_font_shrink_step: 2
+  body_font_shrink_step: 2
+  visual_scale_step: 0.05
+  section_gap_step: 0.15
+  max_iterations: 16
+  target_lane_utilization: 0.9
+  underflow_expand_threshold: 1.0
+  max_underflow_iterations: 8
+  max_body_font_boost: 8
+  max_section_title_font_boost: 4
+  body_font_boost_step: 2
+  title_font_boost_step: 1
+  section_gap_expand_step: 0.12
+  text_height_safety_factor: 1.1
+  text_height_safety_padding: 0.25
+  container_bottom_padding: 0.2
+
 # spacing presets
 spacing_presets:
   tight:

@@ -1,6 +1,6 @@
 """poster state management"""
 
-from typing import Dict, Any, Optional, List, Tuple, TypedDict
+from typing import Dict, Any, Optional, List, TypedDict
 from dataclasses import dataclass, field
 import time
 
@@ -44,11 +44,18 @@ class TimingMetrics:
     pipeline_end: float = 0.0
     parser_time: float = 0.0
     curator_time: float = 0.0
+    template_block_planner_time: float = 0.0
     layout_optimizer_time: float = 0.0
     color_agent_time: float = 0.0
     font_agent_time: float = 0.0
+    micro_layout_refiner_time: float = 0.0
     title_designer_time: float = 0.0
+    visual_asset_agent_time: float = 0.0
+    affiliation_logo_agent_time: float = 0.0
     renderer_time: float = 0.0
+    vlm_layout_reviewer_time: float = 0.0
+    visual_legibility_reviewer_time: float = 0.0
+    adaptive_column_relayout_time: float = 0.0
     api_calls: List[APICall] = field(default_factory=list)
 
     def add_api_call(self, agent: str, call_type: str, input_tokens: int, output_tokens: int):
@@ -86,12 +93,32 @@ class PosterState(TypedDict):
     vision_model: ModelConfig
 
     # processing results
+    raw_text: Optional[str]
     images: Optional[Dict[str, Any]]
     tables: Optional[Dict[str, Any]]
+    visual_assets: Optional[Dict[str, Any]]
+    resolved_visual_assets: Optional[Dict[str, Any]]
+    visual_plan: Optional[List[Dict[str, Any]]]
+    affiliations: Optional[List[str]]
+    affiliation_logos: Optional[List[Dict[str, Any]]]
+    vlm_layout_review: Optional[Dict[str, Any]]
+    vlm_layout_patch: Optional[List[Dict[str, Any]]]
+    visual_legibility_review: Optional[Dict[str, Any]]
+    adaptive_layout_decision: Optional[Dict[str, Any]]
     narrative: Optional[Dict[str, str]]
     poster_plan: Optional[List[Dict[str, Any]]]
     poster_width: int
     poster_height: int
+    layout_template: str
+    resolved_layout_template: Optional[str]
+    layout_template_metadata: Optional[Dict[str, Any]]
+    template_selection_report: Optional[Dict[str, Any]]
+    adaptive_lane_widths: Optional[Dict[str, float]]
+    template_layout_mode: Optional[str]
+    template_block_plan: Optional[Dict[str, Any]]
+    layout_intent: Optional[Dict[str, Any]]
+    template_prior_source_story_board: Optional[Dict[str, Any]]
+    slot_pressure_report: Optional[Dict[str, Any]]
     wireframe_layout: Optional[List[Dict[str, Any]]]
     content_filled_layout: Optional[List[Dict[str, Any]]]
     final_layout: Optional[List[Dict[str, Any]]]
@@ -106,11 +133,42 @@ class PosterState(TypedDict):
     color_scheme: Optional[Dict[str, str]]
     keywords: Optional[Dict[str, Any]]
     styled_layout: Optional[List[Dict[str, Any]]]
+    styling_interfaces: Optional[Dict[str, Any]]
+    initial_layout_data: Optional[List[Dict[str, Any]]]
+    column_analysis: Optional[Dict[str, Any]]
+    optimized_story_board: Optional[Dict[str, Any]]
+    optimized_column_assignment: Optional[List[Dict[str, Any]]]
+    balancer_decisions: Optional[Dict[str, Any]]
+    final_column_analysis: Optional[Dict[str, Any]]
 
     # poster assets
     url: str
     logo_path: str
     aff_logo_path: Optional[str]
+    doi: Optional[str]
+    conference_name: Optional[str]
+    enable_visual_refinement: bool
+    enable_affiliation_logos: bool
+    enable_vlm_layout_review: bool
+    enable_visual_legibility_review: bool
+    enable_adaptive_column_width: bool
+    vlm_model: Optional[str]
+    render_stage: str
+    draft_status: str
+    draft_rejection_reason: Optional[str]
+    final_poster_accepted: bool
+    vlm_review_count: int
+    vlm_reflow_required: bool
+    vlm_patch_applied: bool
+    adaptive_relayout_required: bool
+    adaptive_relayout_count: int
+    template_repair_required: bool
+    template_repair_count: int
+    template_repair_decision: Optional[Dict[str, Any]]
+    poster_preview_path: Optional[str]
+    pptx_output_path: Optional[str]
+    visual_reflow_required: bool
+    visual_reflow_count: int
 
     # metadata
     tokens: TokenUsage
@@ -119,7 +177,24 @@ class PosterState(TypedDict):
     errors: List[str]
 
 
-def create_state(pdf_path: str, text_model: str = "gpt-4.1-2025-04-14", vision_model: str = "gpt-4.1-2025-04-14", width: int = 84, height: int = 42, url: str = "", logo_path: str = "", aff_logo_path: str = "") -> PosterState:
+def create_state(
+    pdf_path: str,
+    text_model: str = "gpt-4.1-2025-04-14",
+    vision_model: str = "gpt-4.1-2025-04-14",
+    width: int = 84,
+    height: int = 42,
+    layout_template: str = "three_column_postergen",
+    url: str = "",
+    logo_path: str = "",
+    aff_logo_path: str = "",
+    enable_visual_refinement: bool = False,
+    enable_affiliation_logos: bool = False,
+    enable_vlm_layout_review: bool = False,
+    enable_visual_legibility_review: bool = False,
+    enable_adaptive_column_width: bool = False,
+    vlm_model: Optional[str] = None,
+    conference_name: Optional[str] = None,
+) -> PosterState:
     """create initial poster state"""
     from pathlib import Path
 
@@ -132,12 +207,32 @@ def create_state(pdf_path: str, text_model: str = "gpt-4.1-2025-04-14", vision_m
         poster_name=poster_name,
         text_model=_get_model_config(text_model),
         vision_model=_get_model_config(vision_model),
+        raw_text=None,
         images=None,
         tables=None,
+        visual_assets=None,
+        resolved_visual_assets=None,
+        visual_plan=None,
+        affiliations=None,
+        affiliation_logos=None,
+        vlm_layout_review=None,
+        vlm_layout_patch=None,
+        visual_legibility_review=None,
+        adaptive_layout_decision=None,
         narrative=None,
         poster_plan=None,
         poster_width=width,
         poster_height=height,
+        layout_template=layout_template,
+        resolved_layout_template=None,
+        layout_template_metadata=None,
+        template_selection_report=None,
+        adaptive_lane_widths=None,
+        template_layout_mode=None,
+        template_block_plan=None,
+        layout_intent=None,
+        template_prior_source_story_board=None,
+        slot_pressure_report=None,
         wireframe_layout=None,
         content_filled_layout=None,
         final_layout=None,
@@ -151,9 +246,40 @@ def create_state(pdf_path: str, text_model: str = "gpt-4.1-2025-04-14", vision_m
         color_scheme=None,
         keywords=None,
         styled_layout=None,
+        styling_interfaces=None,
+        initial_layout_data=None,
+        column_analysis=None,
+        optimized_story_board=None,
+        optimized_column_assignment=None,
+        balancer_decisions=None,
+        final_column_analysis=None,
         url=url,
         logo_path=logo_path,
         aff_logo_path=aff_logo_path,
+        doi=None,
+        conference_name=conference_name,
+        enable_visual_refinement=enable_visual_refinement,
+        enable_affiliation_logos=enable_affiliation_logos,
+        enable_vlm_layout_review=enable_vlm_layout_review,
+        enable_visual_legibility_review=enable_visual_legibility_review,
+        enable_adaptive_column_width=enable_adaptive_column_width,
+        vlm_model=vlm_model,
+        render_stage="final",
+        draft_status="pending",
+        draft_rejection_reason=None,
+        final_poster_accepted=False,
+        vlm_review_count=0,
+        vlm_reflow_required=False,
+        vlm_patch_applied=False,
+        adaptive_relayout_required=False,
+        adaptive_relayout_count=0,
+        template_repair_required=False,
+        template_repair_count=0,
+        template_repair_decision=None,
+        poster_preview_path=None,
+        pptx_output_path=None,
+        visual_reflow_required=False,
+        visual_reflow_count=0,
         tokens=TokenUsage(),
         timing_metrics=TimingMetrics(),
         current_agent="init",
@@ -173,6 +299,10 @@ def _get_model_config(model_id: str) -> ModelConfig:
         "gpt-4o-2024-08-06": ModelConfig("gpt-4o-2024-08-06", "openai"),
         "gpt-4.1-2025-04-14": ModelConfig("gpt-4.1-2025-04-14", "openai"),
         "gpt-4.1-mini-2025-04-14": ModelConfig("gpt-4.1-mini-2025-04-14", "openai"),
+        "gpt-5.1": ModelConfig("gpt-5.1", "openai"),
+        "gpt-5.4-xhigh": ModelConfig("gpt-5.4-xhigh", "openai"),
+        "gpt-5.5-xhigh": ModelConfig("gpt-5.5-xhigh", "openai"),
+        "gpt-5.4": ModelConfig("gpt-5.4", "openai"),
         "glm-4.6": ModelConfig("glm-4.6", "zhipu"),
         "glm-4.6v": ModelConfig("glm-4.6v", "zhipu"),
         "glm-4.5": ModelConfig("glm-4.5", "zhipu"),

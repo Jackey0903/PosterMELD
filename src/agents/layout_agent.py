@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
 from src.state.poster_state import PosterState
-from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error, log_agent_warning
 from src.layout.text_height_measurement import measure_text_height
 from src.config.poster_config import load_config
+from src.tools.layout_api import LayoutTemplates, SEMANTIC_LANES
 
 class LayoutAgent:
     """creates optimized layouts using css box model"""
@@ -31,7 +31,47 @@ class LayoutAgent:
         
         # debug configuration
         self.show_debug_borders = self.config["rendering"]["debug_borders"]  ## enable to see section boundaries for debugging
-        
+    
+    def _resolve_template_layout(self, state: PosterState) -> Dict[str, Any]:
+        effective_height = state["poster_height"] - 2 * self.poster_margin
+        title_region_height = effective_height * self.title_height_fraction
+        adaptive_widths = state.get("adaptive_lane_widths")
+        if adaptive_widths:
+            requested_template = "adaptive_three_column"
+        else:
+            requested_template = state.get("resolved_layout_template") or state.get("layout_template", "auto")
+        if requested_template == "auto":
+            requested_template = "three_column_postergen"
+
+        template_layout = LayoutTemplates(
+            state["poster_width"],
+            state["poster_height"],
+            margin=self.poster_margin,
+            col_gap=self.column_spacing,
+        ).get_template(requested_template, header_height=title_region_height, width_ratios=adaptive_widths)
+
+        state["resolved_layout_template"] = template_layout["template_name"]
+        state["layout_template_metadata"] = template_layout
+        return template_layout
+
+    def _lane_order(self, template_layout: Dict[str, Any]) -> List[str]:
+        return [lane["id"] for lane in template_layout.get("lanes", [])]
+
+    def _lane_map(self, template_layout: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+        return {lane["id"]: lane for lane in template_layout.get("lanes", [])}
+
+    def _vertical_priority_rank(self, priority: str) -> int:
+        order = {"top": 0, "middle": 1, "bottom": 2}
+        return order.get(priority, 1)
+
+    def _get_visual_width_for_lane(self, lane_width: float, state: PosterState) -> float:
+        text_padding = self.config["layout"]["text_padding"]["left_right"]
+        visual_width = lane_width - (2 * text_padding)
+        template_layout = state.get("layout_template_metadata") or {}
+        visual_width_cap = template_layout.get("visual_width_cap")
+        if visual_width_cap:
+            visual_width = min(visual_width, visual_width_cap)
+        return max(visual_width, 0.1)
 
     def __call__(self, state: PosterState, mode: str = "initial") -> PosterState:
         if mode == "initial":
@@ -47,10 +87,11 @@ class LayoutAgent:
             story_board = state.get("story_board")
             if not story_board:
                 raise ValueError("missing story_board from curator")
+            template_layout = self._resolve_template_layout(state)
             
             # organize sections from story board for layout creation
             sections = story_board["spatial_content_plan"]["sections"]
-            optimized_layout = self._organize_sections_by_column(sections)
+            optimized_layout = self._organize_sections_by_column(sections, template_layout)
             
             # create layout directly from curator output - no optimization
             layout_data = self._create_precise_layout(
@@ -84,10 +125,11 @@ class LayoutAgent:
             optimized_story_board = state.get("optimized_story_board")
             if not optimized_story_board:
                 raise ValueError("missing optimized_story_board from balancer")
+            template_layout = self._resolve_template_layout(state)
             
             # organize sections from optimized story board
             sections = optimized_story_board["spatial_content_plan"]["sections"]
-            organized_layout = self._organize_sections_by_column(sections)
+            organized_layout = self._organize_sections_by_column(sections, template_layout)
             
             # create final layout from optimized story board
             layout_data = self._create_precise_layout(
@@ -100,7 +142,7 @@ class LayoutAgent:
             final_column_analysis = self._generate_column_analysis(layout_data, state)
             
             # validate final layout
-            validation = self._validate_precise_layout(layout_data, state["poster_width"], state["poster_height"])
+            self._validate_precise_layout(layout_data, state["poster_width"], state["poster_height"])
             
             state["design_layout"] = layout_data
             state["final_column_analysis"] = final_column_analysis
@@ -124,8 +166,9 @@ class LayoutAgent:
         # calculate available space
         effective_height = poster_height - 2 * self.poster_margin  # total height minus margins
         title_region_height = effective_height * self.title_height_fraction  # 18% of effective height
-        available_height = effective_height - title_region_height  # remaining height for sections
-        column_width = (poster_width - 2 * self.poster_margin - 2 * self.column_spacing) / 3
+        template_layout = self._resolve_template_layout(state)
+        lane_map = self._lane_map(template_layout)
+        available_height = min(lane["h"] for lane in lane_map.values())
         
         # handle new spatial content plan format
         if "spatial_content_plan" in story_board:
@@ -138,7 +181,7 @@ class LayoutAgent:
         
         # create precise spatial layout using css-like calculations
         optimized_layout = self._create_spatial_layout(
-            sections, column_distribution, available_height, column_width, state
+            sections, column_distribution, lane_map, state
         )
         
         log_agent_success(self.name, f"created rule-based optimized layout")
@@ -149,7 +192,7 @@ class LayoutAgent:
                 "strategy": "rule_based_intelligent",
                 "space_utilization_target": 0.90,
                 "column_dimensions": {
-                    "width": column_width,
+                    "width": min(lane["w"] for lane in lane_map.values()),
                     "height": available_height
                 }
             }
@@ -198,39 +241,27 @@ class LayoutAgent:
     
     def _generate_column_analysis(self, layout_data: List[Dict], state: PosterState) -> Dict:
         """generate detailed column utilization analysis using exact column calculation method"""
-        poster_width = state["poster_width"]
-        poster_height = state["poster_height"]
-        effective_height = poster_height - 2 * self.poster_margin
-        title_region_height = effective_height * self.title_height_fraction
-        available_height = effective_height - title_region_height
-        
-        # calculate precise column x coordinates using global constants
-        column_width = (poster_width - 2 * self.poster_margin - 2 * self.column_spacing) / 3
-        left_column_x = self.poster_margin
-        middle_column_x = self.poster_margin + column_width + self.column_spacing
-        right_column_x = self.poster_margin + 2 * (column_width + self.column_spacing)
-        
-        columns = {"left": [], "middle": [], "right": []}
-        
-        # group elements by column using calculated column boundaries
+        template_layout = self._resolve_template_layout(state)
+        lane_map = self._lane_map(template_layout)
+        columns = {lane_id: [] for lane_id in self._lane_order(template_layout)}
+
         for element in layout_data:
             if element.get("type") == "section_container":
-                element_x = element.get("x", 0)
-                # use midpoint boundaries to categorize elements
-                if element_x < (left_column_x + middle_column_x) / 2:
-                    columns["left"].append(element)
-                elif element_x < (middle_column_x + right_column_x) / 2:
-                    columns["middle"].append(element)
-                else:
-                    columns["right"].append(element)
+                section_id = element.get("section_id", "")
+                lane_id = section_id.split("::", 1)[0] if "::" in section_id else element.get("lane_id")
+                if not lane_id or lane_id not in columns:
+                    lane_id = self._match_section_container_to_lane(element, lane_map)
+                columns[lane_id].append(element)
         
         # calculate utilization for each column
         column_analysis = {
-            "available_height": available_height,
+            "available_height": min(lane["h"] for lane in lane_map.values()),
+            "template_name": template_layout["template_name"],
             "columns": {}
         }
         
         for col_name, elements in columns.items():
+            available_height = lane_map[col_name]["h"]
             if elements:
                 max_bottom = max(elem["y"] + elem["height"] for elem in elements)
                 min_top = min(elem["y"] for elem in elements) 
@@ -247,35 +278,56 @@ class LayoutAgent:
                 "total_height": used_height,
                 "status": status,
                 "available_space": max(0, available_height - used_height),
-                "excess_height": max(0, used_height - available_height)
+                "excess_height": max(0, used_height - available_height),
+                "available_height": available_height,
+                "width": lane_map[col_name]["w"],
             }
         
         return column_analysis
+
+    def _match_section_container_to_lane(self, element: Dict, lane_map: Dict[str, Dict[str, float]]) -> str:
+        element_x = element.get("x", 0)
+        element_y = element.get("y", 0)
+        for lane_id, lane in lane_map.items():
+            within_x = lane["x"] - 0.05 <= element_x <= lane["x"] + lane["w"] + 0.05
+            within_y = lane["y"] - 0.05 <= element_y <= lane["y"] + lane["h"] + 0.05
+            if within_x and within_y:
+                return lane_id
+        return next(iter(lane_map))
     
-    def _organize_sections_by_column(self, sections: List[Dict]) -> Dict:
+    def _organize_sections_by_column(self, sections: List[Dict], template_layout: Dict[str, Any]) -> Dict:
         """organize sections by column assignment for layout creation"""
-        columns = {"left": [], "middle": [], "right": []}
+        columns = {lane_id: [] for lane_id in self._lane_order(template_layout)}
         
         for section in sections:
             column = section.get("column_assignment", "left")
+            if column not in columns and section.get("slot_id") in columns:
+                column = section["slot_id"]
             if column in columns:
                 columns[column].append(section)
+
+        for lane_sections in columns.values():
+            lane_sections.sort(key=lambda section: self._vertical_priority_rank(section.get("vertical_priority", "middle")))
         
-        column_assignments = [
-            {"column_id": 0, "sections": columns["left"]},
-            {"column_id": 1, "sections": columns["middle"]}, 
-            {"column_id": 2, "sections": columns["right"]}
-        ]
+        column_assignments = []
+        for idx, lane_id in enumerate(self._lane_order(template_layout)):
+            column_assignments.append({
+                "column_id": idx,
+                "column_name": lane_id,
+                "sections": columns[lane_id],
+            })
         
         return {
             "optimized_layout": {
-                "column_assignments": column_assignments
+                "column_assignments": column_assignments,
+                "template_name": template_layout["template_name"],
             }
         }
     
     def _create_precise_layout(self, story_board: Dict, optimized_layout: Dict, state: PosterState) -> List[Dict]:
         """create precise layout with exact positioning using measurements"""
         layout_elements = []
+        is_template_prior = state.get("template_layout_mode") == "template_prior"
         
         # poster dimensions
         poster_width = state["poster_width"]
@@ -284,24 +336,31 @@ class LayoutAgent:
         # calculate layout dimensions
         effective_height = poster_height - 2 * self.poster_margin
         title_region_height = effective_height * self.title_height_fraction  # 18% fixed region
-        available_height = effective_height - title_region_height  # remaining for sections
-        column_width = (poster_width - 2 * self.poster_margin - 2 * self.column_spacing) / 3
+        base_layout = self._resolve_template_layout(state)
+        lane_map = self._lane_map(base_layout)
+
+        layout_elements.extend(self._create_template_style_elements(base_layout, poster_width, poster_height))
         
         # add title element (still uses actual measured height, not fixed region height)
-        title_element = self._create_title_element(state, poster_width, title_region_height)
+        actual_title_height = base_layout["header"]["h"] if is_template_prior else title_region_height
+        title_element = self._create_title_element(state, poster_width, actual_title_height, base_layout)
         if title_element:
             layout_elements.append(title_element)
         
         # add logo elements
-        logo_elements = self._create_logo_elements(state, poster_width)
+        logo_elements = self._create_logo_elements(state, poster_width, base_layout)
         layout_elements.extend(logo_elements)
         
         # process each column
         column_assignments = optimized_layout.get("optimized_layout", {}).get("column_assignments", [])
         
-        for col_idx, column in enumerate(column_assignments):
-            column_x = self.poster_margin + col_idx * (column_width + self.column_spacing)
-            column_y = self.poster_margin + title_region_height  # fixed at poster_margin + 18%
+        for column in column_assignments:
+            lane_id = column.get("column_name", "left")
+            lane = lane_map[lane_id]
+            column_x = lane["x"]
+            column_y = lane["y"]
+            column_width = lane["w"]
+            available_height = lane["h"]
             
             current_y = column_y
             
@@ -330,9 +389,13 @@ class LayoutAgent:
                     "width": column_width,
                     "height": section_height,
                     "section_id": section.get("section_id", "unknown"),
+                    "lane_id": lane_id,
+                    "slot_id": section.get("slot_id", lane_id),
+                    "template_prior": is_template_prior,
                     "importance_level": section.get("importance_level", 2),  # importance level for background styling
                     "priority": 0.1
                 }
+                self._apply_template_panel_style(section_container, base_layout)
                 
                 # add debug border only if enabled
                 if self.show_debug_borders:
@@ -343,81 +406,381 @@ class LayoutAgent:
                 layout_elements.extend(section_elements)
                 current_y += section_height + 1.0  # 1" section spacing for stability
                 
-                log_agent_info(self.name, f"placed section '{section.get('section_id')}' at y={section_start_y:.2f}, height={section_height:.2f}")
+                log_agent_info(self.name, f"placed section '{section.get('section_id')}' in lane={lane_id} at y={section_start_y:.2f}, height={section_height:.2f}")
         
         return layout_elements
+
+    def _create_template_style_elements(self, template_layout: Dict[str, Any], poster_width: float, poster_height: float) -> List[Dict[str, Any]]:
+        style = template_layout.get("style_tokens") or {}
+        if not style:
+            return []
+
+        elements: List[Dict[str, Any]] = []
+        background = style.get("background")
+        if background and background.upper() != "#FFFFFF":
+            elements.append({
+                "type": "template_background",
+                "x": 0,
+                "y": 0,
+                "width": poster_width,
+                "height": poster_height,
+                "fill_color": background,
+                "priority": 0.0,
+            })
+
+        header_bg = style.get("header_background")
+        if header_bg and header_bg.upper() != "#FFFFFF":
+            header = template_layout["header"]
+            elements.append({
+                "type": "template_header_background",
+                "x": header["x"],
+                "y": header["y"],
+                "width": header["w"],
+                "height": header["h"],
+                "fill_color": header_bg,
+                "priority": 0.01,
+            })
+
+        footer = template_layout.get("footer")
+        footer_bg = style.get("footer_background")
+        if footer and footer_bg and footer_bg.upper() != "#FFFFFF":
+            elements.append({
+                "type": "template_footer_background",
+                "x": footer["x"],
+                "y": footer["y"],
+                "width": footer["w"],
+                "height": footer["h"],
+                "fill_color": footer_bg,
+                "priority": 0.01,
+            })
+
+        return elements
+
+    def _apply_template_panel_style(self, section_container: Dict[str, Any], template_layout: Dict[str, Any]) -> None:
+        style = template_layout.get("style_tokens") or {}
+        if not style:
+            return
+        if style.get("panel_fill_color"):
+            section_container["fill_color"] = style["panel_fill_color"]
+        if style.get("panel_border_color"):
+            section_container["border_color"] = style["panel_border_color"]
+            section_container["border_width"] = 1.2
     
-    def _create_title_element(self, state: PosterState, poster_width: float, title_height: float) -> Dict:
+    def _create_title_element(self, state: PosterState, poster_width: float, title_height: float, template_layout: Dict[str, Any]) -> Dict:
         """create title element with exact positioning"""
-        # calculate 2/3 width (2 columns + 1 margin width)
-        column_width = (poster_width - 2 * self.poster_margin - 2 * self.column_spacing) / 3
-        title_width = 2 * column_width + self.column_spacing  # 2 columns + 1 spacing
+        title_box, _ = self._header_title_logo_boxes(state, template_layout)
         
         # extract title and authors from narrative content
-        narrative = state.get("narrative_content", {})
+        narrative = state.get("narrative_content") or {}
         meta = narrative.get("meta", {})
         poster_title = meta.get("poster_title", state.get('poster_name', 'Title'))
-        authors = meta.get("authors", state.get('authors', 'Authors'))
+        authors = meta.get("authors", "Authors")
+        if template_layout.get("layout_mode") == "template_prior" and template_layout.get("orientation") == "portrait":
+            title_font_size = 58
+            author_font_size = 34
+        else:
+            title_font_size = 100
+            author_font_size = 72
         
         return {
             "type": "title",
-            "x": self.poster_margin,
-            "y": self.poster_margin,
-            "width": title_width,
-            "height": title_height - 1.0,
+            "x": title_box["x"],
+            "y": title_box["y"],
+            "width": title_box["w"],
+            "height": title_box["h"],
             "content": f"{poster_title}\n{authors}",
             "font_family": self.title_font_family,
-            "font_size": 100,
-            "author_font_size": 72,
+            "font_size": title_font_size,
+            "author_font_size": author_font_size,
             "priority": 1.0
         }
     
-    def _create_logo_elements(self, state: PosterState, poster_width: float) -> List[Dict]:
-        """create logo elements with exact positioning"""
-        elements = []
+    def _create_logo_elements(self, state: PosterState, poster_width: float, template_layout: Dict[str, Any]) -> List[Dict]:
+        """Build logo elements in the title-right reserved area.
 
-        # get aspect ratio of logos
-        from PIL import Image
-        conf_logo_aspect_ratio = self.layout_constants["default_logo_aspect_ratio"]
-        aff_logo_aspect_ratio = self.layout_constants["default_logo_aspect_ratio"]
-        if state.get("logo_path") and Path(state["logo_path"]).exists():
-            with Image.open(state["logo_path"]) as img:
-                conf_logo_aspect_ratio = img.size[0] / img.size[1]
-        if state.get("aff_logo_path") and Path(state["aff_logo_path"]).exists():
-            with Image.open(state["aff_logo_path"]) as img:
-                aff_logo_aspect_ratio = img.size[0] / img.size[1]
+        Layout logic (all cases vertically centred in the region):
 
-        # calculate logo heights based on fit in 1/3 of poster width
-        column_width = (poster_width - 2 * self.poster_margin - 2 * self.column_spacing) / 3
-        logo_height = (column_width - 1) / (conf_logo_aspect_ratio + aff_logo_aspect_ratio)
-        # widths based on aspect ratios
-        conf_logo_width = logo_height * conf_logo_aspect_ratio
-        aff_logo_width = logo_height * aff_logo_aspect_ratio
+          conf only          →  conf logo centred in full region
+          aff only (1-2)     →  logos in a single row, centred
+          aff only (3-4)     →  2×2 grid, centred
+          conf + aff (1-2)   →  [aff row | divider | conf] left-to-right
+          conf + aff (3-4)   →  [aff 2×2 | divider | conf] left-to-right
+        """
+        aff_logos = [
+            logo for logo in (state.get("affiliation_logos") or [])
+            if logo.get("logo_path") and Path(logo["logo_path"]).exists()
+        ]
+        logo_config = self.config.get("affiliation_logos", {})
+        aff_logos = aff_logos[: logo_config.get("max_logos", 4)]
 
-        conf_logo_x = poster_width - self.poster_margin - conf_logo_width
-        aff_logo_x = conf_logo_x - 1.0 - aff_logo_width
-        
-        if state.get("aff_logo_path"):
-            elements.append({
-                "type": "aff_logo", 
-                "x": aff_logo_x,
-                "y": self.poster_margin,
-                "width": aff_logo_width,
-                "height": logo_height,
-                "priority": 0.9
-            })
-        
-        if state.get("logo_path"):
-            elements.append({
-                "type": "conf_logo",
-                "x": conf_logo_x,
-                "y": self.poster_margin,
-                "width": conf_logo_width,
-                "height": logo_height,
-                "priority": 0.9
-            })
-        
+        has_conf = bool(state.get("logo_path") and Path(state["logo_path"]).exists())
+        has_aff  = bool(aff_logos)
+
+        if not has_conf and not has_aff:
+            return []
+
+        _, region = self._header_title_logo_boxes(state, template_layout)
+
+        if has_conf and not has_aff:
+            return self._layout_conf_only(state["logo_path"], region)
+
+        if has_aff and not has_conf:
+            return self._layout_aff_only(aff_logos, region, logo_config)
+
+        # both conf + aff: split region
+        return self._layout_combined(state["logo_path"], aff_logos, region, logo_config)
+
+    # ------------------------------------------------------------------ #
+    #  Sub-layouts                                                         #
+    # ------------------------------------------------------------------ #
+
+    def _layout_conf_only(self, conf_path: str, region: Dict[str, float]) -> List[Dict]:
+        aspect = self._get_image_aspect_ratio(conf_path)
+        logo_h = min(region["h"] * 0.88, region["w"] / max(aspect, 0.1))
+        logo_w = logo_h * aspect
+        return [{
+            "type": "conf_logo",
+            "x": region["x"] + (region["w"] - logo_w) / 2,
+            "y": region["y"] + (region["h"] - logo_h) / 2,
+            "width": logo_w,
+            "height": logo_h,
+            "priority": 0.9,
+        }]
+
+    def _layout_aff_only(
+        self,
+        aff_logos: List[Dict[str, Any]],
+        region: Dict[str, float],
+        logo_config: Dict[str, Any],
+    ) -> List[Dict]:
+        return self._aff_grid_elements(aff_logos, region, logo_config)
+
+    def _layout_combined(
+        self,
+        conf_path: str,
+        aff_logos: List[Dict[str, Any]],
+        region: Dict[str, float],
+        logo_config: Dict[str, Any],
+    ) -> List[Dict]:
+        conf_cfg = self.config.get("conference_logos", {})
+        divider_w = conf_cfg.get("divider_width", 0.04)
+        gap       = conf_cfg.get("divider_gap", 0.30)
+        conf_frac = conf_cfg.get("conf_zone_fraction", 0.38)
+
+        conf_zone_w = region["w"] * conf_frac
+        aff_zone_w  = region["w"] - conf_zone_w - divider_w - 2 * gap
+
+        aff_region = {
+            "x": region["x"],
+            "y": region["y"],
+            "w": aff_zone_w,
+            "h": region["h"],
+        }
+        conf_region = {
+            "x": region["x"] + aff_zone_w + divider_w + 2 * gap,
+            "y": region["y"],
+            "w": conf_zone_w,
+            "h": region["h"],
+        }
+        divider_x = region["x"] + aff_zone_w + gap
+
+        elements: List[Dict] = []
+
+        # affiliation logos
+        elements.extend(self._aff_grid_elements(aff_logos, aff_region, logo_config))
+
+        # divider line (rendered by logo_divider handler)
+        elements.append({
+            "type": "logo_divider",
+            "x": divider_x,
+            "y": region["y"] + region["h"] * 0.05,
+            "width": divider_w,
+            "height": region["h"] * 0.90,
+            "priority": 0.85,
+        })
+
+        # conf logo
+        conf_aspect = self._get_image_aspect_ratio(conf_path)
+        logo_h = min(conf_region["h"] * 0.88, conf_region["w"] / max(conf_aspect, 0.1))
+        logo_w = logo_h * conf_aspect
+        elements.append({
+            "type": "conf_logo",
+            "x": conf_region["x"] + (conf_region["w"] - logo_w) / 2,
+            "y": conf_region["y"] + (conf_region["h"] - logo_h) / 2,
+            "width": logo_w,
+            "height": logo_h,
+            "priority": 0.9,
+        })
+
         return elements
+
+    def _aff_grid_elements(
+        self,
+        aff_logos: List[Dict[str, Any]],
+        region: Dict[str, float],
+        logo_config: Dict[str, Any],
+    ) -> List[Dict]:
+        count = len(aff_logos)
+        if count == 0:
+            return []
+
+        if count == 1:
+            cols, rows = 1, 1
+        elif count == 2:
+            cols, rows = 2, 1
+        elif count == 3:
+            cols, rows = 3, 1
+        elif count == 4:
+            cols, rows = 2, 2
+        else:
+            cols, rows = 3, 2
+
+        gap = logo_config.get("logo_box_gap", 0.24)
+        cell_w = max((region["w"] - (cols - 1) * gap) / cols, 0.2)
+        cell_h = max((region["h"] - (rows - 1) * gap) / rows, 0.2)
+        max_h  = logo_config.get("max_logo_height", 1.55)
+        cell_h = min(cell_h, max_h)
+
+        grid_h = rows * cell_h + (rows - 1) * gap
+        grid_w = cols * cell_w + (cols - 1) * gap
+        start_y = region["y"] + max((region["h"] - grid_h) / 2, 0)
+        start_x = region["x"] + max((region["w"] - grid_w) / 2, 0)
+
+        elements: List[Dict] = []
+        for idx, logo in enumerate(aff_logos):
+            row, col = divmod(idx, cols)
+            elements.append({
+                "type": "institution_logo",
+                "x": start_x + col * (cell_w + gap),
+                "y": start_y + row * (cell_h + gap),
+                "width": cell_w,
+                "height": cell_h,
+                "image_path": logo["logo_path"],
+                "institution": logo.get("institution", ""),
+                "domain": logo.get("domain"),
+                "source": logo.get("source"),
+                "aspect": logo.get("aspect", self.layout_constants["default_logo_aspect_ratio"]),
+                "priority": 0.9,
+            })
+        return elements
+
+    def _create_affiliation_logo_grid(
+        self,
+        affiliation_logos: List[Dict[str, Any]],
+        template_layout: Dict[str, Any],
+        is_vertical_stack: bool,
+    ) -> List[Dict[str, Any]]:
+        """Kept for backward-compat; delegates to new helper."""
+        logo_config = self.config.get("affiliation_logos", {})
+        _, region = self._header_title_logo_boxes(None, template_layout, is_vertical_stack)
+        return self._aff_grid_elements(affiliation_logos, region, logo_config)
+
+    def _title_logo_region(self, template_layout: Dict[str, Any], is_vertical_stack: bool) -> Dict[str, float]:
+        _, logo_box = self._header_title_logo_boxes(None, template_layout, is_vertical_stack)
+        return logo_box
+
+    def _header_title_logo_boxes(
+        self,
+        state: PosterState | None,
+        template_layout: Dict[str, Any],
+        is_vertical_stack: bool | None = None,
+    ) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """Return non-overlapping title and logo boxes inside the header.
+
+        Title and logo placement must be computed together. Previously the
+        title used a fixed template-prior width while logos used a lane-based
+        heuristic, which could make the conference logo overlap the title.
+        """
+        header = template_layout["header"]
+        lanes = sorted(template_layout.get("lanes", []), key=lambda lane: lane["x"])
+        if is_vertical_stack is None:
+            is_vertical_stack = bool(lanes) and len({round(lane["x"], 3) for lane in lanes}) == 1
+
+        has_conf = bool(state and state.get("logo_path") and Path(state["logo_path"]).exists())
+        aff_count = len([
+            logo for logo in ((state or {}).get("affiliation_logos") or [])
+            if logo.get("logo_path") and Path(logo["logo_path"]).exists()
+        ])
+        has_logo = has_conf or aff_count > 0 or state is None
+
+        x0 = header["x"]
+        y0 = header["y"]
+        w = header["w"]
+        h = header["h"]
+        gap = 0.42 if template_layout.get("orientation") == "portrait" else 0.55
+        vertical_pad = min(max(h * 0.10, 0.12), 0.35)
+
+        if not has_logo:
+            return (
+                {"x": x0, "y": y0, "w": w, "h": max(h - 0.15, 0.8)},
+                {"x": x0 + w, "y": y0 + vertical_pad, "w": 0.0, "h": max(h - 2 * vertical_pad, 0.1)},
+            )
+
+        explicit_logo_region = self._rightmost_logo_region(template_layout)
+        if explicit_logo_region:
+            logo_box = {
+                "x": explicit_logo_region["x"],
+                "y": explicit_logo_region["y"],
+                "w": explicit_logo_region["w"],
+                "h": explicit_logo_region["h"],
+            }
+            title_w = max(logo_box["x"] - x0 - gap, w * 0.45)
+            title_box = {"x": x0, "y": y0, "w": min(title_w, w), "h": max(h - 0.15, 0.8)}
+            return title_box, logo_box
+
+        if template_layout.get("layout_mode") == "template_prior":
+            if has_conf and aff_count:
+                reserve_frac = 0.32
+            elif aff_count >= 3:
+                reserve_frac = 0.30
+            else:
+                reserve_frac = 0.23
+        elif is_vertical_stack:
+            reserve_frac = 0.28
+        else:
+            lane_reserve = max((lanes[-1]["w"] if lanes else 0.0), w * 0.22)
+            reserve_frac = min(max(lane_reserve / max(w, 0.1), 0.22), 0.36)
+
+        min_logo_w = 2.8 if template_layout.get("orientation") == "portrait" else 4.0
+        logo_w = min(max(w * reserve_frac, min_logo_w), w * 0.38)
+        min_title_w = w * (0.58 if template_layout.get("orientation") == "portrait" else 0.55)
+        if w - logo_w - gap < min_title_w:
+            logo_w = max(w - min_title_w - gap, min_logo_w)
+
+        logo_x = x0 + w - logo_w
+        title_w = max(logo_x - x0 - gap, min_title_w)
+        logo_box = {
+            "x": logo_x,
+            "y": y0 + vertical_pad,
+            "w": logo_w,
+            "h": max(h - 2 * vertical_pad, 0.65),
+        }
+        title_box = {
+            "x": x0,
+            "y": y0,
+            "w": min(title_w, max(logo_x - x0 - gap, 0.1)),
+            "h": max(h - 0.15, 0.8),
+        }
+        return title_box, logo_box
+
+    def _rightmost_logo_region(self, template_layout: Dict[str, Any]) -> Dict[str, float] | None:
+        logo_regions = template_layout.get("logo_regions") or []
+        if not logo_regions:
+            return None
+        region = max(logo_regions, key=lambda item: item.get("x", 0))
+        return {
+            "x": region["x"],
+            "y": region["y"],
+            "w": region["w"],
+            "h": region["h"],
+        }
+
+    def _get_image_aspect_ratio(self, image_path: str | None) -> float:
+        if not image_path or not Path(image_path).exists():
+            return self.layout_constants["default_logo_aspect_ratio"]
+        from PIL import Image
+        with Image.open(image_path) as img:
+            return img.size[0] / max(img.size[1], 1)
     
     def _create_section_elements(self, section: Dict, column_x: float, start_y: float, 
                                column_width: float, state: PosterState, available_height: float = None) -> List[Dict]:
@@ -441,19 +804,18 @@ class LayoutAgent:
         visual_assets = section.get("visual_assets", [])
         for visual_asset in visual_assets:
             visual_id = visual_asset.get("visual_id", "")
-            # apply same padding as text elements
-            visual_padding = self.config["layout"]["text_padding"]["left_right"]  # left/right padding
-            visual_width = column_width - (2 * visual_padding)
+            text_padding = self.config["layout"]["text_padding"]["left_right"]
+            visual_width = self._get_visual_width_for_lane(column_width, state)
             final_visual_width, final_visual_height, scale_factor = self._calculate_visual_height(visual_id, visual_width, state, available_height)
             
             # center the visual within the section (important for scaled visuals)
-            section_content_width = column_width - (2 * visual_padding)
+            section_content_width = column_width - (2 * text_padding)
             if final_visual_width < section_content_width:
                 # center horizontally within the section
-                visual_x = column_x + visual_padding + (section_content_width - final_visual_width) / 2
+                visual_x = column_x + text_padding + (section_content_width - final_visual_width) / 2
             else:
                 # use left alignment if visual fills the section
-                visual_x = column_x + visual_padding
+                visual_x = column_x + text_padding
             
             elements.append({
                 "type": "visual",
@@ -461,7 +823,10 @@ class LayoutAgent:
                 "y": current_y,
                 "width": final_visual_width,
                 "height": final_visual_height,
+                "section_id": section.get("section_id"),
+                "lane_id": section.get("column_assignment"),
                 "visual_id": visual_id,
+                "slot_id": f"{section.get('section_id')}_{visual_id}",
                 "scale_factor": scale_factor,  # for renderer to apply proper scaling
                 "priority": 0.6,
                 "id": f"{section.get('section_id')}_{visual_id}",
@@ -494,6 +859,9 @@ class LayoutAgent:
                 "y": current_y,
                 "width": column_width - (2 * text_padding),
                 "height": text_height,
+                "section_id": section.get("section_id"),
+                "lane_id": section.get("column_assignment"),
+                "slot_id": section.get("slot_id"),
                 "content": combined_text,
                 "font_family": self.body_text_font_family,
                 "font_size": 44,
@@ -513,10 +881,11 @@ class LayoutAgent:
         section_id = section.get("section_id", "")
         
         # get section title design from state
-        title_design = state.get("section_title_design", {}).get("section_title_design", {})
+        title_design_state = state.get("section_title_design") or {}
+        title_design = title_design_state.get("section_title_design", {})
         
         # find specific section application
-        section_app = None
+        section_app = {}
         for app in title_design.get("section_applications", []):
             if app.get("section_id") == section_id:
                 section_app = app
@@ -531,9 +900,10 @@ class LayoutAgent:
         title_width = column_width - (2 * title_padding)
         base_title_x = column_x + title_padding
         
-        # use font size from styling_interfaces
-        styling_interfaces = state.get("styling_interfaces", {})
-        section_title_font_size = styling_interfaces.get("font_sizes", {}).get("section_title", 64)
+        section_title_font_size = title_styling.get(
+            "font_size",
+            self.config["typography"]["sizes"]["section_title"],
+        )
         
         # calculate rectangle dimensions (same as before)
         rect_height = section_title_font_size / 72  # convert pt to inches precisely
@@ -550,6 +920,9 @@ class LayoutAgent:
             "y": start_y + rect_y_offset,  # user modification: y + 10pt
             "width": rect_width,
             "height": rect_height,
+            "section_id": section_id,
+            "lane_id": section.get("column_assignment"),
+            "slot_id": section.get("slot_id"),
             "color": accent_styling.get("color", "#335f91"),
             "priority": 0.7
         }
@@ -567,6 +940,9 @@ class LayoutAgent:
             "y": start_y,
             "width": title_width,
             "height": precise_title_height,
+            "section_id": section_id,
+            "lane_id": section.get("column_assignment"),
+            "slot_id": section.get("slot_id"),
             "section_title": display_title,
             "font_family": title_styling.get("font_family", self.section_title_font_family),
             "font_size": section_title_font_size,
@@ -627,47 +1003,55 @@ class LayoutAgent:
         )
     
     def _create_spatial_layout(self, sections: List[Dict], column_distribution: Dict, 
-                             available_height: float, column_width: float, state: PosterState) -> List[Dict]:
+                             lane_map: Dict[str, Dict[str, float]], state: PosterState) -> List[Dict]:
         """create precise spatial layout using css-like calculations"""
         
         log_agent_info(self.name, "creating spatial layout with css-like precision")
         
         # organize sections by spatial assignment
-        columns = {
-            "left": {"sections": [], "total_height": 0.0},
-            "middle": {"sections": [], "total_height": 0.0}, 
-            "right": {"sections": [], "total_height": 0.0}
-        }
+        columns = {lane_id: {"sections": [], "total_height": 0.0} for lane_id in lane_map}
         
         for section in sections:
             column = section.get("column_assignment", "left")
+            if column not in columns and section.get("slot_id") in columns:
+                column = section["slot_id"]
             if column in columns:
                 columns[column]["sections"].append(section)
         
-        log_agent_info(self.name, f"organized sections: left={len(columns['left']['sections'])}, middle={len(columns['middle']['sections'])}, right={len(columns['right']['sections'])}")
+        log_agent_info(
+            self.name,
+            ", ".join(
+                f"{lane_id}={len(columns[lane_id]['sections'])}"
+                for lane_id in lane_map
+            ),
+        )
         
         # calculate precise heights for each section
         for column_name, column_data in columns.items():
             for section in column_data["sections"]:
-                section_height = self._calculate_precise_section_height(section, column_width, state, available_height)
+                section_height = self._calculate_precise_section_height(
+                    section,
+                    lane_map[column_name]["w"],
+                    state,
+                    lane_map[column_name]["h"],
+                )
                 section["calculated_height"] = section_height
                 column_data["total_height"] += section_height
         
         
         # return layout in expected format
-        return [{
-            "column_id": 0,
-            "sections": [s for s in sections if s.get("column_assignment") == "left"],
-            "estimated_height": columns["left"]["total_height"]
-        }, {
-            "column_id": 1, 
-            "sections": [s for s in sections if s.get("column_assignment") == "middle"],
-            "estimated_height": columns["middle"]["total_height"]
-        }, {
-            "column_id": 2,
-            "sections": [s for s in sections if s.get("column_assignment") == "right"], 
-            "estimated_height": columns["right"]["total_height"]
-        }]
+        ordered_columns = []
+        for index, lane_id in enumerate(lane_map):
+            ordered_columns.append({
+                "column_id": index,
+                "column_name": lane_id,
+                "sections": [
+                    section for section in sections
+                    if section.get("column_assignment") == lane_id or section.get("slot_id") == lane_id
+                ],
+                "estimated_height": columns[lane_id]["total_height"],
+            })
+        return ordered_columns
     
     def _calculate_precise_section_height(self, section: Dict, column_width: float, state: PosterState, available_height: float = None) -> float:
         """calculate precise section height using css box model"""
@@ -710,8 +1094,7 @@ class LayoutAgent:
         for visual in visual_assets:
             visual_id = visual.get("visual_id", "")
             if visual_id:
-                visual_padding = self.layout_constants["visual_padding"]  # consistent with layout positioning
-                visual_width = column_width - (2 * visual_padding)
+                visual_width = self._get_visual_width_for_lane(column_width, state)
                 final_visual_width, final_visual_height, scale_factor = self._calculate_visual_height(visual_id, visual_width, state, available_height)
                 # use the already-scaled height for section sizing (no double scaling)
                 total_height += final_visual_height + 0.3  # visual margin
@@ -730,8 +1113,7 @@ class LayoutAgent:
         # visual width already accounts for padding (passed from caller)
         
         # get aspect ratio from state data
-        images = state.get("images", {})
-        tables = state.get("tables", {})
+        visual_assets = state.get("visual_assets") or {}
         
         # better default aspect ratios based on visual type
         if visual_id.startswith("table_"):
@@ -750,28 +1132,13 @@ class LayoutAgent:
         elif visual_id.startswith("table_"):
             lookup_id = visual_id.replace("table_", "")
         
-        # check in appropriate collection first based on visual_id prefix
-        if visual_id.startswith("table_") and lookup_id in tables:
-            found_aspect = tables[lookup_id].get("aspect", aspect_ratio)
-            aspect_ratio = found_aspect
-            log_agent_info(self.name, f"found visual {visual_id} -> {lookup_id} in tables, aspect={aspect_ratio:.2f}")
-        elif visual_id.startswith("figure_") and lookup_id in images:
-            found_aspect = images[lookup_id].get("aspect", aspect_ratio)
-            aspect_ratio = found_aspect
-            log_agent_info(self.name, f"found visual {visual_id} -> {lookup_id} in images, aspect={aspect_ratio:.2f}")
-        elif lookup_id in images:
-            found_aspect = images[lookup_id].get("aspect", aspect_ratio)
-            aspect_ratio = found_aspect
-            log_agent_info(self.name, f"found visual {visual_id} -> {lookup_id} in images, aspect={aspect_ratio:.2f}")
-        elif lookup_id in tables:
-            found_aspect = tables[lookup_id].get("aspect", aspect_ratio)
-            aspect_ratio = found_aspect
-            log_agent_info(self.name, f"found visual {visual_id} -> {lookup_id} in tables, aspect={aspect_ratio:.2f}")
+        asset_data = visual_assets.get(visual_id)
+        if asset_data:
+            aspect_ratio = asset_data.get("aspect", aspect_ratio)
+            log_agent_info(self.name, f"found visual {visual_id} in visual_assets, aspect={aspect_ratio:.2f}")
         else:
             log_agent_warning(self.name, f"visual {visual_id} (lookup: {lookup_id}) not found in state data, using fallback aspect={aspect_ratio:.2f}")
-            # debug: log available visual data
-            log_agent_info(self.name, f"available images: {list(images.keys())}")
-            log_agent_info(self.name, f"available tables: {list(tables.keys())}")
+            log_agent_info(self.name, f"available visual assets: {list(visual_assets.keys())}")
         
         # calculate original height from aspect ratio
         original_height = visual_width / aspect_ratio

@@ -1,0 +1,25 @@
+You are refining already-prepared academic poster blocks for a fixed template.
+
+Rules:
+- Keep the number of blocks exactly {{ slot_count }}.
+- Do not change slot_id, block_id, source_sections, visual_assets, content_role, or text_budget_weight.
+- Only rewrite `target_title` and `target_bullets`.
+- Each block must stay concise and fit its allocated poster area.
+- Prefer 2-4 bullets for larger blocks and 1-2 bullets for smaller blocks.
+- Do not invent results, data, claims, datasets, or figures.
+- Preserve the scientific meaning of the source content.
+
+Return JSON only with this schema:
+{
+  "blocks": [
+    {
+      "target_title": "...",
+      "target_bullets": ["...", "..."]
+    }
+  ]
+}
+
+Template: {{ template_name }}
+
+Draft blocks:
+{{ blocks }}

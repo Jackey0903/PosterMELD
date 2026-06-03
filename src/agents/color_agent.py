@@ -102,15 +102,10 @@ class ColorAgent:
             log_agent_warning(self.name, "no key visual found, using default navy color")
             return load_config()["colors"]["fallback_theme"]
         
-        # get path to key visual
-        images = state.get("images", {})
-        visual_path = None
-        
-        if key_visual.startswith("figure_"):
-            fig_id = key_visual.replace("figure_", "")
-            if fig_id in images:
-                visual_path = images[fig_id].get("path")
-        
+        visual_assets = state.get("visual_assets", {})
+        visual_data = visual_assets.get(key_visual, {})
+        visual_path = visual_data.get("source_path")
+
         if not visual_path or not Path(visual_path).exists():
             log_agent_warning(self.name, "key visual path not found, using default navy color")
             return load_config()["colors"]["fallback_theme"]

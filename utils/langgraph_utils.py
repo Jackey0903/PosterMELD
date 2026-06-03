@@ -124,8 +124,108 @@ def create_model(config: ModelConfig):
             alibaba_kwargs['base_url'] = base_url
             
         return ChatOpenAI(**alibaba_kwargs)
+    elif config.provider == 'openai_responses':
+        return ResponsesAPIModel(config)
     else:
         raise ValueError(f"unsupported provider: {config.provider}")
+
+
+class ResponsesAPIModel:
+    """Minimal OpenAI Responses API adapter for the existing LangGraphAgent wrapper."""
+
+    def __init__(self, config: ModelConfig):
+        self.config = config
+        self.endpoint = (
+            os.getenv("OPENAI_RESPONSES_BASE_URL")
+            or os.getenv("VLM_BASE_URL")
+            or ""
+        ).rstrip("/")
+        self.api_key = os.getenv("OPENAI_RESPONSES_API_KEY") or os.getenv("VLM_API_KEY")
+        if self.endpoint and not self.endpoint.endswith("/responses"):
+            self.endpoint = f"{self.endpoint}/responses"
+
+    def invoke(self, messages):
+        if not self.endpoint or not self.api_key:
+            raise ValueError("OPENAI_RESPONSES_BASE_URL/VLM_BASE_URL and OPENAI_RESPONSES_API_KEY/VLM_API_KEY are required")
+
+        import requests
+        from langchain_core.messages import AIMessage
+
+        payload = {
+            "model": self.config.model_name,
+            "store": False,
+            "stream": True,
+            "temperature": self.config.temperature,
+            "max_output_tokens": self.config.max_tokens,
+            "input": [self._convert_message(message) for message in messages],
+        }
+        response = requests.post(
+            self.endpoint,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=500,
+            stream=True,
+        )
+        response.raise_for_status()
+        return AIMessage(content=self._extract_stream_text(response))
+
+    def _convert_message(self, message):
+        role = "user"
+        if isinstance(message, SystemMessage):
+            role = "system"
+
+        content = message.content
+        if isinstance(content, str):
+            return {"role": role, "content": [{"type": "input_text", "text": content}]}
+
+        converted = []
+        for item in content:
+            if item.get("type") == "text":
+                converted.append({"type": "input_text", "text": item.get("text", "")})
+            elif item.get("type") == "image_url":
+                image_url = item.get("image_url", {})
+                converted.append({"type": "input_image", "image_url": image_url.get("url", "")})
+        return {"role": role, "content": converted}
+
+    def _extract_text(self, data: Dict[str, Any]) -> str:
+        if data.get("output_text"):
+            return data["output_text"]
+
+        chunks = []
+        for item in data.get("output", []):
+            for content in item.get("content", []):
+                text = content.get("text")
+                if text:
+                    chunks.append(text)
+        if chunks:
+            return "\n".join(chunks)
+
+        raise ValueError(f"unsupported Responses API schema: {list(data.keys())}")
+
+    def _extract_stream_text(self, response) -> str:
+        chunks = []
+        done_text = None
+        for line in response.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            raw = line.split("data:", 1)[1].strip()
+            if raw == "[DONE]":
+                break
+            event = json.loads(raw)
+            event_type = event.get("type")
+            if event_type == "response.output_text.delta":
+                chunks.append(event.get("delta", ""))
+            elif event_type == "response.output_text.done":
+                done_text = event.get("text") or done_text
+            elif event_type == "response.failed":
+                raise ValueError(event.get("response", {}).get("error") or event)
+        text = done_text or "".join(chunks)
+        if not text:
+            raise ValueError("Responses API stream completed without text output")
+        return text
 
 
 class LangGraphAgent:

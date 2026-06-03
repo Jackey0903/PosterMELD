@@ -206,17 +206,12 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# PosterGen specific
+# Paper2Poster generated files
 .DS_Store
 run_*.sh
 marker/
 samples/
-docs/
 ablation/
 evaluation/
-output/*
+output/
 hf/
-
-# Node.js (webui frontend)
-webui/frontend/node_modules/
-webui/frontend/package-lock.json

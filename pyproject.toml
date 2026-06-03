@@ -1,7 +1,7 @@
 [project]
-name = "postergen"
+name = "paper2poster"
 version = "0.1.0"
-description = "Aesthetic-Aware Paper-to-Poster Generation via Multi-Agent LLMs"
+description = "Aesthetic-Aware Paper-to-Poster Generation via Multi-Agent LLMs with robust Multimodal tools"
 authors = [
     {name = "Zhilin Zhang"},
     {name = "Xiang Zhang"},
@@ -80,12 +80,6 @@ dependencies = [
     "uvicorn>=0.24.0",
     "python-multipart>=0.0.6"
 ]
-
-[project.urls]
-Homepage = "https://Y-Research-SBU.github.io/PosterGen"
-Repository = "https://github.com/Y-Research-SBU/PosterGen"
-Documentation = "https://Y-Research-SBU.github.io/PosterGen"
-"Bug Tracker" = "https://github.com/Y-Research-SBU/PosterGen/issues"
 
 [build-system]
 requires = ["hatchling"]

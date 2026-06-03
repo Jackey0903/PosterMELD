@@ -11,6 +11,7 @@ from src.state.poster_state import PosterState
 from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error, log_agent_warning
 from src.config.poster_config import load_config
+from src.utils.text_cleanup import normalize_text_for_poster
 from jinja2 import Template
 
 
@@ -41,15 +42,22 @@ class FontAgent:
             
             # apply styling to layout
             styled_layout = self._apply_styling(design_layout, color_scheme, keywords, state)
+            styling_interfaces = self.get_styling_interfaces()
             
             state["styled_layout"] = styled_layout
             state["keywords"] = keywords
+            state["styling_interfaces"] = styling_interfaces
             state["current_agent"] = self.name
             
             self._save_styled_layout(state)
             
             # count total keywords across all sections
-            total_keywords = sum(len(kw_list) for kw_list in keywords.get("section_keywords", {}).values())
+            total_keywords = sum(
+                len(keyword_list)
+                for section_data in keywords.get("section_keywords", {}).values()
+                for keyword_list in section_data.values()
+                if isinstance(keyword_list, list)
+            )
             
             log_agent_success(self.name, f"applied enhanced styling to {len(styled_layout)} elements")
             log_agent_success(self.name, f"identified {total_keywords} keywords for highlighting")
@@ -63,7 +71,7 @@ class FontAgent:
     def _identify_keywords(self, story_board: Dict, state: PosterState) -> Dict[str, Any]:
         """identify keywords using story board content and enhanced narrative"""
         
-        enhanced_narrative = state.get("enhanced_narrative", {})
+        narrative_content = state.get("narrative_content", {})
         
         # extract keywords using LLM with external prompt
         log_agent_info(self.name, "identifying keywords for highlighting")
@@ -71,7 +79,7 @@ class FontAgent:
         agent = LangGraphAgent("expert at identifying key terms for visual highlighting", state["text_model"], state, "font_agent")
         
         template_data = {
-            "enhanced_narrative": json.dumps(enhanced_narrative, indent=2),
+            "enhanced_narrative": json.dumps(narrative_content, indent=2),
             "curated_content": json.dumps(story_board, indent=2)
         }
         
@@ -95,20 +103,24 @@ class FontAgent:
             
             # apply element-specific styling
             if element.get("type") == "title":
-                self._apply_title_styling(styled_element, colors)
+                self._apply_title_styling(styled_element, colors, state)
             
             elif element.get("type") in ["section_title", "title_accent_block", "title_accent_line"]:
                 # these are handled by the section title designer
                 pass
             
             elif element.get("type") == "section_container":
-                self._apply_section_container_styling(styled_element, colors)
+                self._apply_section_container_styling(styled_element, colors, state)
                 
             elif element.get("type") in ["text", "visual", "mixed"]:
                 self._apply_content_styling(styled_element, colors, section_keywords)
             
-            elif element.get("type") in ["conf_logo", "aff_logo"]:
+            elif element.get("type") in ["conf_logo", "aff_logo", "institution_logo", "logo_divider"]:
                 # logos don't need text styling
+                pass
+
+            elif element.get("type") in ["template_background", "template_header_background", "template_footer_background"]:
+                # extracted template style blocks already carry their own colors
                 pass
             
             styled_layout.append(styled_element)
@@ -118,19 +130,42 @@ class FontAgent:
         
         return styled_layout
 
-    def _apply_title_styling(self, element: Dict, colors: Dict):
+    def _apply_title_styling(self, element: Dict, colors: Dict, state: PosterState = None):
         """apply styling to title elements"""
+        if element.get("content"):
+            element["content"] = normalize_text_for_poster(element["content"])
         element["font_family"] = "Helvetica Neue"
-        element["font_color"] = colors.get("text_on_theme", "#FFFFFF")
+        template_meta = (state or {}).get("layout_template_metadata") or {}
+        header_color = (template_meta.get("style_tokens") or {}).get("header_background")
+        if template_meta.get("extracted_template") and header_color and self._is_dark_color(header_color):
+            element["font_color"] = "#FFFFFF"
+        else:
+            element["font_color"] = colors.get("text_on_theme", "#FFFFFF")
         element["font_size"] = 100
         element["author_font_size"] = 72
         element["font_weight"] = "bold"
 
-    def _apply_section_container_styling(self, element: Dict, colors: Dict):
+    def _is_dark_color(self, color: str) -> bool:
+        color = (color or "").strip().lstrip("#")
+        if len(color) != 6:
+            return False
+        try:
+            r = int(color[0:2], 16)
+            g = int(color[2:4], 16)
+            b = int(color[4:6], 16)
+        except ValueError:
+            return False
+        brightness = (299 * r + 587 * g + 114 * b) / 1000
+        return brightness < 128
+
+    def _apply_section_container_styling(self, element: Dict, colors: Dict, state: PosterState):
         """apply styling to section container elements"""
-        element["border_color"] = colors.get("mono_light", "#CCCCCC")
-        element["border_width"] = 1
-        element["fill_color"] = "#FFFFFF"  # white background
+        template_meta = state.get("layout_template_metadata") or {}
+        is_extracted_template = bool(template_meta.get("extracted_template"))
+        if is_extracted_template:
+            element.setdefault("border_color", colors.get("mono_light", "#CCCCCC"))
+            element.setdefault("border_width", 1)
+            element.setdefault("fill_color", "#FFFFFF")
 
     def _apply_content_styling(self, element: Dict, colors: Dict, section_keywords: Dict):
         """apply styling to content elements with keyword highlighting"""
@@ -140,7 +175,7 @@ class FontAgent:
         
         # ensure proper bullet point formatting first (before keyword highlighting to preserve formatting)
         if element.get("content"):
-            element["content"] = self._format_bullet_points(element["content"])
+            element["content"] = self._format_bullet_points(normalize_text_for_poster(element["content"]))
         
         # apply keyword highlighting to content (after bullet formatting)
         if keywords_for_section and element.get("content"):
@@ -324,7 +359,7 @@ class FontAgent:
         
         # styling interfaces
         with open(output_dir / "styling_interfaces.json", "w", encoding='utf-8') as f:
-            json.dump(self.get_styling_interfaces(), f, indent=2)
+            json.dump(state.get("styling_interfaces", self.get_styling_interfaces()), f, indent=2)
 
 
 def font_agent_node(state: PosterState) -> Dict[str, Any]:
@@ -333,6 +368,7 @@ def font_agent_node(state: PosterState) -> Dict[str, Any]:
         **state,
         "styled_layout": result["styled_layout"],
         "keywords": result.get("keywords"),
+        "styling_interfaces": result.get("styling_interfaces"),
         "tokens": result["tokens"],
         "current_agent": result["current_agent"],
         "errors": result["errors"]

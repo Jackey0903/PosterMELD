@@ -12,6 +12,7 @@
 - Available Tables: {{ available_tables }}
 - **Visual Heights Information:** {{ visual_heights_info }}
 - **Available Height Per Column:** {{ available_height_per_column }}" (CRITICAL CONSTRAINT)
+- **Template Layout Guidance:** {{ template_layout_guidance }}
 
 **Human Poster Design Patterns (CRITICAL REFERENCE):**
 
@@ -113,7 +114,7 @@ Based on analysis of successful academic posters:
 3. **Small Visuals:** Safe to combine with other content or multiple per section
 
 **Core Task:**
-Create 5-8 poster sections with BOTH content organization AND strategic spatial placement to achieve perfect space utilization across all three columns.
+Create {{ section_count_guidance }} poster sections with BOTH content organization AND strategic spatial placement to achieve perfect space utilization across all three columns.
 
 **CRITICAL RESTRICTION: DO NOT create any conclusion, takeaway, future work, or impact sections. Focus ONLY on problem, method, and results/experiments.**
 

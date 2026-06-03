@@ -10,6 +10,9 @@ from src.state.poster_state import PosterState
 from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error, log_agent_warning
 from src.config.poster_config import load_config
+from src.layout.template_selector import TemplateSelector
+from src.tools.layout_api import LayoutTemplates
+from src.template_extraction.block_template_registry import is_block_template_id
 from jinja2 import Template
 
 class StoryBoardCurator:
@@ -41,11 +44,17 @@ class StoryBoardCurator:
                 raise ValueError("missing classified_visuals from parser")
             
             # prepare visual height context for spatial planning
-            visual_context = self._prepare_visual_context_for_curator(state)
+            selection_report = self._resolve_layout_template(
+                state,
+                structured_sections,
+                classified_visuals,
+            )
+            resolved_template = selection_report["selected_template"]
+            visual_context = self._prepare_visual_context_for_curator(state, resolved_template)
             
             story_board, inp, out = self._create_story_board(
                 structured_sections, narrative_content, classified_visuals,
-                state.get("images", {}), state.get("tables", {}),
+                state.get("visual_assets", {}),
                 visual_context, state["text_model"], state
             )
             state["tokens"].add_text(inp, out)
@@ -57,6 +66,9 @@ class StoryBoardCurator:
             log_agent_info(self.name, f"column utilizations: {validation_result['column_utilizations']}")
             
             state["story_board"] = story_board
+            state["resolved_layout_template"] = resolved_template
+            state["layout_template_metadata"] = visual_context["template_layout"]
+            state["template_selection_report"] = selection_report
             state["current_agent"] = self.name
             
             self._save_story_board(state)
@@ -74,9 +86,26 @@ class StoryBoardCurator:
             
         return state
 
-    def _create_story_board(self, structured_sections, narrative_content, classified_visuals, images, tables, visual_context, config, state):
+    def _create_story_board(self, structured_sections, narrative_content, classified_visuals, visual_assets, visual_context, config, state):
         log_agent_info(self.name, "generating spatial content plan")
         agent = LangGraphAgent("expert spatial poster designer", config, state, "curator")
+
+        images = {
+            asset_id.replace("figure_", ""): {
+                "caption": asset.get("caption", ""),
+                "aspect": asset.get("aspect", 1.0),
+            }
+            for asset_id, asset in visual_assets.items()
+            if asset.get("asset_type") == "figure"
+        }
+        tables = {
+            asset_id.replace("table_", ""): {
+                "caption": asset.get("caption", ""),
+                "aspect": asset.get("aspect", 1.0),
+            }
+            for asset_id, asset in visual_assets.items()
+            if asset.get("asset_type") == "table"
+        }
         
         template_data = {
             "structured_sections": json.dumps(structured_sections, indent=2),
@@ -87,7 +116,9 @@ class StoryBoardCurator:
             "available_tables": json.dumps({k: {"caption": v.get("caption", ""), "aspect": v.get("aspect", 1.0)} 
                                           for k, v in tables.items()}, indent=2),
             "available_height_per_column": visual_context["available_height_per_column"],
-            "visual_heights_info": json.dumps(visual_context["visual_assets_heights"], indent=2)
+            "visual_heights_info": json.dumps(visual_context["visual_assets_heights"], indent=2),
+            "template_layout_guidance": self._template_layout_guidance(visual_context),
+            "section_count_guidance": self._section_count_guidance(visual_context),
         }
         
         max_attempts = self.validation_config["max_llm_attempts"]
@@ -98,6 +129,8 @@ class StoryBoardCurator:
                 response = agent.step(prompt)
                 
                 story_board = extract_json(response.content)
+                self._remove_unknown_visual_references(story_board, visual_context)
+                self._compact_portrait_text_content(story_board, visual_context)
                 
                 if self._validate_story_board(story_board, classified_visuals, visual_context):
                     log_agent_success(self.name, f"successfully created story board on attempt {attempt + 1}")
@@ -111,6 +144,45 @@ class StoryBoardCurator:
                     raise ValueError("failed to create story board after multiple attempts")
 
         raise ValueError("failed to create story board")
+
+    def _remove_unknown_visual_references(self, story_board: Dict, visual_context: Dict[str, Any]) -> None:
+        valid_visual_ids = set((visual_context or {}).get("valid_visual_ids") or [])
+        if not valid_visual_ids:
+            return
+        sections = story_board.get("spatial_content_plan", {}).get("sections", [])
+        for section in sections:
+            visuals = section.get("visual_assets", [])
+            if not isinstance(visuals, list):
+                section["visual_assets"] = []
+                continue
+            kept = [visual for visual in visuals if visual.get("visual_id") in valid_visual_ids]
+            removed = [visual.get("visual_id") for visual in visuals if visual.get("visual_id") not in valid_visual_ids]
+            if removed:
+                log_agent_warning(
+                    self.name,
+                    f"removed unknown visual references from {section.get('section_id')}: {removed}",
+                )
+            section["visual_assets"] = kept
+
+    def _compact_portrait_text_content(self, story_board: Dict, visual_context: Dict[str, Any]) -> None:
+        if not self._is_portrait_or_vertical_template(visual_context):
+            return
+        sections = story_board.get("spatial_content_plan", {}).get("sections", [])
+        for section in sections:
+            text_items = section.get("text_content", [])
+            if not isinstance(text_items, list):
+                continue
+            compacted = []
+            for item in text_items:
+                text = str(item).strip()
+                if not text:
+                    continue
+                if len(text) > 170:
+                    text = text[:167].rstrip(" ,;:") + "."
+                compacted.append(text)
+                if len(compacted) >= 2:
+                    break
+            section["text_content"] = compacted
 
     def _validate_story_board(self, story_board: Dict, classified_visuals: Dict = None, visual_context: Dict = None) -> bool:
         """validate story board structure and constraints"""
@@ -127,9 +199,9 @@ class StoryBoardCurator:
         
         sections = scp["sections"]
         min_sections = self.validation_config["min_section_count"]
-        max_sections = self.validation_config["max_section_count"] 
+        max_sections = self._max_section_count_for_template(visual_context)
         if len(sections) < min_sections or len(sections) > max_sections:
-            log_agent_warning(self.name, f"validation error: need 5-8 sections, got {len(sections)}")
+            log_agent_warning(self.name, f"validation error: need {min_sections}-{max_sections} sections, got {len(sections)}")
             return False
         
         # validate each section
@@ -169,6 +241,13 @@ class StoryBoardCurator:
                 if "..." in text:
                     log_agent_warning(self.name, f"validation error: section {i} bullet {j} contains ellipsis")
                     return False
+
+            valid_visual_ids = set((visual_context or {}).get("valid_visual_ids") or [])
+            for visual in section.get("visual_assets", []):
+                visual_id = visual.get("visual_id")
+                if valid_visual_ids and visual_id not in valid_visual_ids:
+                    log_agent_warning(self.name, f"validation error: section {i} references unknown visual_id '{visual_id}'")
+                    return False
         
         # validate key_visual placement if classified_visuals provided
         if classified_visuals:
@@ -196,10 +275,25 @@ class StoryBoardCurator:
                 if not key_visual_in_middle_top:
                     log_agent_warning(self.name, f"validation error: key_visual '{key_visual}' not placed in middle column, top priority")
                     return False
+
+        if self._is_portrait_or_vertical_template(visual_context or {}):
+            selected_visual_ids = [
+                visual.get("visual_id")
+                for section in sections
+                for visual in section.get("visual_assets", [])
+                if visual.get("visual_id")
+            ]
+            if len(selected_visual_ids) > 1:
+                log_agent_warning(
+                    self.name,
+                    f"validation error: portrait template allows only 1 total visual, got {selected_visual_ids}",
+                )
+                return False
         
         # validate height exclusion compliance if visual_context provided
         if visual_context:
             visual_heights = visual_context.get("visual_assets_heights", {})
+            max_visual_height_percentage = self._max_visual_height_percentage(visual_context)
             oversized_visuals = []
             
             # check all visual assets in the story board
@@ -213,7 +307,7 @@ class StoryBoardCurator:
                         height_str = height_info.get("height_percentage", "0%")
                         height_percentage = float(height_str.rstrip('%'))
                         
-                        if height_percentage > 50:
+                        if height_percentage > max_visual_height_percentage:
                             oversized_visuals.append(f"{visual_id} ({height_str})")
             
             if oversized_visuals:
@@ -232,17 +326,89 @@ class StoryBoardCurator:
                                 height_info = visual_heights[visual_id]
                                 height_str = height_info.get("height_percentage", "0%")
                                 height_percentage = float(height_str.rstrip('%'))
-                                if height_percentage > 50:
+                                if height_percentage > max_visual_height_percentage:
                                     selected_oversized.append((visual_id, height_percentage, height_str))
                     
                     smallest = min(selected_oversized, key=lambda x: x[1])
                     invalid_visuals = [f"{vid} ({h_str})" for vid, h, h_str in selected_oversized if vid != smallest[0]]
-                    log_agent_warning(self.name, f"validation error: oversized visuals (>50% height) selected: {invalid_visuals} (fallback: only smallest allowed: {smallest[0]} ({smallest[2]}))")
+                    log_agent_warning(self.name, f"validation error: oversized visuals (>{max_visual_height_percentage:.0f}% height) selected: {invalid_visuals} (fallback: only smallest allowed: {smallest[0]} ({smallest[2]}))")
                     return False
         
         return True
 
-    def _prepare_visual_context_for_curator(self, state: PosterState) -> Dict[str, Any]:
+    def _section_count_guidance(self, visual_context: Dict[str, Any]) -> str:
+        if self._is_portrait_or_vertical_template(visual_context):
+            return "exactly 5 compact"
+        return "5-8"
+
+    def _template_layout_guidance(self, visual_context: Dict[str, Any]) -> str:
+        template_layout = visual_context.get("template_layout") or {}
+        if self._is_portrait_or_vertical_template(visual_context):
+            return (
+                "Portrait extracted template. Use exactly 5 compact sections across the three vertical bands. "
+                "Use exactly 1 total visual: the key visual in the middle band. Do not include result tables as "
+                "visuals; convert all secondary tables and ablations into short text bullets. Avoid splitting one "
+                "idea into multiple small sections."
+            )
+        if template_layout.get("extracted_template"):
+            return (
+                "Extracted landscape template. Treat template panels as soft style guidance. "
+                "Use normal three-lane flow and avoid overfilling any lane with decorative panels."
+            )
+        return "Standard three-lane landscape poster."
+
+    def _max_section_count_for_template(self, visual_context: Dict[str, Any] = None) -> int:
+        if self._is_portrait_or_vertical_template(visual_context or {}):
+            return 5
+        return self.validation_config["max_section_count"]
+
+    def _is_portrait_or_vertical_template(self, visual_context: Dict[str, Any]) -> bool:
+        template_layout = (visual_context or {}).get("template_layout") or {}
+        lanes = template_layout.get("lanes") or []
+        is_vertical_stack = bool(lanes) and len({round(lane.get("x", 0), 3) for lane in lanes}) == 1
+        return template_layout.get("orientation") == "portrait" or is_vertical_stack
+
+    def _max_visual_height_percentage(self, visual_context: Dict[str, Any]) -> float:
+        template_layout = visual_context.get("template_layout") or {}
+        template_name = template_layout.get("template_name", "")
+        orientation = template_layout.get("orientation")
+        lanes = template_layout.get("lanes") or []
+        is_vertical_stack = bool(lanes) and len({round(lane.get("x", 0), 3) for lane in lanes}) == 1
+        if orientation == "portrait" or is_vertical_stack:
+            return 130.0
+        if template_name.startswith("extracted_"):
+            return 85.0
+        return 50.0
+
+    def _resolve_layout_template(
+        self,
+        state: PosterState,
+        structured_sections: Dict[str, Any],
+        classified_visuals: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        selector = TemplateSelector(self.config)
+        selection_report = selector.select(
+            state=state,
+            structured_sections=structured_sections,
+            classified_visuals=classified_visuals,
+            visual_assets=state.get("visual_assets", {}),
+        )
+
+        selected_template = selection_report["selected_template"]
+        mode = selection_report.get("selection_mode", "auto")
+        log_agent_info(self.name, f"template selection ({mode}): {selected_template}")
+        if selection_report.get("candidates"):
+            log_agent_info(
+                self.name,
+                "template candidates: "
+                + ", ".join(
+                    f"{candidate['template_name']}={candidate['score']:.2f}"
+                    for candidate in selection_report["candidates"]
+                ),
+            )
+        return selection_report
+
+    def _prepare_visual_context_for_curator(self, state: PosterState, resolved_template: str) -> Dict[str, Any]:
         """prepare visual assets height information for curator's spatial planning"""
         config = load_config()
         
@@ -254,58 +420,65 @@ class StoryBoardCurator:
         poster_margins = 2 * config["layout"]["poster_margin"]
         effective_height = poster_height - poster_margins  # effective height after margins
         title_region_height = effective_height * config["layout"]["title_height_fraction"]  # 18% fixed region
-        available_height = effective_height - title_region_height  # remaining height for sections
-        
-        # calculate effective column width for visual sizing
-        column_margins = 2 * config["layout"]["poster_margin"]
-        column_spacing = 2 * config["layout"]["column_spacing"]  # 2 gaps between 3 columns
-        total_column_width = poster_width - column_margins - column_spacing
-        column_width = total_column_width / 3
-        
-        # account for text padding within each column
+        curator_template = "three_column_postergen" if is_block_template_id(resolved_template) else resolved_template
+        layout = LayoutTemplates(
+            poster_width,
+            poster_height,
+            margin=config["layout"]["poster_margin"],
+            col_gap=config["layout"]["column_spacing"],
+        ).get_template(curator_template, header_height=title_region_height)
+        lanes = layout["lanes"]
+
+        min_lane_height = min(lane["h"] for lane in lanes)
+        min_lane_width = min(lane["w"] for lane in lanes)
+        visual_width_cap = layout.get("visual_width_cap")
+
+        # account for text padding within each lane
         text_padding = 2 * config["layout"]["text_padding"]["left_right"]
-        effective_width = column_width - text_padding
+        effective_width = min_lane_width - text_padding
+        if visual_width_cap:
+            effective_width = min(effective_width, visual_width_cap)
         
-        log_agent_info(self.name, f"visual context: available_height={available_height:.1f}\", effective_width={effective_width:.1f}\"")
+        log_agent_info(
+            self.name,
+            f"visual context: template={resolved_template}, available_height={min_lane_height:.1f}\", effective_width={effective_width:.1f}\"",
+        )
         
-        # calculate height for each visual asset
         visual_heights = {}
         
-        # process figures (images in state)
-        figures = state.get("images", {})
-        for fig_id, fig_data in figures.items():
-            aspect_ratio = fig_data.get("aspect", 1.0)
+        for asset_id, asset in (state.get("visual_assets") or {}).items():
+            aspect_ratio = asset.get("aspect", 1.0) or 1.0
+            lane_estimates = {}
+            for lane in lanes:
+                lane_effective_width = max(lane["w"] - text_padding, 0.1)
+                if visual_width_cap:
+                    lane_effective_width = min(lane_effective_width, visual_width_cap)
+                lane_visual_height = lane_effective_width / aspect_ratio
+                lane_estimates[lane["id"]] = {
+                    "height_inches": round(lane_visual_height, 1),
+                    "height_percentage": f"{((lane_visual_height / lane['h']) * 100):.0f}%",
+                }
+
             visual_height = effective_width / aspect_ratio
-            height_percentage = (visual_height / available_height) * 100
+            height_percentage = (visual_height / min_lane_height) * 100
             
-            visual_heights[f"figure_{fig_id}"] = {
+            visual_heights[asset_id] = {
                 "height_inches": round(visual_height, 1),
                 "height_percentage": f"{height_percentage:.0f}%",
-                "type": "figure",
-                "aspect_ratio": aspect_ratio
+                "type": asset.get("asset_type", "figure"), 
+                "aspect_ratio": aspect_ratio,
+                "lane_estimates": lane_estimates,
             }
-            log_agent_info(self.name, f"figure_{fig_id}: {visual_height:.1f}\" ({height_percentage:.0f}% of column)")
-        
-        # process tables
-        tables = state.get("tables", {})
-        for table_id, table_data in tables.items():
-            aspect_ratio = table_data.get("aspect", 1.0)
-            visual_height = effective_width / aspect_ratio
-            height_percentage = (visual_height / available_height) * 100
-            
-            visual_heights[f"table_{table_id}"] = {
-                "height_inches": round(visual_height, 1),
-                "height_percentage": f"{height_percentage:.0f}%",
-                "type": "table", 
-                "aspect_ratio": aspect_ratio
-            }
-            log_agent_info(self.name, f"table_{table_id}: {visual_height:.1f}\" ({height_percentage:.0f}% of column)")
+            log_agent_info(self.name, f"{asset_id}: {visual_height:.1f}\" ({height_percentage:.0f}% of column)")
         
         return {
-            "available_height_per_column": round(available_height, 1),
+            "available_height_per_column": round(min_lane_height, 1),
             "visual_assets_heights": visual_heights,
-            "column_width": round(column_width, 1),
-            "effective_width": round(effective_width, 1)
+            "column_width": round(min_lane_width, 1),
+            "effective_width": round(effective_width, 1),
+            "template_layout": layout,
+            "valid_visual_ids": list((state.get("visual_assets") or {}).keys()),
+            "requested_layout_template": resolved_template,
         }
 
     def _validate_height_distribution(self, story_board: Dict, visual_context: Dict) -> Dict[str, Any]:
@@ -426,6 +599,9 @@ class StoryBoardCurator:
         output_dir.mkdir(parents=True, exist_ok=True)
         with open(output_dir / "story_board.json", "w", encoding='utf-8') as f:
             json.dump(state.get("story_board", {}), f, indent=2)
+        if state.get("template_selection_report") is not None:
+            with open(output_dir / "template_selection_report.json", "w", encoding="utf-8") as f:
+                json.dump(state.get("template_selection_report", {}), f, indent=2)
 
 
 def curator_node(state) -> Dict[str, Any]:
@@ -433,6 +609,9 @@ def curator_node(state) -> Dict[str, Any]:
     return {
         **state,
         "story_board": result["story_board"],
+        "resolved_layout_template": result.get("resolved_layout_template"),
+        "layout_template_metadata": result.get("layout_template_metadata"),
+        "template_selection_report": result.get("template_selection_report"),
         "tokens": result["tokens"],
         "current_agent": result["current_agent"],
         "errors": result["errors"]
