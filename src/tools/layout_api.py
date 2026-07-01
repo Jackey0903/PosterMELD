@@ -25,6 +25,7 @@ class LayoutTemplates:
     """
 
     SUPPORTED_TEMPLATES = {
+        "adaptive_auto",
         "three_column_postergen",
         "single_column_vertical",
         "two_plus_one_mixed",
@@ -214,6 +215,8 @@ class LayoutTemplates:
             return self.generate_one_plus_two_mixed(header_height=header_height)
         if template_name == "adaptive_three_column":
             return self.generate_adaptive_three_column(header_height=header_height, width_ratios=width_ratios)
+        if template_name == "adaptive_auto":
+            return self.generate_three_column_postergen(header_height=header_height)
         return self.generate_three_column_postergen(header_height=header_height)
 
     def _merge_block_template_prior(self, prior_layout: Dict[str, Any], header_height: float) -> Dict[str, Any]:

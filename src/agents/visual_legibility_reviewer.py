@@ -37,9 +37,15 @@ class VisualLegibilityReviewer:
             review = self._merge_heuristic_review(state, review)
             state["visual_legibility_review"] = review
             is_template_prior = state.get("template_layout_mode") == "template_prior"
+            fast_mode = bool(state.get("template_fast_mode"))
 
             max_relayout_count = int(self.review_config.get("max_relayout_count", 1))
-            if is_template_prior:
+            if fast_mode:
+                if review.get("needs_relayout", False):
+                    review.setdefault("warnings", []).append(
+                        "Fast template-first mode records visual legibility concerns but does not trigger automatic relayout."
+                    )
+            elif is_template_prior:
                 if review.get("needs_relayout", False):
                     if state.get("template_repair_count", 0) < max_relayout_count:
                         state["template_repair_required"] = True

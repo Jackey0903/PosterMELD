@@ -1,0 +1,430 @@
+"""Generated poster background layer.
+
+This agent only creates a decorative, low-contrast background image. It never
+edits poster text, figures, tables, or logos; the renderer places the generated
+image at the bottom of the slide.
+"""
+
+import json
+import random
+import shutil
+from pathlib import Path
+from typing import Any, Dict, List
+
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageStat
+
+from src.config.poster_config import load_config
+from src.state.poster_state import PosterState
+from src.tools.image_api import ImageTools
+from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success
+
+
+class BackgroundImageAgent:
+    def __init__(self):
+        self.name = "background_image_agent"
+        self.config = load_config()
+        self.background_config = self.config.get("generated_background", {})
+
+    def __call__(self, state: PosterState) -> PosterState:
+        if not state.get("enable_generated_background", False):
+            return state
+
+        palette_name = self._palette_name(state)
+        log_agent_info(self.name, f"generating light academic background layer ({palette_name})")
+        try:
+            output_dir = Path(state["output_dir"])
+            asset_dir = output_dir / "assets"
+            asset_dir.mkdir(parents=True, exist_ok=True)
+
+            filename = self.background_config.get("output_filename", "generated_background.png")
+            raw_path = asset_dir / f"raw_{filename}"
+            final_path = asset_dir / filename
+            prompt = self._build_prompt(state)
+            reference_path = self._reference_poster_path(state)
+
+            width, height = self._background_dimensions(state)
+            procedural_only = bool(self.background_config.get("procedural_only", False))
+            if procedural_only:
+                img = self._procedural_academic_background(width, height, state)
+                self._save_light_background(img, final_path, width, height, state)
+                used_fallback = True
+                generation_mode = "procedural_only"
+                raw_path_value = ""
+            elif reference_path:
+                generated_path = ImageTools().edit_image(str(reference_path), prompt, output_path=str(raw_path))
+                if Path(generated_path).exists() and Path(generated_path) != raw_path and Path(generated_path) != reference_path:
+                    shutil.copyfile(generated_path, raw_path)
+                if raw_path.exists():
+                    used_fallback = self._postprocess_background(raw_path, final_path, width, height, state)
+                    generation_mode = "poster_conditioned_image_api_with_procedural_fallback"
+                    raw_path_value = str(raw_path)
+                else:
+                    img = self._procedural_academic_background(width, height, state)
+                    self._save_light_background(img, final_path, width, height, state)
+                    used_fallback = True
+                    generation_mode = "poster_conditioned_image_api_failed_procedural_fallback"
+                    raw_path_value = ""
+            else:
+                ImageTools().generate_image(prompt, width=width, height=height, output_path=str(raw_path))
+                used_fallback = self._postprocess_background(raw_path, final_path, width, height, state)
+                generation_mode = "image_api_with_procedural_fallback"
+                raw_path_value = str(raw_path)
+
+            report = {
+                "enabled": True,
+                "source": self.name,
+                "generation_mode": generation_mode,
+                "prompt": prompt,
+                "raw_path": raw_path_value,
+                "reference_poster_path": str(reference_path) if reference_path else "",
+                "background_image_path": str(final_path),
+                "width_px": width,
+                "height_px": height,
+                "palette": palette_name,
+                "used_procedural_fallback": used_fallback,
+                "safety": {
+                    "background_only": True,
+                    "no_text": True,
+                    "low_contrast_postprocess": True,
+                },
+            }
+            state["background_image_path"] = str(final_path)
+            state["background_image_report"] = report
+            state["current_agent"] = self.name
+            self._save_report(state, report)
+            log_agent_success(self.name, f"generated background: {final_path}")
+        except Exception as e:
+            log_agent_error(self.name, f"failed: {e}")
+            state["errors"].append(f"{self.name}: {e}")
+
+        return state
+
+    def _build_prompt(self, state: PosterState) -> str:
+        title = self._poster_title(state)
+        sections = self._section_summaries(state)
+        colors = state.get("color_scheme") or {}
+        theme = colors.get("theme", self.config["colors"].get("fallback_theme", "#1E3A8A"))
+        mono = colors.get("mono_light", "#E6EAEF")
+        style = self.background_config.get("prompt_style", "light academic, understated, low contrast")
+        palette_name = self._palette_name(state)
+        palette = self._palette_spec(state)
+        palette_label = palette.get("label", "pale blue-gray")
+        poster_width = float(state.get("poster_width") or 0.0)
+        poster_height = float(state.get("poster_height") or 0.0)
+        orientation = "landscape" if poster_width >= poster_height else "portrait"
+
+        return (
+            f"Create a {orientation} premium academic conference poster BACKGROUND ONLY, with no text, no letters, "
+            "no numbers, no logos, no icons, no charts, no diagrams, and no readable symbols. "
+            "The background must look intentionally designed, not plain white, while remaining light enough behind dense black poster text. "
+            "Use the provided poster image only as a spatial and stylistic reference: infer where content blocks, "
+            "title, figures, logos, and white spaces are, then create a clean background underneath them. "
+            "Do not copy or redraw any visible poster text, logo, figure, table, chart, or number from the reference. "
+            f"Use a refined top-tier AI conference poster palette based on {palette_label}: pale blue, blue-gray, "
+            "soft cyan, light indigo, and clean technical neutrals. "
+            "Keep text-heavy content regions calm with translucent paper-like panels, but add visible broad diagonal bands, "
+            "soft geometric washes, faint grid lines, map-like contours, and abstract data/network motifs near edges and unused whitespace. "
+            "Use paper-specific abstract hints inferred from the title and section context, but keep them non-readable and decorative. "
+            "Do not create AI faces, brains, robots, glowing orbs, or decorative blobs. "
+            f"Style: {style}. Selected background palette: {palette_name}. "
+            f"Primary accent color reference: {theme}; pale neutral reference: {mono}. "
+            f"Paper title context: {title}. "
+            f"Section context: {', '.join(sections[:6])}."
+        )
+
+    def _reference_poster_path(self, state: PosterState) -> Path | None:
+        for key in ("poster_preview_path",):
+            value = state.get(key)
+            if value and Path(str(value)).exists():
+                return Path(str(value))
+        output_dir = Path(state.get("output_dir") or "")
+        poster_name = str(state.get("poster_name") or "")
+        for candidate in [
+            output_dir / f"{poster_name}_draft.png",
+            output_dir / f"{poster_name}.png",
+        ]:
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _poster_title(self, state: PosterState) -> str:
+        story_board = state.get("story_board") or {}
+        title = story_board.get("title") or story_board.get("poster_title")
+        if title:
+            return str(title)
+        for element in state.get("styled_layout") or []:
+            if element.get("type") == "title" and element.get("content"):
+                return str(element["content"]).splitlines()[0]
+        narrative = state.get("narrative_content") or {}
+        return str(narrative.get("title") or state.get("poster_name") or "research poster")
+
+    def _section_summaries(self, state: PosterState) -> List[str]:
+        story_board = state.get("story_board") or {}
+        sections = (story_board.get("spatial_content_plan") or {}).get("sections") or []
+        summaries = []
+        for section in sections:
+            title = str(section.get("section_title") or section.get("section_id") or "").strip()
+            role = str(section.get("content_role") or "").strip()
+            if title and role:
+                summaries.append(f"{title} ({role})")
+            elif title:
+                summaries.append(title)
+        return summaries
+
+    def _postprocess_background(self, raw_path: Path, final_path: Path, width: int, height: int, state: PosterState) -> bool:
+        with Image.open(raw_path) as img:
+            img = img.convert("RGB")
+            used_fallback = self._is_placeholder_image(img)
+            if used_fallback:
+                img = self._procedural_academic_background(width, height, state)
+            self._save_light_background(img, final_path, width, height, state)
+            return used_fallback
+
+    def _save_light_background(self, img: Image.Image, final_path: Path, width: int, height: int, state: PosterState) -> None:
+        img = img.convert("RGB")
+        img = self._cover_resize(img, width, height)
+        img = ImageEnhance.Color(img).enhance(float(self.background_config.get("max_saturation", 0.28)))
+        img = img.filter(ImageFilter.GaussianBlur(float(self.background_config.get("blur_radius", 1.2))))
+
+        alpha = float(self.background_config.get("white_overlay_alpha", 0.76))
+        overlay = Image.new("RGB", img.size, "white")
+        img = Image.blend(img, overlay, min(max(alpha, 0.0), 1.0))
+        img = self._add_layout_hierarchy_to_background(img, state)
+        img.save(final_path)
+
+    def _background_dimensions(self, state: PosterState) -> tuple[int, int]:
+        base_width = max(1, int(self.background_config.get("width_px", 1440)))
+        base_height = max(1, int(self.background_config.get("height_px", 2035)))
+        poster_width = float(state.get("poster_width") or 0.0)
+        poster_height = float(state.get("poster_height") or 0.0)
+        if poster_width <= 0 or poster_height <= 0:
+            return base_width, base_height
+
+        long_side = max(base_width, base_height)
+        if poster_width >= poster_height:
+            return long_side, max(1, int(round(long_side * poster_height / poster_width)))
+        return max(1, int(round(long_side * poster_width / poster_height))), long_side
+
+    def _add_layout_hierarchy_to_background(self, img: Image.Image, state: PosterState) -> Image.Image:
+        """Bake subtle layout grouping into the bitmap background, not PPT shapes."""
+        poster_width = float(state.get("poster_width") or 0.0)
+        poster_height = float(state.get("poster_height") or 0.0)
+        layout = state.get("styled_layout") or []
+        if poster_width <= 0 or poster_height <= 0 or not layout:
+            return img
+
+        palette = self._palette_spec(state)
+        edge = self._rgb_tuple(palette.get("edge"), (225, 236, 247))
+        theme = self._parse_hex((state.get("color_scheme") or {}).get("theme", "#0057B8"))
+        overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
+        draw = ImageDraw.Draw(overlay, "RGBA")
+
+        def sx(value: float) -> int:
+            return int(value / poster_width * img.width)
+
+        def sy(value: float) -> int:
+            return int(value / poster_height * img.height)
+
+        title = next((item for item in layout if item.get("type") == "title"), None)
+        if title:
+            x = float(title.get("x", 0.0))
+            y = float(title.get("y", 0.0)) + float(title.get("height", 0.0)) + 0.15
+            width = min(poster_width - x - 1.5, max(float(title.get("width", 0.0)) * 1.55, poster_width * 0.40))
+            if width > 1.0:
+                draw.rectangle([sx(x), sy(y), sx(x + width), sy(y + 0.055)], fill=(*theme, 42))
+
+        containers = [
+            item
+            for item in layout
+            if item.get("type") == "section_container"
+            and float(item.get("x", 0.0) or 0.0) >= poster_width * 0.60
+            and float(item.get("y", 0.0) or 0.0) >= poster_height * 0.40
+        ]
+        if len(containers) >= 2:
+            left = min(float(item.get("x", 0.0) or 0.0) for item in containers) - 0.35
+            top = min(float(item.get("y", 0.0) or 0.0) for item in containers) - 0.30
+            right = max(float(item.get("x", 0.0) or 0.0) + float(item.get("width", 0.0) or 0.0) for item in containers) + 0.25
+            bottom = max(float(item.get("y", 0.0) or 0.0) + float(item.get("height", 0.0) or 0.0) for item in containers) + 0.25
+            draw.rectangle(
+                [
+                    sx(max(0.0, left)),
+                    sy(max(0.0, top)),
+                    sx(min(poster_width, right)),
+                    sy(min(poster_height, bottom)),
+                ],
+                fill=(*edge, 92),
+            )
+
+        return Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+
+    def _is_placeholder_image(self, img: Image.Image) -> bool:
+        stat = ImageStat.Stat(img.resize((32, 32)).convert("RGB"))
+        mean = sum(stat.mean) / 3
+        variance = sum(stat.var) / 3
+        return variance < 18 and 175 <= mean <= 230
+
+    def _procedural_academic_background(self, width: int, height: int, state: PosterState) -> Image.Image:
+        palette = self._palette_spec(state)
+        base_color = self._rgb_tuple(palette.get("base"), (250, 252, 255))
+        edge_color = self._rgb_tuple(palette.get("edge"), (225, 236, 247))
+        line_color = self._rgba_tuple(palette.get("line"), (0, 87, 184, 24))
+        node_color = self._rgba_tuple(palette.get("node"), (0, 87, 184, 30))
+        neutral_color = self._rgba_tuple(palette.get("neutral"), (116, 132, 150, 24))
+        rng = random.Random(str(state.get("poster_name") or "poster-background"))
+        img = Image.new("RGB", (width, height), base_color)
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        # Subtle paper texture.
+        pixels = img.load()
+        edge_span = max(1.0, min(width, height) * 0.26)
+        for y in range(height):
+            for x in range(width):
+                jitter = rng.randint(-2, 2)
+                edge_distance = min(x, width - 1 - x, y, height - 1 - y)
+                edge_weight = max(0.0, min(1.0, 1.0 - (edge_distance / edge_span))) * 0.22
+                pixel = tuple(
+                    max(0, min(255, int(base_color[channel] * (1.0 - edge_weight) + edge_color[channel] * edge_weight) + jitter))
+                    for channel in range(3)
+                )
+                pixels[x, y] = pixel
+
+        # Broad conference-poster washes; postprocessing keeps them behind text.
+        band_alpha = max(24, min(62, int(line_color[3] * 1.55)))
+        cyan_wash = (120, 205, 230, max(14, band_alpha - 10))
+        indigo_wash = (105, 128, 210, max(10, band_alpha - 18))
+        draw.polygon(
+            [
+                (int(width * 0.55), 0),
+                (width, 0),
+                (width, int(height * 0.28)),
+                (int(width * 0.70), int(height * 0.19)),
+            ],
+            fill=(*edge_color, band_alpha),
+        )
+        draw.polygon(
+            [
+                (0, int(height * 0.74)),
+                (int(width * 0.42), int(height * 0.82)),
+                (int(width * 0.30), height),
+                (0, height),
+            ],
+            fill=cyan_wash,
+        )
+        draw.polygon(
+            [
+                (int(width * 0.80), int(height * 0.58)),
+                (width, int(height * 0.50)),
+                (width, height),
+                (int(width * 0.90), height),
+            ],
+            fill=indigo_wash,
+        )
+
+        def point_near_edge() -> tuple[int, int]:
+            side = rng.choice(["left", "right", "top", "bottom"])
+            if side == "left":
+                return rng.randint(0, int(width * 0.18)), rng.randint(0, height)
+            if side == "right":
+                return rng.randint(int(width * 0.78), width), rng.randint(0, height)
+            if side == "top":
+                return rng.randint(0, width), rng.randint(0, int(height * 0.18))
+            return rng.randint(0, width), rng.randint(int(height * 0.82), height)
+
+        nodes = [point_near_edge() for _ in range(34)]
+        for idx, start in enumerate(nodes):
+            nearest = sorted(nodes, key=lambda point: (point[0] - start[0]) ** 2 + (point[1] - start[1]) ** 2)[1:3]
+            for end in nearest:
+                if rng.random() < 0.56:
+                    color = line_color if idx % 3 else neutral_color
+                    draw.line([start, end], fill=color, width=1)
+
+        for x, y in nodes:
+            radius = rng.choice([2, 2, 3, 4])
+            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=node_color)
+
+        # Faint ranking-flow arcs along corners, away from dense content.
+        for _ in range(8):
+            margin_x = rng.choice([rng.randint(-120, 80), rng.randint(width - 80, width + 120)])
+            margin_y = rng.randint(-80, height + 80)
+            box_w = rng.randint(int(width * 0.22), int(width * 0.42))
+            box_h = rng.randint(int(height * 0.10), int(height * 0.22))
+            bbox = (margin_x, margin_y, margin_x + box_w, margin_y + box_h)
+            draw.arc(bbox, rng.randint(0, 180), rng.randint(190, 360), fill=line_color, width=2)
+
+        return img
+
+    def _palette_name(self, state: PosterState) -> str:
+        palettes = self.background_config.get("palettes") or {}
+        requested = str(state.get("background_palette") or self.background_config.get("palette") or "light_blue").strip()
+        if requested in palettes:
+            return requested
+        return "light_blue" if "light_blue" in palettes else next(iter(palettes), "light_blue")
+
+    def _palette_spec(self, state: PosterState) -> Dict[str, Any]:
+        palettes = self.background_config.get("palettes") or {}
+        return dict(palettes.get(self._palette_name(state)) or {})
+
+    def _rgb_tuple(self, value: Any, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+        if isinstance(value, str):
+            return self._parse_hex(value)
+        if isinstance(value, (list, tuple)) and len(value) >= 3:
+            try:
+                return tuple(max(0, min(255, int(value[idx]))) for idx in range(3))
+            except (TypeError, ValueError):
+                return fallback
+        return fallback
+
+    def _rgba_tuple(self, value: Any, fallback: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        if isinstance(value, str):
+            rgb = self._parse_hex(value)
+            return (*rgb, fallback[3])
+        if isinstance(value, (list, tuple)) and len(value) >= 3:
+            try:
+                red = max(0, min(255, int(value[0])))
+                green = max(0, min(255, int(value[1])))
+                blue = max(0, min(255, int(value[2])))
+                alpha = max(0, min(255, int(value[3]))) if len(value) >= 4 else fallback[3]
+                return (red, green, blue, alpha)
+            except (TypeError, ValueError):
+                return fallback
+        return fallback
+
+    def _parse_hex(self, color: str) -> tuple[int, int, int]:
+        value = str(color or "").strip().lstrip("#")
+        if len(value) != 6:
+            return (0, 87, 184)
+        try:
+            return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            return (0, 87, 184)
+
+    def _cover_resize(self, img: Image.Image, width: int, height: int) -> Image.Image:
+        target_aspect = width / max(height, 1)
+        image_aspect = img.width / max(img.height, 1)
+        if image_aspect > target_aspect:
+            new_width = int(img.height * target_aspect)
+            left = (img.width - new_width) // 2
+            img = img.crop((left, 0, left + new_width, img.height))
+        else:
+            new_height = int(img.width / target_aspect)
+            top = (img.height - new_height) // 2
+            img = img.crop((0, top, img.width, top + new_height))
+        return img.resize((width, height), Image.Resampling.LANCZOS)
+
+    def _save_report(self, state: PosterState, report: Dict[str, Any]) -> None:
+        content_dir = Path(state["output_dir"]) / "content"
+        content_dir.mkdir(parents=True, exist_ok=True)
+        with open(content_dir / "background_image_report.json", "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+
+
+def background_image_agent_node(state: PosterState) -> Dict[str, Any]:
+    result = BackgroundImageAgent()(state)
+    return {
+        **state,
+        "background_image_path": result.get("background_image_path"),
+        "background_image_report": result.get("background_image_report"),
+        "tokens": result["tokens"],
+        "current_agent": result["current_agent"],
+        "errors": result["errors"],
+    }

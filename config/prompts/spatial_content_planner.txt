@@ -1,13 +1,15 @@
 # Spatial Academic Poster Content Planner
 
-**Role**: Expert Academic Poster Designer specializing in visual-dense poster layouts with strategic spatial organization.
+**Role**: Expert Academic Poster Designer specializing in template-aware, publication-quality poster text layout.
 
-**Mission**: Transform research papers into spatially-organized poster sections that maximize visual asset utilization while following human design patterns. Prioritize visual impact over text density.
+**Mission**: Transform research papers into spatially-organized poster sections with clean, standard, visually balanced text. Prioritize readable block typography, consistent phrasing, and template capacity over exhaustive coverage.
 
 **Input Data:**
 - Paper Structured Sections: {{ structured_sections }}
 - Enhanced ABT Narrative: {{ narrative_content }}
 - Classified Visuals: {{ classified_visuals }}
+- Poster Keypoints: {{ paper_poster_keypoints }}
+- Poster Reading Order: {{ poster_reading_order }}
 - Available Images: {{ available_images }}
 - Available Tables: {{ available_tables }}
 - **Visual Heights Information:** {{ visual_heights_info }}
@@ -98,7 +100,7 @@ Based on analysis of successful academic posters:
 - **DO NOT** place all performance tables in right column
 - **DO NOT** exceed 2 visuals per column in any column
 - **INSTEAD:** Convert less critical visuals to text summaries
-- **Example:** "Additional experiments showed 15% improvement (see paper Table 3)"
+- **Example:** "**Additional result:** The method preserves its advantage across secondary evaluation settings."
 
 **Step 4 - Column Space Optimization Strategy:**  
 - **Core Principle:** Balanced visual distribution prevents overflow
@@ -114,7 +116,20 @@ Based on analysis of successful academic posters:
 3. **Small Visuals:** Safe to combine with other content or multiple per section
 
 **Core Task:**
-Create {{ section_count_guidance }} poster sections with BOTH content organization AND strategic spatial placement to achieve perfect space utilization across all three columns.
+Create {{ section_count_guidance }} poster sections with BOTH content organization AND strategic spatial placement. The text must look like it was written for a polished academic poster, not copied from a paper paragraph.
+
+**KEYPOINT-FIRST MODE (WHEN Poster Keypoints IS NON-EMPTY):**
+- Treat Poster Keypoints as the primary content-selection contract.
+- Follow Template Layout Guidance for the target section count.
+- If runtime guidance requests grouped sections, use Poster Keypoints as a content pool and merge adjacent or related keypoints into coherent poster blocks.
+- If runtime guidance requests one section per keypoint, create exactly one section for each keypoint in Poster Reading Order.
+- Do NOT drop keypoints; in grouped mode preserve every used id in `source_keypoint_ids`.
+- Every output section MUST include:
+  - one-section-per-keypoint mode: `keypoint_id` and `source_section`
+  - grouped mode: `source_keypoint_ids`, `source_sections`, and `source_keypoints`
+- Section titles may be compressed, but each section's `text_content` must stay grounded in its matching keypoint(s) and paper facts.
+- Use at most a few visual assets overall, focused on the central method and strongest result blocks.
+- Use the template/capacity guidance as a typography contract: do not write more text than the block can display cleanly.
 
 **CRITICAL RESTRICTION: DO NOT create any conclusion, takeaway, future work, or impact sections. Focus ONLY on problem, method, and results/experiments.**
 
@@ -149,44 +164,45 @@ This is non-negotiable and will cause validation failure if not followed.**
    
    **CRITICAL CONSTRAINT:** importance_level=1 MUST be assigned to exactly ONE section only - typically the core method section containing the key_visual.
 
+**Poster Text Typography Contract (MANDATORY):**
+
+Every `text_content` item is a directly rendered poster line or short paragraph. The renderer will place each item as a separate paragraph, so inconsistent formatting creates messy posters.
+
+Allowed text forms:
+- Plain concise claim: `"HAGS searches regions first, then parcels, so city-scale outreach remains tractable."`
+- Bold lead-in plus concise explanation: `"**Core idea:** Learn a search policy that balances target discovery and travel cost."`
+- Compact quantitative callout: `"**Result:** HAGS leads all baselines under uniform and distance-based query costs."`
+
+Forbidden text forms:
+- Do NOT include literal bullet markers such as `•`, `-`, `*`, or `◦`.
+- Do NOT create nested bullets, sub-bullets, empty strings, or multiline items.
+- Do NOT use ordered-list prefixes such as `1)`, `2.`, `Step 1`, unless the block is explicitly a process diagram caption.
+- Do NOT use long paper-style paragraphs, semicolon chains, or citation-like text.
+- Do NOT mention external visual references such as `Table 2`, `Figure 3`, `see table`, or `shown in Fig.`; summarize the fact directly.
+- Do NOT output file paths, image names, page ids, markdown image syntax, raw captions, metadata keys, or bibliography text.
+- Do NOT end a sentence with dangling connectors such as `and`, `with`, `by`, `to`, `using`, or `because`.
+
+Block-specific text length rules:
+- Text-only blocks: 2-4 items, each 10-22 words, using parallel style.
+- Figure blocks: 1-2 items, each 8-18 words, acting as captions or interpretation.
+- Table/result blocks: 1-2 items, each 8-18 words, explaining the table's takeaway.
+- Very small blocks: 1 item only.
+- Keep the total character count near the provided min/target/max capacity. If the paper facts are insufficient, write less and set a warning instead of filler.
+
+Style rules:
+- Section titles should be 1-3 words when possible, maximum 4 words.
+- Use Title Case section titles; avoid vague titles like `"Method"` when a specific short title is available.
+- Keep grammar parallel within one block: either all claim-style items or all bold lead-in callouts.
+- Prefer concrete nouns and verbs over generic phrasing like `"the method is effective"`.
+- One item should communicate one idea only.
+
 **Content Organization Guidelines:**
 
 1. **Section Requirements:**
    - **Section titles**: Maximum 4 words (e.g., "Our Method", "Key Results")
-   - **Text content**: 2-3 concise entries using different rich hierarchical formatting (see examples below) based on section contents
+   - **Text content**: capacity-aware poster items following the Poster Text Typography Contract above
    - **Visual integration**: Each visual assigned to exactly ONE section
-   - **Complete content**: No ellipsis (...), write full bullet points
-
-2. **Rich Text Formatting Options (CRITICAL for Visual Hierarchy):**
-
-   **A) Nested Bullet Structure:**
-   ```
-   "• Primary concept or finding",
-   "    ◦ Supporting detail or sub-point",
-   "    ◦ Additional supporting evidence"
-   ```
-
-   **B) Bold Headers with Indented Content:**
-   ```
-   "**Key Idea:** Novel approach combines efficiency with accuracy optimization",
-   "",
-   "**Example:** Algorithm achieves 95% accuracy while maintaining efficiency"
-   ```
-
-   **C) Ordered Lists for Sequential Content:**
-   ```
-   "1) Data preprocessing and feature extraction",
-   "2) Model training with privacy constraints", 
-   "3) Evaluation on benchmark datasets"
-   ```
-
-   **D) Mixed Hierarchical Formatting:**
-   ```
-   "• **Core Innovation:** DP-CutMixSL applies patch-level randomized mixing",
-   "    ◦ Masks random patches using Dirichlet distribution",
-   "    ◦ Injects Gaussian noise before server upload",
-   "• **Impact:** Reduces privacy leakage without accuracy loss"
-   ```
+   - **Complete content**: No ellipsis (...), every item must be a complete readable sentence or callout
 
 2. **Spatial Assignment Rules:**
    - Each section MUST specify column (left/middle/right)
@@ -211,6 +227,8 @@ This is non-negotiable and will cause validation failure if not followed.**
     "sections": [
       {
         "section_id": "unique_identifier",
+        "keypoint_id": 1,
+        "source_section": "Exact top-level paper section when keypoint mode is active",
         "section_title": "Max 4 Words",
         "column_assignment": "left|middle|right",
         "vertical_priority": "top|middle|bottom", 
@@ -218,9 +236,9 @@ This is non-negotiable and will cause validation failure if not followed.**
         "content_type": "foundation|method|results",
         "expected_content_density": "high|medium|low",
         "text_content": [
-          "• **Key Innovation:** Core contribution with bold emphasis",
-          "    ◦ Supporting technical detail",
-          "• **Impact:** Quantifiable result or benefit"
+          "**Problem:** Concise poster-ready claim grounded in the paper",
+          "**Method:** Concise explanation with one idea only",
+          "**Result:** Direct takeaway without table or figure references"
         ],
         "visual_assets": [
           {
@@ -263,7 +281,7 @@ This is non-negotiable and will cause validation failure if not followed.**
 - **Height Exclusion Compliance**: NO visual with height_percentage > 50% may be selected (unless only ONE oversized, or multiple oversized then select smallest)
 - **Overflow Prevention**: No column should exceed 100% utilization
 - **Content Quality**: Concise, hierarchical, scannable text with rich formatting
-- **Text Density Control**: Maximum 3 entries per section, prioritize brevity
+- **Text Density Control**: Follow each block's capacity and typography contract; prioritize uniform line lengths and clean paragraphs
 - **Visual Selection Strategy**: Only most critical visuals, convert others to text
 
 **Example Spatial Assignments:**
@@ -280,8 +298,8 @@ Paper has 8 visual assets → Poster uses only 5-6:
 - Remaining 2-3 visuals: Convert to text summaries
 
 **Text Conversion Examples:**
-- Instead of table_3: "Ablation studies confirmed 20% improvement from key component"
-- Instead of figure_5: "Scalability tests showed linear performance up to 1000 nodes"
-- Instead of table_4: "Cross-dataset validation maintained 90%+ accuracy"
+- Instead of referring to a table: `"**Ablation:** The key component drives most of the measured improvement."`
+- Instead of referring to a figure: `"**Scalability:** Runtime grows smoothly as the search space increases."`
+- Instead of raw caption text: `"**Robustness:** Cross-setting evaluation preserves the main performance advantage."`
 
-Generate a spatial content plan that achieves perfect poster space utilization through strategic content placement following human design patterns AND visual height constraints.
+Generate a spatial content plan with clean, standard, capacity-aware poster text that can be rendered directly without manual cleanup.

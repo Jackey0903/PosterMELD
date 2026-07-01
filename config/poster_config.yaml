@@ -37,6 +37,7 @@ typography:
   
   line_spacing: 1.0
   paragraph_spacing: 0.0
+  title_author_gap_points: 16
 
 colors:
   # defaults
@@ -138,6 +139,269 @@ rendering:
   debug_borders: False
   slide_layout_index: 6           # blank slide
   default_shape_fill: "#FFFFFF"
+  section_title_chars_per_inch_at_48pt: 3.1
+
+selective_block_backgrounds:
+  enabled: true
+  frame_all_blocks: false
+  max_highlight_blocks: 0
+  primary_fill_color: "#EEF0F2"
+  primary_border_color: ""
+  primary_border_width: 0
+  primary_border_style: "solid"
+  normal_border_color: "#D2D6DC"
+  normal_border_width: 0.7
+  normal_border_style: "solid"
+  support_border_color: "#D8DDE3"
+  support_border_width: 0.7
+  support_border_style: "dashed"
+  support_section_keywords:
+    - "setup"
+    - "setting"
+    - "background"
+    - "robustness"
+    - "ablation"
+    - "limitation"
+    - "takeaway"
+  role_priority:
+    results: 120
+    main_results: 120
+    method: 110
+    framework: 110
+    overview: 80
+    problem: 75
+    motivation: 75
+    takeaway: 70
+  visual_bonus: 8
+  large_slot_bonus: 8
+
+generated_background:
+  enabled: false
+  procedural_only: false
+  width_px: 1440
+  height_px: 2035
+  palette: "light_blue"
+  white_overlay_alpha: 0.40
+  blur_radius: 0.75
+  max_saturation: 0.58
+  prompt_style: "premium top-tier AI conference poster background, visible pale blue/cyan geometry, polished and readable"
+  output_filename: "generated_background.png"
+  palettes:
+    light_blue:
+      label: "pale blue-gray"
+      base: [250, 252, 255]
+      edge: [225, 236, 247]
+      line: [0, 87, 184, 38]
+      node: [0, 87, 184, 44]
+      neutral: [116, 132, 150, 34]
+    light_gray:
+      label: "pale neutral gray"
+      base: [250, 250, 249]
+      edge: [229, 231, 234]
+      line: [118, 128, 140, 22]
+      node: [95, 105, 118, 26]
+      neutral: [138, 146, 156, 22]
+
+standard_template_policy:
+  enabled: true
+  auto_templates:
+    - "cluster_2_landscape"
+    - "cluster_6_landscape"
+    - "cluster_14_landscape"
+    - "cluster_16_landscape"
+    - "cluster_27_landscape"
+    - "cluster_36_landscape"
+    - "cluster_39_landscape"
+    - "cluster_43_landscape"
+    - "cluster_46_landscape"
+    - "cluster_62_landscape"
+    - "cluster_69_landscape"
+    - "cluster_70_landscape"
+    - "cluster_85_landscape"
+    - "cluster_86_landscape"
+    - "cluster_96_landscape"
+    - "cluster_104_landscape"
+    - "cluster_3_portrait"
+    - "cluster_8_portrait"
+    - "cluster_13_portrait"
+    - "cluster_15_portrait"
+    - "cluster_22_portrait"
+    - "cluster_25_portrait"
+    - "cluster_27_portrait"
+    - "cluster_29_portrait"
+  landscape_templates:
+    - "cluster_2_landscape"
+    - "cluster_6_landscape"
+    - "cluster_14_landscape"
+    - "cluster_16_landscape"
+    - "cluster_27_landscape"
+    - "cluster_36_landscape"
+    - "cluster_39_landscape"
+    - "cluster_43_landscape"
+    - "cluster_46_landscape"
+    - "cluster_62_landscape"
+    - "cluster_69_landscape"
+    - "cluster_70_landscape"
+    - "cluster_85_landscape"
+    - "cluster_86_landscape"
+    - "cluster_96_landscape"
+    - "cluster_104_landscape"
+  portrait_templates:
+    - "cluster_3_portrait"
+    - "cluster_8_portrait"
+    - "cluster_13_portrait"
+    - "cluster_15_portrait"
+    - "cluster_22_portrait"
+    - "cluster_25_portrait"
+    - "cluster_27_portrait"
+    - "cluster_29_portrait"
+  adaptive_auto_templates:
+    - "three_column_postergen"
+    - "two_plus_one_mixed"
+    - "one_plus_two_mixed"
+  dense_section_threshold: 6
+  dense_visual_threshold: 3
+  default_dense_landscape_template: "cluster_104_landscape"
+  default_visual_landscape_template: "cluster_43_landscape"
+  default_light_landscape_template: "cluster_2_landscape"
+  default_dense_portrait_template: "cluster_3_portrait"
+  default_light_portrait_template: "cluster_8_portrait"
+  soft_geometry:
+    enabled: true
+    templates:
+      - "cluster_2_landscape"
+      - "cluster_6_landscape"
+      - "cluster_14_landscape"
+      - "cluster_16_landscape"
+      - "cluster_27_landscape"
+      - "cluster_36_landscape"
+      - "cluster_39_landscape"
+      - "cluster_43_landscape"
+      - "cluster_46_landscape"
+      - "cluster_62_landscape"
+      - "cluster_69_landscape"
+      - "cluster_70_landscape"
+      - "cluster_85_landscape"
+      - "cluster_86_landscape"
+      - "cluster_96_landscape"
+      - "cluster_104_landscape"
+      - "cluster_3_portrait"
+      - "cluster_8_portrait"
+      - "cluster_13_portrait"
+      - "cluster_15_portrait"
+      - "cluster_22_portrait"
+      - "cluster_25_portrait"
+      - "cluster_27_portrait"
+      - "cluster_29_portrait"
+    min_gutter_inches: 0.12
+    max_absorption_inches: 0.35
+
+adaptive_auto_dense_layout:
+  enabled: true
+  poster_margin: 0.70
+  column_spacing: 0.18
+  max_column_gap_inches: 0.20
+
+template_fast_mode:
+  enabled: true
+  templates:
+    - "cluster_2_landscape"
+    - "cluster_6_landscape"
+    - "cluster_14_landscape"
+    - "cluster_16_landscape"
+    - "cluster_27_landscape"
+    - "cluster_36_landscape"
+    - "cluster_39_landscape"
+    - "cluster_43_landscape"
+    - "cluster_46_landscape"
+    - "cluster_62_landscape"
+    - "cluster_69_landscape"
+    - "cluster_70_landscape"
+    - "cluster_85_landscape"
+    - "cluster_86_landscape"
+    - "cluster_96_landscape"
+    - "cluster_104_landscape"
+    - "cluster_3_portrait"
+    - "cluster_8_portrait"
+    - "cluster_13_portrait"
+    - "cluster_15_portrait"
+    - "cluster_22_portrait"
+    - "cluster_25_portrait"
+    - "cluster_27_portrait"
+    - "cluster_29_portrait"
+  emergency_repair_max_iterations: 1
+  hard_min_utilization: 0.88
+  emergency_underfill_threshold: 0.85
+  allow_text_fill_repair: true
+  fast_text_fill_max_extra_chars: 280
+  visual_policy:
+    figure_count: 2
+    table_count: 2
+    figure_max_height_fraction: 0.55
+    table_max_height_fraction: 0.62
+    default_max_height_fraction: 0.42
+    figure_slots:
+      - "slot_2"
+      - "slot_3"
+    table_slots:
+      - "slot_6"
+      - "slot_5"
+    table_unreadable_strategy: "summarize_as_text"
+  slot_contracts:
+    slot_1:
+      role: "Motivation"
+      content_role: "foundation"
+      visual_policy: "text_only"
+      min_chars: 450
+      target_chars: 500
+      max_chars: 550
+      target_bullets: 4
+      keypoint_ids: [1, 2]
+    slot_2:
+      role: "Stable estimation figure"
+      content_role: "method"
+      visual_policy: "figure_caption"
+      min_chars: 80
+      target_chars: 100
+      max_chars: 120
+      target_bullets: 1
+      keypoint_ids: [3]
+    slot_3:
+      role: "Method or architecture figure"
+      content_role: "method"
+      visual_policy: "figure_caption"
+      min_chars: 80
+      target_chars: 100
+      max_chars: 120
+      target_bullets: 1
+      keypoint_ids: [4]
+    slot_4:
+      role: "Main results with table"
+      content_role: "results"
+      visual_policy: "table_with_callouts"
+      min_chars: 280
+      target_chars: 320
+      max_chars: 360
+      target_bullets: 3
+      keypoint_ids: [9, 10]
+    slot_5:
+      role: "Robustness and results summary"
+      content_role: "results"
+      visual_policy: "text_summary"
+      min_chars: 520
+      target_chars: 590
+      max_chars: 650
+      target_bullets: 5
+      keypoint_ids: [7, 8]
+    slot_6:
+      role: "Method details"
+      content_role: "method"
+      visual_policy: "text_only"
+      min_chars: 430
+      target_chars: 500
+      max_chars: 560
+      target_bullets: 4
+      keypoint_ids: [5, 6]
 
 affiliation_logos:
   enabled: false
@@ -149,7 +413,7 @@ affiliation_logos:
   normalized_max_size: [1800, 720]
   monochrome_logo_color: "#1E3A8A"
   logo_box_gap: 0.24
-  max_logo_height: 1.55
+  max_logo_height: 1.95
   local_dirs:
     - "affiliation_logos"
     - "logos"
@@ -187,9 +451,9 @@ affiliation_logos:
 conference_logos:
   directory: "assets/conference_logos"
   # Combined layout proportions (when both conf + aff logos present)
-  conf_zone_fraction: 0.38   # fraction of logo region reserved for conf logo
+  conf_zone_fraction: 0.48   # fraction of logo region reserved for conf logo
   divider_width: 0.04        # inches, thin vertical rule between zones
-  divider_gap: 0.30          # inches, padding on each side of divider
+  divider_gap: 0.22          # inches, padding on each side of divider
 
 visual_refinement:
   enabled: false
@@ -200,6 +464,8 @@ visual_refinement:
 vlm_layout_review:
   enabled: false
   max_iterations: 1
+  template_prior_max_repairs: 1
+  template_prior_accept_after_max_repair: true
   template_prior_min_accept_score: 70
   max_move_inches: 0.4
   container_bottom_padding: 0.2
@@ -207,6 +473,37 @@ vlm_layout_review:
   max_font_size: 120
   temperature: 0.1
   max_tokens: 1600
+  timeout_seconds: 120
+
+block_refinement:
+  enabled: false
+  target_utilization: 0.95
+  acceptable_min: 0.90
+  acceptable_max: 0.97
+  final_min_utilization: 0.88
+  hard_max: 0.98
+  safety_factor: 0.82
+  capacity_min_factor: 0.88
+  capacity_max_factor: 1.08
+  title_height_inches: 1.0
+  title_content_gap_inches: 0.4
+  visual_gap_inches: 0.3
+  section_padding_inches: 0.4
+  min_capacity_chars: 90
+  max_capacity_chars: 900
+  visual_min_text_chars: 90
+  visual_policy_too_small_width_inches: 13.0
+  max_iterations: 2
+  min_extra_chars: 20
+  vlm_underfilled_min_extra_chars: 120
+  max_extra_chars_per_block: 620
+  chars_per_bullet: 120
+  max_new_bullets_per_block: 5
+  second_round_expand_scale: 0.75
+  second_round_max_extra_chars: 260
+  source_context_chars: 7000
+  temperature: 0.1
+  max_tokens: 1800
   timeout_seconds: 120
 
 visual_legibility_review:
@@ -263,7 +560,8 @@ micro_layout_refinement:
   body_font_boost_step: 2
   title_font_boost_step: 1
   section_gap_expand_step: 0.12
-  text_height_safety_factor: 1.1
+  ppt_chars_per_inch_at_44pt: 4.2
+  text_height_safety_factor: 1.2
   text_height_safety_padding: 0.25
   container_bottom_padding: 0.2
 

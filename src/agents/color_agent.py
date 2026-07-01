@@ -172,16 +172,10 @@ class ColorAgent:
 
     def _add_contrast_color(self, color_scheme: Dict[str, str]) -> Dict[str, str]:
         """add contrast color for keyword highlighting"""
-        theme_color = color_scheme["theme"]
-        hex_color = theme_color.lstrip('#')
-        r = int(hex_color[0:2], 16)
-        g = int(hex_color[2:4], 16)
-        b = int(hex_color[4:6], 16)
-        
-        comp_r, comp_g, comp_b = self._generate_complementary_color(r, g, b)
-        contrast_color = self._reduce_saturation_brightness(comp_r, comp_g, comp_b)
-        
-        color_scheme["contrast"] = contrast_color
+        # Poster keyword highlights should stay inside the academic theme.
+        # A complementary color often turns blue themes into brown/orange accents,
+        # which makes dense posters look less coherent.
+        color_scheme["contrast"] = color_scheme.get("mono_dark") or color_scheme["theme"]
         return color_scheme
     
     def _generate_enhanced_light_variant(self, r: int, g: int, b: int) -> str:

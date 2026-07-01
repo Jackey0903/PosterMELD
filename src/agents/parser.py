@@ -18,6 +18,7 @@ from src.state.poster_state import PosterState
 from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error, log_agent_warning
 from src.config.poster_config import load_config
+from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_for_poster
 
 
 class Parser:
@@ -401,8 +402,8 @@ class Parser:
                 result = extract_json(response.content)
 
                 if "title" in result and "authors" in result:
-                    title = result["title"].strip()
-                    authors = result["authors"].strip()
+                    title = normalize_title_for_poster(result["title"].strip())
+                    authors = normalize_text_for_poster(result["authors"].strip())
                     
                     # validate format
                     if title and authors:

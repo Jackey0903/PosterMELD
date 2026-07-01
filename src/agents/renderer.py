@@ -6,6 +6,7 @@ import re
 import qrcode
 import shutil
 import subprocess
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional
 import json
@@ -99,6 +100,9 @@ class Renderer:
         qr_code_path = None
         if state.get("url"):
             qr_code_path = self._generate_qr_code(state["url"], state["output_dir"])
+        self._render_output_dir = Path(state["output_dir"])
+
+        self._render_background_image(slide, state)
 
         # use styled_layout if available, fallback to design_layout
         layout_data = state.get("styled_layout", state.get("design_layout", []))
@@ -112,6 +116,19 @@ class Renderer:
             self._render_element(slide, element, state, qr_code_path)
         
         self.director.save(str(output_path))
+
+    def _render_background_image(self, slide, state: PosterState):
+        background_path = state.get("background_image_path")
+        if not background_path or not Path(background_path).exists():
+            return
+        self.director.add_image(
+            background_path,
+            0,
+            0,
+            state["poster_width"],
+            state["poster_height"],
+            keep_aspect_ratio=False,
+        )
 
     def _render_element(self, slide, element: Dict, state: PosterState, qr_code_path: Optional[str]):
         """render individual element based on type"""
@@ -167,18 +184,67 @@ class Renderer:
         x, y, w, h = (Inches(element[k]) for k in ["x", "y", "width", "height"])
         
         log_agent_info(self.name, f"rendering title at ({x.inches:.1f}, {y.inches:.1f})")
-        
-        tb = slide.shapes.add_textbox(x, y, w, h)
-        tf = tb.text_frame
-        tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE  # Make sure title fits in the fixed-height textbox
-        tf.word_wrap = True
-        
+
         content = element.get("content", "Title\nAuthors")
         lines = content.split("\n")
         
         # separate title and authors
         title_lines = lines[:-1] if len(lines) > 1 else lines
         authors_text = lines[-1] if len(lines) > 1 else ""
+        title_text = "\n".join(line.strip() for line in title_lines if line.strip())
+        title_font_size = self.styling_interfaces.get("font_sizes", {}).get("title", 100)
+        author_font_size = self.styling_interfaces.get("font_sizes", {}).get("authors", 72)
+        title_font_size = element.get("font_size", title_font_size)
+        author_font_size = element.get("author_font_size", author_font_size)
+
+        if authors_text:
+            author_gap_inches = float(
+                element.get(
+                    "author_top_gap_inches",
+                    self.typography_config.get("title_author_gap_points", 16) / 72,
+                )
+            )
+            author_box_height = max((float(author_font_size) / 72) * 1.15, 0.55)
+            author_box_height = min(author_box_height, max(h.inches * 0.32, 0.55))
+            title_box_height = max(h.inches - author_box_height - author_gap_inches, h.inches * 0.55)
+            if title_box_height + author_gap_inches + author_box_height > h.inches:
+                title_box_height = max(h.inches - author_gap_inches - author_box_height, h.inches * 0.45)
+            author_y = y.inches + title_box_height + author_gap_inches
+
+            self._add_title_textbox(
+                slide,
+                title_text,
+                element,
+                x.inches,
+                y.inches,
+                w.inches,
+                title_box_height,
+                font_size=title_font_size,
+                font_family=element.get("font_family", "Helvetica Neue"),
+                bold=True,
+                color=RGBColor(0, 0, 0),
+                line_spacing=self.typography_config["line_spacing"],
+            )
+            self._add_title_textbox(
+                slide,
+                authors_text.strip(),
+                element,
+                x.inches,
+                author_y,
+                w.inches,
+                min(author_box_height, max(y.inches + h.inches - author_y, 0.4)),
+                font_size=author_font_size,
+                font_family="Arial",
+                bold=False,
+                color=RGBColor(60, 60, 60),
+                line_spacing=self.typography_config["line_spacing"] + 0.1,
+            )
+            return
+
+        tb = slide.shapes.add_textbox(x, y, w, h)
+        tf = tb.text_frame
+        tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE  # Make sure title fits in the fixed-height textbox
+        tf.word_wrap = True
         
         # add title lines
         for i, title_line in enumerate(title_lines):
@@ -189,23 +255,43 @@ class Renderer:
             
             p.text = title_line.strip()
             p.font.name = element.get("font_family", "Helvetica Neue")
-            title_font_size = self.styling_interfaces.get("font_sizes", {}).get("title", 100)
-            p.font.size = Pt(element.get("font_size", title_font_size))
+            p.font.size = Pt(title_font_size)
             p.font.bold = True
             p.font.color.rgb = RGBColor(0, 0, 0)  # black for readability
             p.alignment = PP_ALIGN.LEFT
             p.line_spacing = self.typography_config["line_spacing"]
-        
-        # add authors
-        if authors_text:
-            p_authors = tf.add_paragraph()
-            p_authors.text = authors_text.strip()
-            p_authors.font.name = "Arial"
-            authors_font_size = self.styling_interfaces.get("font_sizes", {}).get("authors", 72)
-            p_authors.font.size = Pt(element.get("author_font_size", authors_font_size))
-            p_authors.font.color.rgb = RGBColor(60, 60, 60)  # dark gray
-            p_authors.alignment = PP_ALIGN.LEFT
-            p_authors.line_spacing = self.typography_config["line_spacing"] + 0.1  # slightly looser for authors
+            p.space_after = Pt(0)
+
+    def _add_title_textbox(
+        self,
+        slide,
+        text: str,
+        element: Dict,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        font_size: float,
+        font_family: str,
+        bold: bool,
+        color: RGBColor,
+        line_spacing: float,
+    ):
+        tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(width), Inches(height))
+        tf = tb.text_frame
+        tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.text = text
+        p.font.name = font_family
+        p.font.size = Pt(font_size)
+        p.font.bold = bold
+        p.font.color.rgb = color
+        p.alignment = PP_ALIGN.LEFT
+        p.line_spacing = line_spacing
+        p.space_before = Pt(0)
+        p.space_after = Pt(0)
+        return tb
 
     def _render_section_title(self, slide, element: Dict, state: PosterState):
         """render section title with enhanced styling"""
@@ -233,7 +319,7 @@ class Renderer:
         p.text = section_title
         p.font.name = element.get("font_family", "Helvetica Neue")
         section_title_font_size = self.styling_interfaces.get("font_sizes", {}).get("section_title", 48)
-        p.font.size = Pt(element.get("font_size", section_title_font_size))
+        p.font.size = Pt(self._fit_section_title_font_size(section_title, element, section_title_font_size))
         p.font.bold = element.get("font_weight", "bold") == "bold"
         
         # apply color styling
@@ -248,6 +334,19 @@ class Renderer:
             p.alignment = PP_ALIGN.RIGHT
         else:
             p.alignment = PP_ALIGN.LEFT
+
+    def _fit_section_title_font_size(self, title: str, element: Dict, fallback_size: int) -> int:
+        font_size = int(element.get("font_size", fallback_size))
+        width_inches = max(float(element.get("width", 0.0) or 0.0), 0.1)
+        title_chars = max(len(title.strip()), 1)
+        chars_per_inch = float(
+            self.config.get("rendering", {}).get("section_title_chars_per_inch_at_48pt", 3.1)
+        )
+        capacity = width_inches * chars_per_inch * (48 / max(font_size, 1))
+        if title_chars <= capacity:
+            return font_size
+        fitted = int(font_size * capacity / title_chars)
+        return max(34, min(font_size, fitted))
 
     def _render_title_accent_block(self, slide, element: Dict, state: PosterState):
         """render color block accent for section titles"""
@@ -279,8 +378,6 @@ class Renderer:
         importance_level = element.get("importance_level", 2)
         template_meta = state.get("layout_template_metadata") or {}
         is_extracted_template = bool(template_meta.get("extracted_template"))
-        if not is_debug and not is_extracted_template:
-            return
         
         # apply background fill based on importance level
         fill_color = element.get("fill_color")
@@ -292,6 +389,10 @@ class Renderer:
 
         border_color = element.get("border_color")
         border_width = element.get("border_width", 1.0)
+        border_style = element.get("border_style", "solid")
+        if not is_debug and not is_extracted_template and not fill_color and not border_color:
+            return
+
         # apply border based on debug mode
         if is_debug:
             border_color = "#FF0000"
@@ -301,8 +402,17 @@ class Renderer:
         if not fill_color and not border_color:
             return
 
-        self.director.add_shape(MSO_SHAPE.RECTANGLE, element["x"], element["y"], element["width"], element["height"], 
-                                fill_color=fill_color, border_color=border_color, border_width=border_width)
+        self.director.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            element["x"],
+            element["y"],
+            element["width"],
+            element["height"],
+            fill_color=fill_color,
+            border_color=border_color,
+            border_width=border_width,
+            border_style=border_style,
+        )
 
     def _render_text(self, slide, element: Dict, state: PosterState):
         """render text elements with enhanced formatting"""
@@ -639,10 +749,47 @@ class Renderer:
         x, y, w, h = (Inches(element[k]) for k in ["x", "y", "width", "height"])
         
         try:
-            self.director.add_image(image_path, element["x"], element["y"], element["width"], element["height"], keep_aspect_ratio=True)
+            render_path = self._trim_logo_whitespace(image_path)
+            self.director.add_image(render_path, element["x"], element["y"], element["width"], element["height"], keep_aspect_ratio=True)
                                    
         except Exception as e:
             log_agent_error(self.name, f"failed to render logo: {e}")
+
+    def _trim_logo_whitespace(self, image_path: str) -> str:
+        try:
+            from PIL import Image, ImageChops
+
+            source = Path(image_path)
+            with Image.open(source).convert("RGBA") as image:
+                white = Image.new("RGBA", image.size, (255, 255, 255, 255))
+                diff = ImageChops.difference(image, white).convert("L")
+                mask = diff.point(lambda value: 255 if value > 12 else 0)
+                bbox = mask.getbbox()
+                if not bbox:
+                    return image_path
+                content_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+                total_area = image.size[0] * image.size[1]
+                if total_area <= 0 or content_area / total_area > 0.86:
+                    return image_path
+
+                pad_x = max(int((bbox[2] - bbox[0]) * 0.04), 8)
+                pad_y = max(int((bbox[3] - bbox[1]) * 0.04), 8)
+                crop_box = (
+                    max(bbox[0] - pad_x, 0),
+                    max(bbox[1] - pad_y, 0),
+                    min(bbox[2] + pad_x, image.size[0]),
+                    min(bbox[3] + pad_y, image.size[1]),
+                )
+                output_dir = getattr(self, "_render_output_dir", source.parent) / "assets"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                digest = hashlib.sha1(f"{source.resolve()}:{crop_box}".encode("utf-8")).hexdigest()[:10]
+                output_path = output_dir / f"{source.stem}_trimmed_{digest}.png"
+                if not output_path.exists():
+                    image.crop(crop_box).save(output_path)
+                return str(output_path)
+        except Exception:
+            return image_path
+        return image_path
 
     def _get_resolved_visual_entry(self, slot_id: str, visual_id: str, state: PosterState) -> Optional[Dict[str, Any]]:
         """Resolve a slot-level visual entry from the visual asset agent output."""

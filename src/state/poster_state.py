@@ -43,6 +43,8 @@ class TimingMetrics:
     pipeline_start: float = 0.0
     pipeline_end: float = 0.0
     parser_time: float = 0.0
+    template_capacity_planner_time: float = 0.0
+    poster_keypoint_selector_time: float = 0.0
     curator_time: float = 0.0
     template_block_planner_time: float = 0.0
     layout_optimizer_time: float = 0.0
@@ -56,6 +58,9 @@ class TimingMetrics:
     vlm_layout_reviewer_time: float = 0.0
     visual_legibility_reviewer_time: float = 0.0
     adaptive_column_relayout_time: float = 0.0
+    block_occupancy_analyzer_time: float = 0.0
+    block_vlm_reviewer_time: float = 0.0
+    block_content_refiner_time: float = 0.0
     api_calls: List[APICall] = field(default_factory=list)
 
     def add_api_call(self, agent: str, call_type: str, input_tokens: int, output_tokens: int):
@@ -104,20 +109,35 @@ class PosterState(TypedDict):
     vlm_layout_review: Optional[Dict[str, Any]]
     vlm_layout_patch: Optional[List[Dict[str, Any]]]
     visual_legibility_review: Optional[Dict[str, Any]]
+    block_occupancy_report: Optional[Dict[str, Any]]
+    block_vlm_review: Optional[Dict[str, Any]]
+    block_content_patch: Optional[Dict[str, Any]]
+    block_refinement_history: Optional[Dict[str, Any]]
     adaptive_layout_decision: Optional[Dict[str, Any]]
     narrative: Optional[Dict[str, str]]
     poster_plan: Optional[List[Dict[str, Any]]]
+    paper_poster_keypoints: Optional[List[Dict[str, Any]]]
+    poster_reading_order: Optional[List[int]]
+    poster_keypoint_selection_report: Optional[Dict[str, Any]]
     poster_width: int
     poster_height: int
     layout_template: str
     resolved_layout_template: Optional[str]
     layout_template_metadata: Optional[Dict[str, Any]]
     template_selection_report: Optional[Dict[str, Any]]
+    standard_template_selection_report: Optional[Dict[str, Any]]
     adaptive_lane_widths: Optional[Dict[str, float]]
     template_layout_mode: Optional[str]
     template_block_plan: Optional[Dict[str, Any]]
     layout_intent: Optional[Dict[str, Any]]
     template_prior_source_story_board: Optional[Dict[str, Any]]
+    template_fast_mode: bool
+    fast_block_contract: Optional[Dict[str, Any]]
+    fast_visual_policy: Optional[Dict[str, Any]]
+    fast_pipeline_report: Optional[Dict[str, Any]]
+    block_capacity_contract: Optional[Dict[str, Any]]
+    capacity_aware_story_board: Optional[Dict[str, Any]]
+    capacity_planning_report: Optional[Dict[str, Any]]
     slot_pressure_report: Optional[Dict[str, Any]]
     wireframe_layout: Optional[List[Dict[str, Any]]]
     content_filled_layout: Optional[List[Dict[str, Any]]]
@@ -151,7 +171,12 @@ class PosterState(TypedDict):
     enable_affiliation_logos: bool
     enable_vlm_layout_review: bool
     enable_visual_legibility_review: bool
+    enable_block_vlm_review: bool
     enable_adaptive_column_width: bool
+    enable_generated_background: bool
+    background_palette: Optional[str]
+    background_image_path: Optional[str]
+    background_image_report: Optional[Dict[str, Any]]
     vlm_model: Optional[str]
     render_stage: str
     draft_status: str
@@ -169,6 +194,8 @@ class PosterState(TypedDict):
     pptx_output_path: Optional[str]
     visual_reflow_required: bool
     visual_reflow_count: int
+    block_refinement_required: bool
+    block_refinement_count: int
 
     # metadata
     tokens: TokenUsage
@@ -191,7 +218,10 @@ def create_state(
     enable_affiliation_logos: bool = False,
     enable_vlm_layout_review: bool = False,
     enable_visual_legibility_review: bool = False,
+    enable_block_vlm_review: bool = False,
     enable_adaptive_column_width: bool = False,
+    enable_generated_background: bool = False,
+    background_palette: Optional[str] = None,
     vlm_model: Optional[str] = None,
     conference_name: Optional[str] = None,
 ) -> PosterState:
@@ -200,6 +230,15 @@ def create_state(
 
     poster_name = Path(pdf_path).parent.name or "test_poster"
     output_dir = f"output/{poster_name}"
+
+    needs_post_render_pass = any(
+        [
+            enable_vlm_layout_review,
+            enable_visual_legibility_review,
+            enable_block_vlm_review,
+            enable_generated_background,
+        ]
+    )
 
     return PosterState(
         pdf_path=pdf_path,
@@ -218,20 +257,35 @@ def create_state(
         vlm_layout_review=None,
         vlm_layout_patch=None,
         visual_legibility_review=None,
+        block_occupancy_report=None,
+        block_vlm_review=None,
+        block_content_patch=None,
+        block_refinement_history=None,
         adaptive_layout_decision=None,
         narrative=None,
         poster_plan=None,
+        paper_poster_keypoints=None,
+        poster_reading_order=None,
+        poster_keypoint_selection_report=None,
         poster_width=width,
         poster_height=height,
         layout_template=layout_template,
         resolved_layout_template=None,
         layout_template_metadata=None,
         template_selection_report=None,
+        standard_template_selection_report=None,
         adaptive_lane_widths=None,
         template_layout_mode=None,
         template_block_plan=None,
         layout_intent=None,
         template_prior_source_story_board=None,
+        template_fast_mode=False,
+        fast_block_contract=None,
+        fast_visual_policy=None,
+        fast_pipeline_report=None,
+        block_capacity_contract=None,
+        capacity_aware_story_board=None,
+        capacity_planning_report=None,
         slot_pressure_report=None,
         wireframe_layout=None,
         content_filled_layout=None,
@@ -262,9 +316,14 @@ def create_state(
         enable_affiliation_logos=enable_affiliation_logos,
         enable_vlm_layout_review=enable_vlm_layout_review,
         enable_visual_legibility_review=enable_visual_legibility_review,
+        enable_block_vlm_review=enable_block_vlm_review,
         enable_adaptive_column_width=enable_adaptive_column_width,
+        enable_generated_background=enable_generated_background,
+        background_palette=background_palette,
+        background_image_path=None,
+        background_image_report=None,
         vlm_model=vlm_model,
-        render_stage="final",
+        render_stage="draft" if needs_post_render_pass else "final",
         draft_status="pending",
         draft_rejection_reason=None,
         final_poster_accepted=False,
@@ -280,6 +339,8 @@ def create_state(
         pptx_output_path=None,
         visual_reflow_required=False,
         visual_reflow_count=0,
+        block_refinement_required=False,
+        block_refinement_count=0,
         tokens=TokenUsage(),
         timing_metrics=TimingMetrics(),
         current_agent="init",
@@ -299,6 +360,7 @@ def _get_model_config(model_id: str) -> ModelConfig:
         "gpt-4o-2024-08-06": ModelConfig("gpt-4o-2024-08-06", "openai"),
         "gpt-4.1-2025-04-14": ModelConfig("gpt-4.1-2025-04-14", "openai"),
         "gpt-4.1-mini-2025-04-14": ModelConfig("gpt-4.1-mini-2025-04-14", "openai"),
+        "gpt-5": ModelConfig("gpt-5", "openai"),
         "gpt-5.1": ModelConfig("gpt-5.1", "openai"),
         "gpt-5.4-xhigh": ModelConfig("gpt-5.4-xhigh", "openai"),
         "gpt-5.5-xhigh": ModelConfig("gpt-5.5-xhigh", "openai"),

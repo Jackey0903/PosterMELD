@@ -215,3 +215,8 @@ ablation/
 evaluation/
 output/
 hf/
+
+# Local meeting/export artifacts
+/进度.pdf
+docs/weekly_meeting_pipeline*
+!docs/weekly_meeting_summary.md

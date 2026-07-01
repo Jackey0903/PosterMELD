@@ -3,6 +3,10 @@ spatial content planning and story board curation
 """
 
 import json
+import math
+import re
+import traceback
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -12,7 +16,8 @@ from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent
 from src.config.poster_config import load_config
 from src.layout.template_selector import TemplateSelector
 from src.tools.layout_api import LayoutTemplates
-from src.template_extraction.block_template_registry import is_block_template_id
+from src.template_extraction.block_template_registry import get_block_template_info, is_block_template_id
+from src.utils.text_cleanup import normalize_text_for_poster
 from jinja2 import Template
 
 class StoryBoardCurator:
@@ -50,6 +55,7 @@ class StoryBoardCurator:
                 classified_visuals,
             )
             resolved_template = selection_report["selected_template"]
+            self._apply_selected_template_state_defaults(state, selection_report)
             visual_context = self._prepare_visual_context_for_curator(state, resolved_template)
             
             story_board, inp, out = self._create_story_board(
@@ -111,6 +117,8 @@ class StoryBoardCurator:
             "structured_sections": json.dumps(structured_sections, indent=2),
             "narrative_content": json.dumps(narrative_content, indent=2),
             "classified_visuals": json.dumps(classified_visuals, indent=2),
+            "paper_poster_keypoints": json.dumps(state.get("paper_poster_keypoints") or [], indent=2, ensure_ascii=False),
+            "poster_reading_order": json.dumps(state.get("poster_reading_order") or [], indent=2),
             "available_images": json.dumps({k: {"caption": v.get("caption", ""), "aspect": v.get("aspect", 1.0)} 
                                           for k, v in images.items()}, indent=2),
             "available_tables": json.dumps({k: {"caption": v.get("caption", ""), "aspect": v.get("aspect", 1.0)} 
@@ -128,8 +136,9 @@ class StoryBoardCurator:
                 agent.reset()
                 response = agent.step(prompt)
                 
-                story_board = extract_json(response.content)
+                story_board = self._coerce_story_board_payload(extract_json(response.content))
                 self._remove_unknown_visual_references(story_board, visual_context)
+                self._align_sections_to_keypoints(story_board, state, visual_context, classified_visuals)
                 self._compact_portrait_text_content(story_board, visual_context)
                 
                 if self._validate_story_board(story_board, classified_visuals, visual_context):
@@ -139,11 +148,63 @@ class StoryBoardCurator:
                     log_agent_warning(self.name, f"attempt {attempt + 1}: validation failed, retrying")
                     
             except Exception as e:
-                log_agent_warning(self.name, f"story board attempt {attempt + 1} failed: {e}")
+                log_agent_warning(
+                    self.name,
+                    f"story board attempt {attempt + 1} failed: {e}\n{traceback.format_exc(limit=3)}",
+                )
+                if int((visual_context or {}).get("keypoint_target_count") or 0):
+                    log_agent_warning(self.name, "using deterministic keypoint-first story board fallback")
+                    story_board = self._fallback_story_board_from_keypoints(state, visual_context, classified_visuals)
+                    return story_board, 0, 0
                 if attempt == max_attempts - 1:
                     raise ValueError("failed to create story board after multiple attempts")
 
         raise ValueError("failed to create story board")
+
+    def _coerce_story_board_payload(self, payload: Any) -> Dict[str, Any]:
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            nested = extract_json(payload)
+            if isinstance(nested, dict):
+                return nested
+            if isinstance(nested, list):
+                return {"spatial_content_plan": {"sections": nested}}
+        if isinstance(payload, list):
+            return {"spatial_content_plan": {"sections": payload}}
+        raise ValueError(f"invalid story_board payload type: {type(payload).__name__}")
+
+    def _fallback_story_board_from_keypoints(
+        self,
+        state: PosterState,
+        visual_context: Dict[str, Any],
+        classified_visuals: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        story_board: Dict[str, Any] = {
+            "spatial_content_plan": {
+                "poster_strategy": {
+                    "narrative_flow": "Keypoint-first reading order from problem to method to results.",
+                    "space_utilization_approach": (
+                        "Keypoints are grouped only when the selected template has fewer high-quality content panels; "
+                        "capacity planner expands or compresses each block."
+                    ),
+                    "column_balance_rationale": "Template block geometry controls final placement.",
+                },
+                "sections": [],
+            },
+            "column_distribution": {
+                "left_column": {"focus": "Problem and motivation", "assigned_sections": [], "content_strategy": "Introduce context."},
+                "middle_column": {"focus": "Method", "assigned_sections": [], "content_strategy": "Explain the framework."},
+                "right_column": {"focus": "Results", "assigned_sections": [], "content_strategy": "Show evidence and takeaway."},
+            },
+        }
+        self._align_sections_to_keypoints(story_board, state, visual_context, classified_visuals)
+        sections = story_board.get("spatial_content_plan", {}).get("sections", [])
+        distribution_keys = {"left": "left_column", "middle": "middle_column", "right": "right_column"}
+        for section in sections:
+            column = distribution_keys.get(section.get("column_assignment"), "middle_column")
+            story_board["column_distribution"][column]["assigned_sections"].append(section.get("section_id"))
+        return story_board
 
     def _remove_unknown_visual_references(self, story_board: Dict, visual_context: Dict[str, Any]) -> None:
         valid_visual_ids = set((visual_context or {}).get("valid_visual_ids") or [])
@@ -155,8 +216,14 @@ class StoryBoardCurator:
             if not isinstance(visuals, list):
                 section["visual_assets"] = []
                 continue
-            kept = [visual for visual in visuals if visual.get("visual_id") in valid_visual_ids]
-            removed = [visual.get("visual_id") for visual in visuals if visual.get("visual_id") not in valid_visual_ids]
+            normalized_visuals = [self._normalize_visual_reference(visual) for visual in visuals]
+            normalized_visuals = [visual for visual in normalized_visuals if visual]
+            kept = [visual for visual in normalized_visuals if visual.get("visual_id") in valid_visual_ids]
+            removed = [
+                visual.get("visual_id")
+                for visual in normalized_visuals
+                if visual.get("visual_id") not in valid_visual_ids
+            ]
             if removed:
                 log_agent_warning(
                     self.name,
@@ -200,6 +267,15 @@ class StoryBoardCurator:
         sections = scp["sections"]
         min_sections = self.validation_config["min_section_count"]
         max_sections = self._max_section_count_for_template(visual_context)
+        keypoint_target = int((visual_context or {}).get("keypoint_target_count") or 0)
+        if keypoint_target:
+            if self._group_keypoints_for_template(visual_context):
+                grouped_target = self._keypoint_section_target_count(visual_context)
+                min_sections = grouped_target
+                max_sections = grouped_target
+            else:
+                min_sections = keypoint_target
+                max_sections = keypoint_target
         if len(sections) < min_sections or len(sections) > max_sections:
             log_agent_warning(self.name, f"validation error: need {min_sections}-{max_sections} sections, got {len(sections)}")
             return False
@@ -210,6 +286,15 @@ class StoryBoardCurator:
             for field in required_fields:
                 if field not in section:
                     log_agent_warning(self.name, f"validation error: section {i} missing '{field}'")
+                    return False
+            if keypoint_target:
+                if self._group_keypoints_for_template(visual_context):
+                    source_keypoint_ids = section.get("source_keypoint_ids") or []
+                    if not isinstance(source_keypoint_ids, list) or not source_keypoint_ids:
+                        log_agent_warning(self.name, f"validation error: grouped keypoint section {i} missing source_keypoint_ids")
+                        return False
+                elif not section.get("keypoint_id"):
+                    log_agent_warning(self.name, f"validation error: keypoint section {i} missing keypoint_id")
                     return False
             
             # check column assignment is valid
@@ -244,6 +329,9 @@ class StoryBoardCurator:
 
             valid_visual_ids = set((visual_context or {}).get("valid_visual_ids") or [])
             for visual in section.get("visual_assets", []):
+                visual = self._normalize_visual_reference(visual)
+                if not visual:
+                    continue
                 visual_id = visual.get("visual_id")
                 if valid_visual_ids and visual_id not in valid_visual_ids:
                     log_agent_warning(self.name, f"validation error: section {i} references unknown visual_id '{visual_id}'")
@@ -259,6 +347,9 @@ class StoryBoardCurator:
                 for section in sections:
                     visual_assets = section.get("visual_assets", [])
                     for visual in visual_assets:
+                        visual = self._normalize_visual_reference(visual)
+                        if not visual:
+                            continue
                         if visual.get("visual_id") == key_visual:
                             key_visual_found = True
                             if (section.get("column_assignment") == "middle" and 
@@ -267,21 +358,29 @@ class StoryBoardCurator:
                             break
                     if key_visual_found:
                         break
+
+                requested_template = str((visual_context or {}).get("requested_layout_template") or "")
+                if (
+                    key_visual_found
+                    and self._group_keypoints_for_template(visual_context or {})
+                    and is_block_template_id(requested_template)
+                ):
+                    key_visual_in_middle_top = True
                 
                 if not key_visual_found:
                     log_agent_warning(self.name, f"validation error: key_visual '{key_visual}' not found in any section")
                     return False
                     
                 if not key_visual_in_middle_top:
-                    log_agent_warning(self.name, f"validation error: key_visual '{key_visual}' not placed in middle column, top priority")
+                    log_agent_warning(self.name, f"validation error: key_visual '{key_visual}' not placed in required primary visual position")
                     return False
 
         if self._is_portrait_or_vertical_template(visual_context or {}):
             selected_visual_ids = [
-                visual.get("visual_id")
+                normalized.get("visual_id")
                 for section in sections
-                for visual in section.get("visual_assets", [])
-                if visual.get("visual_id")
+                for normalized in [self._normalize_visual_reference(visual) for visual in section.get("visual_assets", [])]
+                if normalized and normalized.get("visual_id")
             ]
             if len(selected_visual_ids) > 1:
                 log_agent_warning(
@@ -300,6 +399,9 @@ class StoryBoardCurator:
             for section in sections:
                 visual_assets = section.get("visual_assets", [])
                 for visual in visual_assets:
+                    visual = self._normalize_visual_reference(visual)
+                    if not visual:
+                        continue
                     visual_id = visual.get("visual_id")
                     if visual_id in visual_heights:
                         height_info = visual_heights[visual_id]
@@ -321,6 +423,9 @@ class StoryBoardCurator:
                     for section in sections:
                         visual_assets = section.get("visual_assets", [])
                         for visual in visual_assets:
+                            visual = self._normalize_visual_reference(visual)
+                            if not visual:
+                                continue
                             visual_id = visual.get("visual_id")
                             if visual_id in visual_heights:
                                 height_info = visual_heights[visual_id]
@@ -337,12 +442,83 @@ class StoryBoardCurator:
         return True
 
     def _section_count_guidance(self, visual_context: Dict[str, Any]) -> str:
+        keypoint_target = int((visual_context or {}).get("keypoint_target_count") or 0)
+        if keypoint_target:
+            if self._group_keypoints_for_template(visual_context):
+                grouped_target = self._keypoint_section_target_count(visual_context)
+                return (
+                    f"exactly {grouped_target} grouped poster sections; use Poster Keypoints as a content pool "
+                    "and merge adjacent or related keypoints when needed by template geometry"
+                )
+            return (
+                f"exactly {keypoint_target} keypoint-aligned sections; create one section per "
+                "paper_poster_keypoint in poster_reading_order"
+            )
         if self._is_portrait_or_vertical_template(visual_context):
             return "exactly 5 compact"
         return "5-8"
 
     def _template_layout_guidance(self, visual_context: Dict[str, Any]) -> str:
         template_layout = visual_context.get("template_layout") or {}
+        keypoint_target = int((visual_context or {}).get("keypoint_target_count") or 0)
+        if (visual_context or {}).get("template_fast_mode"):
+            contract = (visual_context or {}).get("fast_block_contract") or {}
+            visual_policy = (visual_context or {}).get("fast_visual_policy") or {}
+            blocks = [
+                {
+                    "slot_id": block.get("slot_id"),
+                    "role": block.get("slot_role"),
+                    "target_chars": block.get("target_chars"),
+                    "min_chars": block.get("min_chars"),
+                    "max_chars": block.get("max_chars"),
+                    "visual_policy": block.get("visual_policy"),
+                    "keypoint_ids": block.get("source_keypoint_ids"),
+                }
+                for block in contract.get("blocks") or []
+            ]
+            section_count = len(blocks) or self._keypoint_section_target_count(visual_context)
+            if self._is_portrait_or_vertical_template(visual_context):
+                return (
+                    f"FAST PORTRAIT TEMPLATE-FIRST MODE for {visual_context.get('requested_layout_template')}. "
+                    f"Produce exactly {section_count} grouped poster sections from the keypoint pool. Preserve every "
+                    "keypoint id in source_keypoint_ids. Use exactly 1 total visual: the key method visual. "
+                    "Do not include result tables as visuals; convert tables and ablations into short factual text. "
+                    "Match text_content length to each slot's min/target/max chars while keeping the portrait layout readable. "
+                    f"Visual policy: {json.dumps(visual_policy, ensure_ascii=False)}. "
+                    f"Slot contracts: {json.dumps(blocks, ensure_ascii=False)}"
+                )
+            figure_count = int(visual_policy.get("figure_count") or 2)
+            table_count = int(visual_policy.get("table_count") or 1)
+            return (
+                f"FAST TEMPLATE-FIRST MODE for {visual_context.get('requested_layout_template')}. "
+                f"Produce exactly {section_count} grouped poster sections from 10 keypoints. Preserve every keypoint id in "
+                "source_keypoint_ids. Use the fixed slot plan below; do not create extra sections and do not "
+                f"drop keypoints. Select up to {figure_count} figures and up to {table_count} tables overall when "
+                "the selected visuals are readable and the slot contracts have capacity; for dense result papers, "
+                "2 figures plus 2 tables is allowed. If a table is unreadable, keep a text summary and record the "
+                "warning. Match text_content length to each slot's min/target/max "
+                "chars. Text formatting must be clean and uniform: no literal bullet symbols, no nested bullets, "
+                "no ordered lists, no empty strings, and no Table/Figure number references. Text-only slots should "
+                "use 2-4 parallel callouts; figure/table slots should use 1-2 short interpretation lines. "
+                f"Visual policy: {json.dumps(visual_policy, ensure_ascii=False)}. "
+                f"Slot contracts: {json.dumps(blocks, ensure_ascii=False)}"
+            )
+        if keypoint_target:
+            if self._group_keypoints_for_template(visual_context):
+                grouped_target = self._keypoint_section_target_count(visual_context)
+                return (
+                    f"Grouped keypoint template mode for {visual_context.get('requested_layout_template')}. "
+                    f"Produce exactly {grouped_target} clean poster sections from the keypoint pool. "
+                    "Do not force one keypoint per block; group related keypoints into coherent sections, "
+                    "preserve source_keypoint_ids, and keep visuals only for the strongest method/results blocks."
+                )
+            return (
+                f"Keypoint-first block template mode. Produce exactly {keypoint_target} fine-grained sections, "
+                "one per paper_poster_keypoint, preserving poster_reading_order. Do not merge keypoints into "
+                "fewer broad sections. Include keypoint_id and source_section on every section. Use short titles "
+                "and 1-3 factual bullets from the matching keypoint/paper facts. Use at most a few visuals overall, "
+                "preferably for the central method and strongest result blocks."
+            )
         if self._is_portrait_or_vertical_template(visual_context):
             return (
                 "Portrait extracted template. Use exactly 5 compact sections across the three vertical bands. "
@@ -358,6 +534,9 @@ class StoryBoardCurator:
         return "Standard three-lane landscape poster."
 
     def _max_section_count_for_template(self, visual_context: Dict[str, Any] = None) -> int:
+        keypoint_target = int((visual_context or {}).get("keypoint_target_count") or 0)
+        if keypoint_target:
+            return keypoint_target
         if self._is_portrait_or_vertical_template(visual_context or {}):
             return 5
         return self.validation_config["max_section_count"]
@@ -386,6 +565,15 @@ class StoryBoardCurator:
         structured_sections: Dict[str, Any],
         classified_visuals: Dict[str, Any],
     ) -> Dict[str, Any]:
+        if state.get("resolved_layout_template"):
+            selected_template = str(state["resolved_layout_template"])
+            selection_report = dict(state.get("template_selection_report") or {})
+            selection_report.setdefault("selected_template", selected_template)
+            selection_report.setdefault("selection_mode", "preselected")
+            selection_report.setdefault("candidates", [])
+            log_agent_info(self.name, f"template selection ({selection_report.get('selection_mode')}): {selected_template}")
+            return selection_report
+
         selector = TemplateSelector(self.config)
         selection_report = selector.select(
             state=state,
@@ -405,8 +593,33 @@ class StoryBoardCurator:
                     f"{candidate['template_name']}={candidate['score']:.2f}"
                     for candidate in selection_report["candidates"]
                 ),
-            )
+        )
         return selection_report
+
+    def _apply_selected_template_state_defaults(self, state: PosterState, selection_report: Dict[str, Any]) -> None:
+        selected_template = selection_report.get("selected_template")
+        if not selected_template or not is_block_template_id(selected_template):
+            return
+
+        state["enable_visual_legibility_review"] = True
+        state["enable_vlm_layout_review"] = True
+        state["enable_block_vlm_review"] = True
+
+        if state.get("layout_template") != "auto":
+            return
+
+        info = get_block_template_info(selected_template) or {}
+        size = info.get("recommended_canvas_size") or {}
+        try:
+            width = float(size.get("width"))
+            height = float(size.get("height"))
+        except (TypeError, ValueError):
+            return
+        if width > 0 and height > 0:
+            state["poster_width"] = width
+            state["poster_height"] = height
+            selection_report["auto_canvas_size"] = {"width": width, "height": height}
+            log_agent_info(self.name, f"auto canvas adjusted to {width:g}\" x {height:g}\" for {selected_template}")
 
     def _prepare_visual_context_for_curator(self, state: PosterState, resolved_template: str) -> Dict[str, Any]:
         """prepare visual assets height information for curator's spatial planning"""
@@ -427,6 +640,11 @@ class StoryBoardCurator:
             margin=config["layout"]["poster_margin"],
             col_gap=config["layout"]["column_spacing"],
         ).get_template(curator_template, header_height=title_region_height)
+        template_layout_for_context = (
+            state.get("layout_template_metadata")
+            if is_block_template_id(resolved_template) and state.get("layout_template_metadata")
+            else layout
+        )
         lanes = layout["lanes"]
 
         min_lane_height = min(lane["h"] for lane in lanes)
@@ -476,10 +694,1010 @@ class StoryBoardCurator:
             "visual_assets_heights": visual_heights,
             "column_width": round(min_lane_width, 1),
             "effective_width": round(effective_width, 1),
-            "template_layout": layout,
+            "template_layout": template_layout_for_context,
             "valid_visual_ids": list((state.get("visual_assets") or {}).keys()),
             "requested_layout_template": resolved_template,
+            "template_fast_mode": bool(state.get("template_fast_mode")),
+            "fast_block_contract": state.get("fast_block_contract") or {},
+            "fast_visual_policy": state.get("fast_visual_policy") or {},
+            "paper_poster_keypoints": state.get("paper_poster_keypoints") or [],
+            "poster_reading_order": state.get("poster_reading_order") or [],
+            "keypoint_target_count": min(len(state.get("paper_poster_keypoints") or []), 10)
+            if state.get("paper_poster_keypoints") else 0,
+            "keypoint_section_target_count": self._default_keypoint_section_target(resolved_template, template_layout_for_context, state),
+            "keypoint_grouping_mode": self._template_uses_grouped_keypoints(resolved_template),
         }
+
+    def _align_sections_to_keypoints(
+        self,
+        story_board: Dict[str, Any],
+        state: PosterState,
+        visual_context: Dict[str, Any],
+        classified_visuals: Dict[str, Any],
+    ) -> None:
+        keypoints = self._ordered_keypoints(state)
+        if not keypoints:
+            return
+        if self._group_keypoints_for_template(visual_context):
+            self._align_grouped_sections_to_keypoints(
+                story_board,
+                keypoints,
+                visual_context,
+                classified_visuals,
+            )
+            return
+
+        scp = story_board.setdefault("spatial_content_plan", {})
+        original_sections = scp.get("sections") or []
+        if not isinstance(original_sections, list):
+            original_sections = []
+
+        by_keypoint_id: Dict[int, Dict[str, Any]] = {}
+        remaining = []
+        for section in original_sections:
+            if not isinstance(section, dict):
+                continue
+            try:
+                keypoint_id = int(section.get("keypoint_id"))
+            except (TypeError, ValueError):
+                remaining.append(section)
+                continue
+            by_keypoint_id[keypoint_id] = section
+
+        aligned = []
+        for index, keypoint in enumerate(keypoints):
+            keypoint_id = int(keypoint["id"])
+            source = by_keypoint_id.get(keypoint_id) or (remaining[index] if index < len(remaining) else {})
+            section = deepcopy(source)
+            keypoint_text = normalize_text_for_poster(str(keypoint.get("key_point") or "").strip())
+            source_section = normalize_text_for_poster(str(keypoint.get("section") or "Paper").strip()) or "Paper"
+
+            section["keypoint_id"] = keypoint_id
+            section["source_section"] = source_section
+            section["source_sections"] = list(section.get("source_sections") or [source_section])
+            section["section_id"] = str(section.get("section_id") or f"keypoint_{keypoint_id}")
+            title = normalize_text_for_poster(str(section.get("section_title") or "").strip())
+            if not title or len(title.split()) > self.validation_config["max_title_words"]:
+                title = self._short_title_for_keypoint(keypoint_text, source_section)
+            section["section_title"] = self._clean_section_title(title)
+            section["column_assignment"] = section.get("column_assignment") if section.get("column_assignment") in {"left", "middle", "right"} else self._keypoint_column(source_section, title, index, len(keypoints))
+            section["vertical_priority"] = section.get("vertical_priority") if section.get("vertical_priority") in {"top", "middle", "bottom"} else self._keypoint_vertical_priority(index, len(keypoints))
+            section["importance_level"] = int(section.get("importance_level") or (1 if index == 0 else 2 if index < 5 else 3))
+            section["content_type"] = section.get("content_type") or self._keypoint_content_type(source_section, title)
+            section["expected_content_density"] = section.get("expected_content_density") or "medium"
+            section["text_content"] = self._keypoint_text_content(section.get("text_content"), keypoint_text)
+            section["visual_assets"] = self._valid_visual_assets(section.get("visual_assets"), visual_context)
+            section["spatial_rationale"] = section.get("spatial_rationale") or "Aligned to poster keypoint reading order."
+            aligned.append(section)
+
+        self._ensure_key_visual_for_keypoint_sections(aligned, classified_visuals, visual_context)
+        self._limit_keypoint_visuals(aligned, classified_visuals)
+        scp["sections"] = aligned
+
+    def _align_grouped_sections_to_keypoints(
+        self,
+        story_board: Dict[str, Any],
+        keypoints: List[Dict[str, Any]],
+        visual_context: Dict[str, Any],
+        classified_visuals: Dict[str, Any],
+    ) -> None:
+        scp = story_board.setdefault("spatial_content_plan", {})
+        original_sections = scp.get("sections") or []
+        if not isinstance(original_sections, list):
+            original_sections = []
+
+        target_count = self._keypoint_section_target_count(visual_context)
+        template_name = str((visual_context or {}).get("requested_layout_template") or "")
+        groups = self._partition_keypoints(keypoints, target_count, template_name)
+        aligned: List[Dict[str, Any]] = []
+        remaining = [section for section in original_sections if isinstance(section, dict)]
+
+        for index, group in enumerate(groups):
+            source = deepcopy(remaining[index]) if index < len(remaining) else {}
+            texts = [
+                normalize_text_for_poster(str(keypoint.get("key_point") or "").strip())
+                for keypoint in group
+                if str(keypoint.get("key_point") or "").strip()
+            ]
+            source_sections = self._unique_preserve_order(
+                normalize_text_for_poster(str(keypoint.get("section") or "Paper").strip()) or "Paper"
+                for keypoint in group
+            )
+            source_keypoint_ids = [int(keypoint["id"]) for keypoint in group]
+            title = normalize_text_for_poster(str(source.get("section_title") or "").strip())
+            if not title or len(title.split()) > self.validation_config["max_title_words"]:
+                title = self._short_title_for_keypoint_group(texts, source_sections, index, len(groups))
+            role = self._group_content_type(source_sections, title, texts, index, len(groups))
+
+            section = deepcopy(source)
+            template_defaults = {}
+            if template_name == "cluster_72":
+                template_defaults = self._cluster_72_group_defaults(index, title, role, texts)
+            elif self._template_uses_grouped_keypoints(template_name):
+                template_defaults = self._standard_group_defaults(index, title, role, texts, visual_context)
+            title = template_defaults.get("section_title", title)
+            role = template_defaults.get("content_type", role)
+            section["section_id"] = str(source.get("section_id") or f"keypoint_group_{index + 1:02d}_{self._slugify(title)}")
+            section["keypoint_id"] = source_keypoint_ids[0]
+            section["source_keypoint_ids"] = source_keypoint_ids
+            section["source_keypoints"] = texts
+            section["source_section"] = source_sections[0] if source_sections else "Paper"
+            section["source_sections"] = source_sections
+            section["section_title"] = self._clean_section_title(title)
+            section["column_assignment"] = (
+                template_defaults.get("column_assignment")
+                or (
+                    section.get("column_assignment")
+                    if section.get("column_assignment") in {"left", "middle", "right"}
+                    else self._group_column(role, index, len(groups))
+                )
+            )
+            section["vertical_priority"] = (
+                template_defaults.get("vertical_priority")
+                or (
+                    section.get("vertical_priority")
+                    if section.get("vertical_priority") in {"top", "middle", "bottom"}
+                    else self._keypoint_vertical_priority(index, len(groups))
+                )
+            )
+            section["importance_level"] = int(section.get("importance_level") or (1 if role == "method" else 2 if role == "results" else 3))
+            section["content_type"] = role
+            section["expected_content_density"] = (
+                section.get("expected_content_density")
+                or template_defaults.get("expected_content_density")
+                or ("medium" if role in {"method", "results"} else "high")
+            )
+            section["text_content"] = self._grouped_keypoint_text_content(section.get("text_content"), texts)
+            section["visual_assets"] = self._valid_visual_assets(section.get("visual_assets"), visual_context)
+            if template_defaults.get("preferred_slot_id"):
+                section["preferred_slot_id"] = template_defaults["preferred_slot_id"]
+            fast_budget = self._fast_budget_for_slot(visual_context, section.get("preferred_slot_id"))
+            if fast_budget:
+                section["capacity_budget"] = fast_budget
+                section["target_chars"] = fast_budget.get("target_chars")
+                section["min_chars"] = fast_budget.get("min_chars")
+                section["max_chars"] = fast_budget.get("max_chars")
+                section["target_bullets"] = fast_budget.get("target_bullets")
+                target_chars = int(fast_budget.get("target_chars") or 0)
+                section["expected_content_density"] = (
+                    "high" if target_chars >= 430 else "low" if target_chars <= 140 else "medium"
+                )
+            section["spatial_rationale"] = (
+                section.get("spatial_rationale")
+                or template_defaults.get("spatial_rationale")
+                or "Grouped keypoints to match the selected template's visual block geometry."
+            )
+            aligned.append(section)
+
+        if template_name == "cluster_72":
+            self._ensure_cluster_72_grouped_visuals(aligned, classified_visuals, visual_context)
+        elif template_name in self._standard_template_ids():
+            self._ensure_standard_template_grouped_visuals(aligned, classified_visuals, visual_context)
+        else:
+            self._ensure_grouped_keypoint_visuals(aligned, classified_visuals, visual_context)
+        scp["sections"] = aligned
+
+    def _ordered_keypoints(self, state: PosterState) -> List[Dict[str, Any]]:
+        keypoints = state.get("paper_poster_keypoints") or []
+        if not keypoints:
+            return []
+        by_id = {}
+        for item in keypoints:
+            try:
+                by_id[int(item.get("id"))] = item
+            except (TypeError, ValueError):
+                continue
+        order = []
+        for value in state.get("poster_reading_order") or []:
+            try:
+                keypoint_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if keypoint_id in by_id and keypoint_id not in order:
+                order.append(keypoint_id)
+        for keypoint_id in sorted(by_id):
+            if keypoint_id not in order:
+                order.append(keypoint_id)
+        return [by_id[keypoint_id] for keypoint_id in order[:10]]
+
+    def _short_title_for_keypoint(self, keypoint_text: str, source_section: str) -> str:
+        section_title = re.sub(r"^\d+\.?\s*", "", source_section or "").strip()
+        generic_sections = {"introduction", "method", "methods", "experiments", "results", "conclusion", "discussion"}
+        if section_title and section_title.lower() not in generic_sections and len(section_title.split()) <= 4:
+            return section_title
+        words = re.findall(r"[A-Za-z][A-Za-z0-9-]*", keypoint_text or "")
+        stop = {"the", "and", "for", "with", "from", "that", "this", "using", "into"}
+        kept = [word for word in words if word.lower() not in stop][:4]
+        return " ".join(kept) or "Key Point"
+
+    def _short_title_for_keypoint_group(
+        self,
+        keypoint_texts: List[str],
+        source_sections: List[str],
+        index: int,
+        total: int,
+    ) -> str:
+        joined = " ".join(keypoint_texts)
+        section_joined = " ".join(source_sections)
+        role = self._group_content_type(source_sections, "", keypoint_texts, index, total)
+        if role == "method":
+            if re.search(r"\bam[- ]?elo\b", joined, re.I):
+                return "am-ELO Method"
+            return "Core Method"
+        if role == "results":
+            if re.search(r"robust|perturb|consisten", joined, re.I):
+                return "Robustness"
+            return "Key Results"
+        if index == 0:
+            return "Motivation"
+        if re.search(r"stable|stability|mle|likelihood", joined + " " + section_joined, re.I):
+            return "Stable Arena"
+        if index >= total - 1:
+            return "Takeaway"
+        words = re.findall(r"[A-Za-z][A-Za-z0-9-]*", joined or section_joined)
+        stop = {"the", "and", "for", "with", "from", "that", "this", "using", "into", "based"}
+        kept = [word for word in words if word.lower() not in stop][:3]
+        return " ".join(kept) or "Key Point"
+
+    def _keypoint_column(self, source_section: str, title: str, index: int, total: int) -> str:
+        text = f"{source_section} {title}".lower()
+        if any(token in text for token in ["result", "experiment", "evaluation", "analysis", "benchmark"]):
+            return "right"
+        if any(token in text for token in ["method", "approach", "framework", "model", "algorithm", "system"]):
+            return "middle"
+        if index >= max(total - 2, 0):
+            return "right"
+        if index >= max(total // 3, 1):
+            return "middle"
+        return "left"
+
+    def _keypoint_vertical_priority(self, index: int, total: int) -> str:
+        if index < max(total / 3, 1):
+            return "top"
+        if index < max((2 * total) / 3, 2):
+            return "middle"
+        return "bottom"
+
+    def _keypoint_content_type(self, source_section: str, title: str) -> str:
+        text = f"{source_section} {title}".lower()
+        if any(token in text for token in ["result", "experiment", "evaluation", "analysis", "benchmark"]):
+            return "results"
+        if any(token in text for token in ["method", "approach", "framework", "model", "algorithm", "system"]):
+            return "method"
+        return "foundation"
+
+    def _group_content_type(
+        self,
+        source_sections: List[str],
+        title: str,
+        keypoint_texts: List[str],
+        index: int,
+        total: int,
+    ) -> str:
+        text = f"{' '.join(source_sections)} {title} {' '.join(keypoint_texts)}".lower()
+        if any(token in text for token in ["result", "experiment", "evaluation", "benchmark", "performance", "robust", "accuracy", "loss"]):
+            return "results"
+        if any(token in text for token in ["method", "approach", "framework", "model", "algorithm", "mle", "likelihood", "elo", "am-elo", "m-elo"]):
+            return "method"
+        if index >= max(total - 1, 0):
+            return "takeaway"
+        return "foundation"
+
+    def _group_column(self, role: str, index: int, total: int) -> str:
+        if role == "method":
+            return "middle"
+        if role in {"results", "takeaway"}:
+            return "right"
+        if index >= max(total - 2, 0):
+            return "right"
+        if index >= max(total // 3, 1):
+            return "middle"
+        return "left"
+
+    def _keypoint_text_content(self, existing: Any, keypoint_text: str) -> List[str]:
+        bullets = []
+        if isinstance(existing, list):
+            bullets = self._clean_poster_text_items(existing, max_items=3)
+        if not bullets:
+            return [keypoint_text]
+        key = self._dedupe_key(keypoint_text)
+        if key and all(key not in self._dedupe_key(item) and self._dedupe_key(item) not in key for item in bullets):
+            bullets.insert(0, keypoint_text)
+        return self._clean_poster_text_items(bullets, max_items=3)
+
+    def _grouped_keypoint_text_content(self, existing: Any, keypoint_texts: List[str]) -> List[str]:
+        bullets = []
+        for text in keypoint_texts:
+            clean = normalize_text_for_poster(str(text or "").strip())
+            if clean:
+                bullets.append(clean)
+        if isinstance(existing, list):
+            for clean in self._clean_poster_text_items(existing, max_items=4):
+                key = self._dedupe_key(clean)
+                if key and all(key not in self._dedupe_key(existing_item) for existing_item in bullets):
+                    bullets.append(clean)
+        return self._clean_poster_text_items(bullets, max_items=4) or ["Key paper finding."]
+
+    def _clean_poster_text_items(self, items: Any, *, max_items: int) -> List[str]:
+        if not isinstance(items, list):
+            items = [items]
+        cleaned: List[str] = []
+        seen = set()
+        for item in items:
+            for raw_line in str(item or "").splitlines():
+                text = normalize_text_for_poster(raw_line.strip())
+                text = self._strip_text_item_marker(text)
+                if not text:
+                    continue
+                key = self._dedupe_key(text)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                cleaned.append(text)
+                if len(cleaned) >= max_items:
+                    return cleaned
+        return cleaned
+
+    def _strip_text_item_marker(self, text: str) -> str:
+        text = str(text or "").strip()
+        text = re.sub(r"^\s*[•●◦▪▫*\-]\s*", "", text)
+        text = re.sub(r"^\s*(?:\d+[\.)]|step\s+\d+[\.:]?)\s*", "", text, flags=re.IGNORECASE)
+        return text.strip()
+
+    def _clean_section_title(self, title: Any) -> str:
+        text = str(title or "").strip()
+        text = text.replace("\u00a0", " ").replace("–", "-").replace("—", "-")
+        text = re.sub(r"\bwith\s+(?:a\s+)?table\b", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\btable\b", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^\s*[•●◦▪▫*\-]\s*", "", text)
+        text = re.sub(r"^\s*(?:\d+[\.)]|step\s+\d+[\.:]?)\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip(" -:|")
+        if not text:
+            return "Key Point"
+        small_words = {"and", "or", "with", "for", "to", "in", "of", "the", "a", "an", "by"}
+
+        def clean_word(word: str, index: int) -> str:
+            raw = word.strip()
+            if re.fullmatch(r"[A-Z]{2,}[A-Za-z0-9-]*", raw):
+                return raw
+            lower = raw.lower()
+            if index > 0 and lower in small_words:
+                return lower
+            return "-".join(part[:1].upper() + part[1:].lower() for part in raw.split("-") if part)
+
+        words = [clean_word(word, index) for index, word in enumerate(text.split())]
+        return " ".join(word for word in words if word)
+
+    def _valid_visual_assets(self, visuals: Any, visual_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        valid_ids = set((visual_context or {}).get("valid_visual_ids") or [])
+        result = []
+        for visual in visuals or []:
+            visual = self._normalize_visual_reference(visual)
+            if not visual:
+                continue
+            visual_id = visual.get("visual_id")
+            if valid_ids and visual_id not in valid_ids:
+                continue
+            result.append(visual)
+        return result
+
+    def _normalize_visual_reference(self, visual: Any) -> Dict[str, Any] | None:
+        if isinstance(visual, dict):
+            visual_id = visual.get("visual_id") or visual.get("id")
+            if not visual_id:
+                return None
+            item = dict(visual)
+            item["visual_id"] = str(visual_id)
+            return item
+        if isinstance(visual, str) and visual.strip():
+            return {
+                "visual_id": visual.strip(),
+                "visual_purpose": "Referenced by spatial planner",
+                "placement_rationale": "Normalized from compact visual id",
+            }
+        return None
+
+    def _ensure_key_visual_for_keypoint_sections(
+        self,
+        sections: List[Dict[str, Any]],
+        classified_visuals: Dict[str, Any],
+        visual_context: Dict[str, Any],
+    ) -> None:
+        key_visual = (classified_visuals or {}).get("key_visual")
+        if not key_visual or key_visual not in set((visual_context or {}).get("valid_visual_ids") or []):
+            return
+        holder = None
+        for section in sections:
+            if any(
+                normalized and normalized.get("visual_id") == key_visual
+                for normalized in [self._normalize_visual_reference(visual) for visual in section.get("visual_assets", [])]
+            ):
+                holder = section
+                break
+        if holder is None:
+            holder = next(
+                (
+                    section for section in sections
+                    if self._keypoint_content_type(section.get("source_section", ""), section.get("section_title", "")) == "method"
+                ),
+                sections[min(1, len(sections) - 1)] if sections else None,
+            )
+            if holder is None:
+                return
+            holder.setdefault("visual_assets", []).insert(0, {
+                "visual_id": key_visual,
+                "visual_purpose": "Primary method or contribution visual",
+                "placement_rationale": "Anchors the core contribution block",
+            })
+        holder["column_assignment"] = "middle"
+        holder["vertical_priority"] = "top"
+        holder["importance_level"] = 1
+
+    def _ensure_grouped_keypoint_visuals(
+        self,
+        sections: List[Dict[str, Any]],
+        classified_visuals: Dict[str, Any],
+        visual_context: Dict[str, Any],
+    ) -> None:
+        valid_ids = set((visual_context or {}).get("valid_visual_ids") or [])
+        if not valid_ids or not sections:
+            return
+        for section in sections:
+            section["visual_assets"] = []
+
+        def valid_visual_id(visual_id: Any) -> str | None:
+            visual_id = str(visual_id or "")
+            return visual_id if visual_id in valid_ids else None
+
+        method_visual = valid_visual_id((classified_visuals or {}).get("key_visual"))
+        if not method_visual:
+            method_visual = self._first_valid_visual((classified_visuals or {}).get("method_workflow"), valid_ids)
+        result_visual = self._first_valid_visual(
+            [
+                visual_id
+                for visual_id in ((classified_visuals or {}).get("main_results") or [])
+                if str(visual_id).startswith("figure_")
+            ],
+            valid_ids,
+            exclude={method_visual} if method_visual else set(),
+        )
+        table_visual = self._preferred_table_visual(classified_visuals or {}, valid_ids, visual_context)
+
+        if method_visual:
+            holder = self._first_section_by_role(sections, "method") or sections[min(1, len(sections) - 1)]
+            self._set_single_visual(holder, method_visual, "Primary method or contribution visual")
+            holder["column_assignment"] = "middle"
+            holder["vertical_priority"] = "top"
+            holder["importance_level"] = 1
+
+        if result_visual:
+            holder = self._first_section_by_role(sections, "results", exclude_visual=True)
+            if holder:
+                self._set_single_visual(holder, result_visual, "Primary empirical result visual")
+                holder["column_assignment"] = "right"
+                holder["importance_level"] = min(int(holder.get("importance_level") or 2), 2)
+
+        if table_visual:
+            holder = self._last_section_by_role(sections, "results", exclude_visual=True)
+            if holder:
+                self._set_single_visual(holder, table_visual, "Compact result table for quantitative evidence")
+                holder["column_assignment"] = "right"
+                holder["vertical_priority"] = holder.get("vertical_priority") if holder.get("vertical_priority") in {"middle", "bottom"} else "bottom"
+                holder["importance_level"] = min(int(holder.get("importance_level") or 2), 2)
+
+    def _cluster_72_group_defaults(
+        self,
+        index: int,
+        current_title: str,
+        current_role: str,
+        keypoint_texts: List[str],
+    ) -> Dict[str, Any]:
+        slot_order = ["slot_1", "slot_2", "slot_3", "slot_6", "slot_5", "slot_4"]
+        joined = " ".join(keypoint_texts)
+        title = current_title
+        role = current_role
+
+        if index == 0:
+            title = "Why It Matters"
+            role = "foundation"
+        elif index == 1:
+            if re.search(r"\belo\b|stable|estimation", joined, re.I):
+                title = "Stable Estimation"
+            elif re.search(r"phish|webpage|detection", joined, re.I):
+                title = "Detection Setup"
+            else:
+                title = "Core Setup"
+            role = "method"
+        elif index == 2:
+            if re.search(r"agent|workflow|pipeline|architecture", joined, re.I):
+                title = "Agent Workflow"
+            elif re.search(r"arena|setting|diagram", joined, re.I):
+                title = "Arena Setting"
+            else:
+                title = "Method Diagram"
+            role = "method"
+        elif index == 3:
+            title = "Annotator-Aware ELO" if re.search(r"annotator|am[- ]?elo", joined, re.I) else "Method Details"
+            role = "method"
+        elif index == 4:
+            title = "Robustness Tests" if re.search(r"robust|dataset|table|perturb|ablation", joined, re.I) else "Evaluation Setup"
+            role = "results"
+        elif index == 5:
+            title = "Main Results"
+            role = "results"
+
+        return {
+            "section_title": title,
+            "content_type": role,
+            "preferred_slot_id": slot_order[index] if index < len(slot_order) else None,
+            "column_assignment": ["left", "middle", "middle", "left", "middle", "right"][index]
+            if index < 6 else "middle",
+            "vertical_priority": ["top", "top", "top", "bottom", "bottom", "bottom"][index]
+            if index < 6 else "middle",
+            "expected_content_density": "high" if index in {3, 4, 5} else "medium",
+            "spatial_rationale": "Cluster 72 grouped-keypoint mapping keeps ten paper points in six balanced visual blocks.",
+        }
+
+    def _standard_group_defaults(
+        self,
+        index: int,
+        current_title: str,
+        current_role: str,
+        keypoint_texts: List[str],
+        visual_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        contract = (visual_context or {}).get("fast_block_contract") or {}
+        blocks = contract.get("blocks") or []
+        block = blocks[index] if index < len(blocks) else {}
+        slot_id = block.get("slot_id")
+        role = block.get("content_role") or current_role
+        title = current_title
+        slot_role = str(block.get("slot_role") or "").strip()
+        if slot_role and (not title or title.lower() in {"paper", "method", "results", "experiments"}):
+            title = slot_role
+
+        bbox = block.get("slot_bbox") or {}
+        layout = (visual_context or {}).get("template_layout") or {}
+        regions = layout.get("regions") or []
+        max_right = max((float(region.get("x", 0.0)) + float(region.get("w", 0.0)) for region in regions), default=1.0)
+        min_top = min((float(region.get("y", 0.0)) for region in regions), default=0.0)
+        max_bottom = max((float(region.get("y", 0.0)) + float(region.get("h", 0.0)) for region in regions), default=1.0)
+        center_x = float(bbox.get("x", 0.0) or 0.0) + float(bbox.get("w", 0.0) or 0.0) / 2
+        center_y = float(bbox.get("y", 0.0) or 0.0) + float(bbox.get("h", 0.0) or 0.0) / 2
+        if center_x < max_right / 3:
+            column = "left"
+        elif center_x > max_right * 2 / 3:
+            column = "right"
+        else:
+            column = "middle"
+        body_span = max(max_bottom - min_top, 0.1)
+        relative_y = center_y - min_top
+        if relative_y < body_span / 3:
+            vertical = "top"
+        elif relative_y > body_span * 2 / 3:
+            vertical = "bottom"
+        else:
+            vertical = "middle"
+
+        target_chars = int(block.get("target_chars") or 0)
+        return {
+            "section_title": title,
+            "content_type": role,
+            "preferred_slot_id": slot_id,
+            "column_assignment": column,
+            "vertical_priority": vertical,
+            "expected_content_density": "high" if target_chars >= 430 else "low" if target_chars <= 160 else "medium",
+            "spatial_rationale": "Standard-template grouped keypoint mapping keeps ten paper points in curated visual blocks.",
+        }
+
+    def _ensure_cluster_72_grouped_visuals(
+        self,
+        sections: List[Dict[str, Any]],
+        classified_visuals: Dict[str, Any],
+        visual_context: Dict[str, Any],
+    ) -> None:
+        valid_ids = set((visual_context or {}).get("valid_visual_ids") or [])
+        if not valid_ids or not sections:
+            return
+        for section in sections:
+            section["visual_assets"] = []
+
+        slot_map = {str(section.get("preferred_slot_id") or ""): section for section in sections}
+        figure_candidates = self._cluster_72_figure_candidates(classified_visuals or {}, valid_ids, visual_context)
+        table_candidates = self._cluster_72_table_candidates(classified_visuals or {}, valid_ids, visual_context)
+
+        method_visual = figure_candidates[0] if figure_candidates else None
+        result_visual = next((visual_id for visual_id in figure_candidates if visual_id != method_visual), None)
+        fast_visual_policy = (visual_context or {}).get("fast_visual_policy") or {}
+        configured_table_slots = list(fast_visual_policy.get("table_slots") or [])
+        selected_table = self._cluster_72_preferred_table(
+            table_candidates,
+            classified_visuals or {},
+            visual_context,
+            preferred_bucket="main_results",
+        )
+        table_target_slot = configured_table_slots[0] if configured_table_slots else "slot_4"
+        if selected_table is None:
+            selected_table = self._cluster_72_preferred_table(
+                table_candidates,
+                classified_visuals or {},
+                visual_context,
+                preferred_bucket="comparative_results",
+            )
+            table_target_slot = configured_table_slots[0] if configured_table_slots else "slot_5"
+        if selected_table is None and table_candidates:
+            selected_table = table_candidates[0]
+            table_target_slot = "slot_4" if slot_map.get("slot_4") else "slot_5"
+
+        if result_visual and slot_map.get("slot_2"):
+            holder = slot_map["slot_2"]
+            self._set_single_visual(holder, result_visual, "Stable-estimation or quantitative result visual")
+            holder["importance_level"] = 1
+
+        if method_visual and slot_map.get("slot_3"):
+            holder = slot_map["slot_3"]
+            self._set_single_visual(holder, method_visual, "Primary arena or method diagram")
+            holder["importance_level"] = 1
+
+        if selected_table and slot_map.get(table_target_slot):
+            holder = slot_map[table_target_slot]
+            self._set_single_visual(holder, selected_table, "Most readable quantitative result table")
+            holder["importance_level"] = min(int(holder.get("importance_level") or 2), 2)
+
+    def _ensure_standard_template_grouped_visuals(
+        self,
+        sections: List[Dict[str, Any]],
+        classified_visuals: Dict[str, Any],
+        visual_context: Dict[str, Any],
+    ) -> None:
+        valid_ids = set((visual_context or {}).get("valid_visual_ids") or [])
+        if not valid_ids or not sections:
+            return
+        for section in sections:
+            section["visual_assets"] = []
+
+        slot_map = {str(section.get("preferred_slot_id") or ""): section for section in sections}
+        fast_visual_policy = (visual_context or {}).get("fast_visual_policy") or {}
+        figure_slots = [str(slot_id) for slot_id in fast_visual_policy.get("figure_slots") or []]
+        table_slots = [str(slot_id) for slot_id in fast_visual_policy.get("table_slots") or []]
+        figure_candidates = self._cluster_72_figure_candidates(classified_visuals or {}, valid_ids, visual_context)
+        table_candidates = self._cluster_72_table_candidates(classified_visuals or {}, valid_ids, visual_context)
+
+        if self._is_portrait_or_vertical_template(visual_context):
+            visual_id = figure_candidates[0] if figure_candidates else None
+            if not visual_id:
+                return
+            slot_id = figure_slots[0] if figure_slots else ""
+            holder = slot_map.get(slot_id)
+            if holder is None:
+                holder = self._first_section_by_role(sections, "method") or sections[min(1, len(sections) - 1)]
+            self._set_single_visual(holder, visual_id, "Primary method or contribution visual for the portrait template")
+            holder["importance_level"] = 1
+            return
+
+        figure_count = int(fast_visual_policy.get("figure_count") or 2)
+        table_count = int(fast_visual_policy.get("table_count") or 1)
+        used_visuals: set[str] = set()
+        for slot_id, visual_id in zip(figure_slots[:figure_count], figure_candidates[:figure_count]):
+            holder = slot_map.get(slot_id)
+            if holder and visual_id not in used_visuals:
+                self._set_single_visual(holder, visual_id, "Primary method or system figure for the standard template")
+                holder["importance_level"] = 1
+                used_visuals.add(visual_id)
+
+        selected_tables = [visual_id for visual_id in table_candidates if visual_id not in used_visuals][:table_count]
+        for slot_id, selected_table in zip(table_slots[:table_count], selected_tables):
+            holder = slot_map.get(slot_id)
+            if holder and selected_table and selected_table not in used_visuals:
+                self._set_single_visual(holder, selected_table, "Primary quantitative result table")
+                holder["importance_level"] = min(int(holder.get("importance_level") or 2), 2)
+                used_visuals.add(selected_table)
+
+    def _limit_keypoint_visuals(self, sections: List[Dict[str, Any]], classified_visuals: Dict[str, Any]) -> None:
+        key_visual = (classified_visuals or {}).get("key_visual")
+        kept_total = 0
+        for section in sections:
+            role = self._keypoint_content_type(section.get("source_section", ""), section.get("section_title", ""))
+            visuals = []
+            for visual in section.get("visual_assets") or []:
+                visual = self._normalize_visual_reference(visual)
+                if not visual:
+                    continue
+                visual_id = visual.get("visual_id")
+                if visual_id == key_visual:
+                    visuals.append(visual)
+                    kept_total += 1
+                    continue
+                if role in {"method", "results"} and kept_total < 2:
+                    visuals.append(visual)
+                    kept_total += 1
+            section["visual_assets"] = visuals[:1]
+
+    def _first_valid_visual(self, visual_ids: Any, valid_ids: set[str], exclude: set[str] | None = None) -> str | None:
+        exclude = exclude or set()
+        for visual_id in visual_ids or []:
+            visual_id = str(visual_id or "")
+            if visual_id in valid_ids and visual_id not in exclude:
+                return visual_id
+        return None
+
+    def _cluster_72_figure_candidates(
+        self,
+        classified_visuals: Dict[str, Any],
+        valid_ids: set[str],
+        visual_context: Dict[str, Any],
+    ) -> List[str]:
+        ordered: List[str] = []
+        key_visual = str((classified_visuals or {}).get("key_visual") or "")
+        if key_visual.startswith("figure_"):
+            ordered.append(key_visual)
+        for bucket in ("method_workflow", "main_results", "comparative_results", "problem_illustration", "supporting"):
+            ordered.extend(str(visual_id or "") for visual_id in (classified_visuals or {}).get(bucket) or [])
+        ordered.extend(sorted(valid_ids, key=self._visual_sort_key))
+        candidates = [
+            visual_id
+            for visual_id in self._unique_preserve_order(ordered)
+            if visual_id in valid_ids and visual_id.startswith("figure_")
+        ]
+        return self._rank_readable_visuals(candidates, visual_context, prefer_existing_order=True)
+
+    def _cluster_72_table_candidates(
+        self,
+        classified_visuals: Dict[str, Any],
+        valid_ids: set[str],
+        visual_context: Dict[str, Any],
+    ) -> List[str]:
+        ordered: List[str] = []
+        for bucket in ("main_results", "comparative_results", "supporting", "problem_illustration", "method_workflow"):
+            ordered.extend(str(visual_id or "") for visual_id in (classified_visuals or {}).get(bucket) or [])
+        ordered.extend(sorted(valid_ids, key=self._visual_sort_key))
+        candidates = [
+            visual_id
+            for visual_id in self._unique_preserve_order(ordered)
+            if visual_id in valid_ids and visual_id.startswith("table_")
+        ]
+        return self._rank_readable_visuals(candidates, visual_context, prefer_existing_order=False)
+
+    def _cluster_72_preferred_table(
+        self,
+        candidates: List[str],
+        classified_visuals: Dict[str, Any],
+        visual_context: Dict[str, Any],
+        *,
+        preferred_bucket: str,
+        exclude: set[str] | None = None,
+    ) -> str | None:
+        exclude = exclude or set()
+        bucket_ids = [
+            str(visual_id or "")
+            for visual_id in (classified_visuals or {}).get(preferred_bucket) or []
+            if str(visual_id or "").startswith("table_")
+        ]
+        preferred = [
+            visual_id
+            for visual_id in candidates
+            if visual_id in bucket_ids and visual_id not in exclude
+        ]
+        if preferred:
+            return self._rank_readable_visuals(preferred, visual_context, prefer_existing_order=False)[0]
+        for visual_id in candidates:
+            if visual_id not in exclude:
+                return visual_id
+        return None
+
+    def _rank_readable_visuals(
+        self,
+        visual_ids: List[str],
+        visual_context: Dict[str, Any],
+        *,
+        prefer_existing_order: bool,
+    ) -> List[str]:
+        visual_heights = (visual_context or {}).get("visual_assets_heights") or {}
+        max_height = self._max_visual_height_percentage(visual_context)
+        original_index = {visual_id: index for index, visual_id in enumerate(visual_ids)}
+
+        def score(visual_id: str) -> tuple:
+            aspect = float((visual_heights.get(visual_id) or {}).get("aspect_ratio") or 1.0)
+            height_percentage = self._visual_height_percentage(visual_id, visual_heights)
+            too_tall = height_percentage is not None and height_percentage > max_height
+            too_wide = aspect > 3.2
+            readability = int(too_tall) + int(too_wide)
+            if prefer_existing_order:
+                return (original_index.get(visual_id, 999), readability, abs(aspect - 1.8), aspect)
+            return (readability, abs(aspect - 1.8), aspect, original_index.get(visual_id, 999))
+
+        return sorted(visual_ids, key=score)
+
+    def _visual_sort_key(self, visual_id: str) -> tuple:
+        prefix = re.sub(r"\d+$", "", str(visual_id or ""))
+        match = re.search(r"(\d+)$", str(visual_id or ""))
+        number = int(match.group(1)) if match else 9999
+        return (prefix, number, str(visual_id or ""))
+
+    def _preferred_table_visual(
+        self,
+        classified_visuals: Dict[str, Any],
+        valid_ids: set[str],
+        visual_context: Dict[str, Any],
+    ) -> str | None:
+        candidates = []
+        for bucket in ("main_results", "comparative_results", "supporting"):
+            for visual_id in classified_visuals.get(bucket) or []:
+                visual_id = str(visual_id or "")
+                if visual_id.startswith("table_") and visual_id in valid_ids:
+                    candidates.append(visual_id)
+        if "table_3" in candidates:
+            visual_heights = (visual_context or {}).get("visual_assets_heights") or {}
+            table_3_height = self._visual_height_percentage("table_3", visual_heights)
+            table_3_aspect = float((visual_heights.get("table_3") or {}).get("aspect_ratio") or 1.0)
+            if table_3_height is None or (table_3_height <= self._max_visual_height_percentage(visual_context) and table_3_aspect <= 4.0):
+                return "table_3"
+        visual_heights = (visual_context or {}).get("visual_assets_heights") or {}
+        max_height = self._max_visual_height_percentage(visual_context)
+        readable = [
+            visual_id
+            for visual_id in candidates
+            if float((visual_heights.get(visual_id) or {}).get("aspect_ratio") or 1.0) <= 4.0
+            and (
+                self._visual_height_percentage(visual_id, visual_heights) is None
+                or self._visual_height_percentage(visual_id, visual_heights) <= max_height
+            )
+        ]
+        return readable[0] if readable else None
+
+    def _visual_height_percentage(self, visual_id: str, visual_heights: Dict[str, Any]) -> float | None:
+        value = (visual_heights.get(visual_id) or {}).get("height_percentage")
+        if value is None:
+            return None
+        try:
+            return float(str(value).rstrip("%"))
+        except (TypeError, ValueError):
+            return None
+
+    def _first_section_by_role(
+        self,
+        sections: List[Dict[str, Any]],
+        role: str,
+        *,
+        exclude_visual: bool = False,
+    ) -> Dict[str, Any] | None:
+        for section in sections:
+            if exclude_visual and section.get("visual_assets"):
+                continue
+            if section.get("content_type") == role:
+                return section
+        return None
+
+    def _last_section_by_role(
+        self,
+        sections: List[Dict[str, Any]],
+        role: str,
+        *,
+        exclude_visual: bool = False,
+    ) -> Dict[str, Any] | None:
+        for section in reversed(sections):
+            if exclude_visual and section.get("visual_assets"):
+                continue
+            if section.get("content_type") == role:
+                return section
+        return None
+
+    def _set_single_visual(self, section: Dict[str, Any], visual_id: str, purpose: str) -> None:
+        section["visual_assets"] = [{
+            "visual_id": visual_id,
+            "visual_purpose": purpose,
+            "placement_rationale": "Selected for grouped keypoint poster layout.",
+        }]
+
+    def _partition_keypoints(
+        self,
+        keypoints: List[Dict[str, Any]],
+        target_count: int,
+        template_name: str = "",
+    ) -> List[List[Dict[str, Any]]]:
+        if target_count <= 0 or len(keypoints) <= target_count:
+            return [[keypoint] for keypoint in keypoints]
+        if str(template_name or "") == "cluster_72" and target_count == 6:
+            slices = [(0, 2), (2, 3), (3, 4), (4, 6), (6, 8), (8, 10)]
+            groups = [
+                keypoints[start:min(end, len(keypoints))]
+                for start, end in slices
+                if start < len(keypoints)
+            ]
+            assigned = sum(len(group) for group in groups)
+            if assigned < len(keypoints):
+                groups[-1].extend(keypoints[assigned:])
+            return [group for group in groups if group]
+        if str(template_name or "") in self._standard_template_ids():
+            if target_count == 4:
+                slices = [(0, 2), (2, 5), (5, 7), (7, 10)]
+            elif target_count == 5:
+                slices = [(0, 2), (2, 4), (4, 6), (6, 8), (8, 10)]
+            elif target_count == 6:
+                slices = [(0, 2), (2, 3), (3, 4), (4, 6), (6, 8), (8, 10)]
+            elif target_count == 7:
+                slices = [(0, 2), (2, 3), (3, 4), (4, 6), (6, 7), (7, 9), (9, 10)]
+            else:
+                slices = []
+            if slices:
+                groups = [
+                    keypoints[start:min(end, len(keypoints))]
+                    for start, end in slices
+                    if start < len(keypoints)
+                ]
+                assigned = sum(len(group) for group in groups)
+                if assigned < len(keypoints) and groups:
+                    groups[-1].extend(keypoints[assigned:])
+                return [group for group in groups if group]
+        groups: List[List[Dict[str, Any]]] = []
+        for index in range(target_count):
+            start = math.floor(index * len(keypoints) / target_count)
+            end = math.floor((index + 1) * len(keypoints) / target_count)
+            if end <= start:
+                end = start + 1
+            groups.append(keypoints[start:end])
+        return [group for group in groups if group]
+
+    def _unique_preserve_order(self, values: Any) -> List[str]:
+        result = []
+        seen = set()
+        for value in values:
+            value = str(value or "").strip()
+            key = value.lower()
+            if value and key not in seen:
+                result.append(value)
+                seen.add(key)
+        return result
+
+    def _slugify(self, value: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
+        return slug[:32] or "section"
+
+    def _template_uses_grouped_keypoints(self, template_name: str) -> bool:
+        return str(template_name or "") in {"cluster_72", "cluster_93"} | self._standard_template_ids()
+
+    def _standard_template_ids(self) -> set[str]:
+        return set((self.config.get("standard_template_policy") or {}).get("auto_templates") or [])
+
+    def _group_keypoints_for_template(self, visual_context: Dict[str, Any] | None) -> bool:
+        return bool((visual_context or {}).get("keypoint_grouping_mode"))
+
+    def _fast_budget_for_slot(self, visual_context: Dict[str, Any] | None, slot_id: Any) -> Dict[str, Any]:
+        if not (visual_context or {}).get("template_fast_mode"):
+            return {}
+        by_slot = ((visual_context or {}).get("fast_block_contract") or {}).get("by_slot") or {}
+        budget = by_slot.get(str(slot_id or "")) or {}
+        return dict(budget) if isinstance(budget, dict) else {}
+
+    def _default_keypoint_section_target(
+        self,
+        template_name: str,
+        layout: Dict[str, Any],
+        state: PosterState,
+    ) -> int:
+        keypoint_count = min(len(state.get("paper_poster_keypoints") or []), 10)
+        if not keypoint_count:
+            return 0
+        if not self._template_uses_grouped_keypoints(template_name):
+            return keypoint_count
+        if str(template_name or "") == "cluster_72":
+            return min(6, keypoint_count)
+        content_slots = int(layout.get("slot_count") or len(layout.get("regions") or []) or 0)
+        if content_slots <= 0:
+            content_slots = 7
+        if keypoint_count <= content_slots:
+            return keypoint_count
+        return min(content_slots, max(6, min(7, keypoint_count)))
+
+    def _keypoint_section_target_count(self, visual_context: Dict[str, Any] | None) -> int:
+        value = int((visual_context or {}).get("keypoint_section_target_count") or 0)
+        keypoint_target = int((visual_context or {}).get("keypoint_target_count") or 0)
+        if value:
+            return value
+        return keypoint_target
+
+    def _dedupe_key(self, text: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()[:140]
 
     def _validate_height_distribution(self, story_board: Dict, visual_context: Dict) -> Dict[str, Any]:
         """validate spatial plan for height constraints and generate warnings"""
@@ -517,6 +1735,9 @@ class StoryBoardCurator:
                 section_visual_height = 0
                 visual_assets = section.get("visual_assets", [])
                 for visual_asset in visual_assets:
+                    visual_asset = self._normalize_visual_reference(visual_asset)
+                    if not visual_asset:
+                        continue
                     visual_id = visual_asset.get("visual_id", "")
                     if visual_id in visual_heights:
                         section_visual_height += visual_heights[visual_id]["height_inches"]
@@ -570,6 +1791,9 @@ class StoryBoardCurator:
         # visual assets height
         visual_assets = section.get("visual_assets", [])
         for visual_asset in visual_assets:
+            visual_asset = self._normalize_visual_reference(visual_asset)
+            if not visual_asset:
+                continue
             visual_id = visual_asset.get("visual_id", "")
             if visual_id in visual_heights:
                 visual_height = visual_heights[visual_id]["height_inches"]

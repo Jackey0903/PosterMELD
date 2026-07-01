@@ -106,7 +106,8 @@ class PPTXDirector:
         x: float, y: float, w: float, h: float,
         fill_color: Optional[str] = None,
         border_color: Optional[str] = None,
-        border_width: float = 1.0
+        border_width: float = 1.0,
+        border_style: str = "solid",
     ):
         """
         添加形状（如矩形、圆形等）。支持设置填充色和边框色。
@@ -122,6 +123,11 @@ class PPTXDirector:
         if border_color:
             shape.line.color.rgb = self._hex_to_rgb(border_color)
             shape.line.width = Pt(border_width)
+            if str(border_style).lower() in {"dash", "dashed"}:
+                line = shape.line
+                ln = line._ln
+                prstDash = parse_xml('<a:prstDash xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" val="dash"/>')
+                ln.append(prstDash)
         else:
             shape.line.fill.background()
             

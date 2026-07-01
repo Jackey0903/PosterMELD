@@ -38,10 +38,30 @@ class VLMLayoutReviewer:
 
         try:
             review = self._review_or_fallback(state)
-            review = self._enforce_template_acceptance_gate(review, state)
+            fast_mode = bool(state.get("template_fast_mode"))
+            if not fast_mode:
+                review = self._enforce_template_acceptance_gate(review, state)
             patch = self._extract_patch(review)
             state["vlm_layout_review"] = review
             state["vlm_layout_patch"] = patch
+
+            if fast_mode:
+                if patch:
+                    review.setdefault("warnings", []).append(
+                        "Fast template-first mode recorded the VLM patch but did not apply automatic global relayout."
+                    )
+                if self._has_high_overflow(review) and state.get("template_repair_count", 0) < int(self.review_config.get("template_prior_max_repairs", 1)):
+                    state["template_repair_required"] = True
+                    state["template_repair_decision"] = {
+                        "source": self.name,
+                        "reason": "High overflow reported by VLM in fast template-first mode.",
+                        "review": review,
+                    }
+                state["vlm_layout_review"] = review
+                self._save_outputs(state)
+                state["current_agent"] = self.name
+                log_agent_success(self.name, "VLM layout review completed in fast report-only mode")
+                return state
 
             max_iterations = int(self.review_config.get("max_iterations", 1))
             if patch and state.get("vlm_review_count", 0) < max_iterations:
@@ -56,6 +76,9 @@ class VLMLayoutReviewer:
                 else:
                     review.setdefault("warnings", []).append("VLM patch rejected by deterministic safety validation.")
                     log_agent_warning(self.name, "VLM patch rejected by deterministic safety validation")
+
+            review = self._accept_after_max_template_repair(review, state)
+            state["vlm_layout_review"] = review
 
             if state.get("template_layout_mode") == "template_prior" and not review.get("accept", True):
                 if not state.get("vlm_patch_applied", False):
@@ -74,6 +97,38 @@ class VLMLayoutReviewer:
             state["errors"].append(f"{self.name}: {e}")
 
         return state
+
+    def _has_high_overflow(self, review: Dict[str, Any]) -> bool:
+        issues = review.get("issues") if isinstance(review.get("issues"), list) else []
+        return any(
+            str(issue.get("severity", "")).lower() == "high"
+            and str(issue.get("category", "")).lower() == "overflow"
+            for issue in issues
+            if isinstance(issue, dict)
+        )
+
+    def _accept_after_max_template_repair(self, review: Dict[str, Any], state: PosterState) -> Dict[str, Any]:
+        if state.get("template_layout_mode") != "template_prior" or review.get("accept", True):
+            return review
+        if not bool(self.review_config.get("template_prior_accept_after_max_repair", True)):
+            return review
+
+        max_repairs = int(self.review_config.get("template_prior_max_repairs", 1))
+        if state.get("template_repair_count", 0) < max_repairs:
+            return review
+
+        micro_report = self._load_content_json(state, "micro_layout_report.json")
+        validation_issues = ((micro_report.get("validation") or {}).get("issues") or [])
+        if validation_issues:
+            return review
+
+        accepted = dict(review)
+        accepted["accept"] = True
+        accepted.setdefault("warnings", [])
+        accepted["warnings"].append(
+            "Template-prior review accepted after max repair count because deterministic micro-layout validation has no issues."
+        )
+        return accepted
 
     def _enforce_template_acceptance_gate(self, review: Dict[str, Any], state: PosterState) -> Dict[str, Any]:
         if state.get("template_layout_mode") != "template_prior":
@@ -97,9 +152,10 @@ class VLMLayoutReviewer:
             and str(issue.get("category", "")).lower() == "overflow"
             for issue in issues
         )
+        unresolved_whitespace = self._has_unresolved_template_whitespace(issues, state)
         too_low = isinstance(score, (int, float)) and score < min_score
 
-        if not (too_low or high_visual_asset or high_overflow):
+        if not (too_low or high_visual_asset or high_overflow or unresolved_whitespace):
             accepted = dict(review)
             accepted["accept"] = True
             accepted.setdefault("warnings", [])
@@ -115,10 +171,41 @@ class VLMLayoutReviewer:
         gated["warnings"].append(
             f"Template-prior hard gate rejected this poster: score={score}, "
             f"high_whitespace={high_whitespace}, high_visual_asset={high_visual_asset}, "
-            f"high_overflow={high_overflow}."
+            f"high_overflow={high_overflow}, unresolved_whitespace={unresolved_whitespace}."
         )
         gated.setdefault("patch", [])
         return gated
+
+    def _has_unresolved_template_whitespace(self, issues: List[Dict[str, Any]], state: PosterState) -> bool:
+        if state.get("template_layout_mode") != "template_prior":
+            return False
+        block_settings = self.config.get("block_refinement", {})
+        acceptable_min = float(block_settings.get("acceptable_min", 0.90))
+        micro_report = self._load_content_json(state, "micro_layout_report.json")
+        low_lanes = {
+            str(lane.get("lane_id"))
+            for lane in micro_report.get("lanes", [])
+            if float(lane.get("final_utilization") or 0.0) < acceptable_min
+        }
+        if not low_lanes:
+            return False
+
+        section_to_lane = {}
+        for element in state.get("styled_layout") or []:
+            if element.get("type") == "section_container" and element.get("section_id"):
+                section_to_lane[str(element.get("section_id"))] = str(element.get("lane_id") or element.get("slot_id") or "")
+
+        for issue in issues:
+            severity = str(issue.get("severity", "")).lower()
+            category = str(issue.get("category", "")).lower()
+            if severity not in {"medium", "high"} or category != "whitespace":
+                continue
+            target = str(issue.get("target") or issue.get("target_section") or issue.get("slot_id") or "")
+            if target in low_lanes:
+                return True
+            if section_to_lane.get(target) in low_lanes:
+                return True
+        return False
 
     def _review_or_fallback(self, state: PosterState) -> Dict[str, Any]:
         preview_path = state.get("poster_preview_path")
@@ -134,14 +221,17 @@ class VLMLayoutReviewer:
         prompt = self._build_prompt(state)
         image_data = self._encode_image(preview_path)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        response = self._post_vlm_request(base_url, headers, model, prompt, image_data)
-        response.raise_for_status()
-        content = self._extract_response_text(response)
-        review = self._parse_json(content)
-        review.setdefault("source", "vlm")
-        review.setdefault("patch", [])
-        review.setdefault("warnings", [])
-        return review
+        try:
+            response = self._post_vlm_request(base_url, headers, model, prompt, image_data)
+            response.raise_for_status()
+            content = self._extract_response_text(response)
+            review = self._parse_json(content)
+            review.setdefault("source", "vlm")
+            review.setdefault("patch", [])
+            review.setdefault("warnings", [])
+            return review
+        except Exception as exc:
+            return self._fallback_review(f"VLM layout request failed ({exc}); using deterministic acceptance fallback")
 
     def _post_vlm_request(self, base_url: str, headers: Dict[str, str], model: str, prompt: str, image_data: str) -> requests.Response:
         timeout = int(self.review_config.get("timeout_seconds", 120))
@@ -253,11 +343,26 @@ Check these issues:
 - unclear reading flow
 - images too small/large for their section
 - mismatched visual emphasis
+- title readability, including whether the title is visibly larger than body blocks
+- major whitespace regions that make any template block look unfinished
 
 Return strict JSON only:
 {{
   "overall_score": 0-100,
   "accept": true/false,
+  "global_assessment": {{
+    "title_readability": "ok|too_small|crowded|unclear",
+    "layout_balance": "ok|left_heavy|right_heavy|top_heavy|bottom_heavy|fragmented",
+    "reading_order": "ok|unclear",
+    "major_whitespace_regions": [
+      {{
+        "slot_id": "slot id or section id",
+        "severity": "low|medium|high",
+        "description": "short diagnosis"
+      }}
+    ],
+    "visual_hierarchy": "ok|weak|confusing"
+  }},
   "issues": [
     {{
       "severity": "low|medium|high",
@@ -329,15 +434,20 @@ Resolved visual assets:
         patched = deepcopy(layout)
         applied_count = 0
         for operation in patch:
-            applied_count += self._apply_operation(patched, operation, state)
+            candidate = deepcopy(patched)
+            operation_count = self._apply_operation(candidate, operation, state)
+            if operation_count == 0:
+                continue
+            self._sync_section_containers(candidate)
+            if not self._validate_geometry(candidate, state):
+                continue
+            patched = candidate
+            applied_count += operation_count
 
         if applied_count == 0:
             return None
 
         self._sync_section_containers(patched)
-
-        if not self._validate_geometry(patched, state):
-            return None
         return patched
 
     def _apply_operation(self, layout: List[Dict[str, Any]], operation: Dict[str, Any], state: PosterState) -> int:

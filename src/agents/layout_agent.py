@@ -11,6 +11,7 @@ from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent
 from src.layout.text_height_measurement import measure_text_height
 from src.config.poster_config import load_config
 from src.tools.layout_api import LayoutTemplates, SEMANTIC_LANES
+from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_for_poster
 
 class LayoutAgent:
     """creates optimized layouts using css box model"""
@@ -33,8 +34,6 @@ class LayoutAgent:
         self.show_debug_borders = self.config["rendering"]["debug_borders"]  ## enable to see section boundaries for debugging
     
     def _resolve_template_layout(self, state: PosterState) -> Dict[str, Any]:
-        effective_height = state["poster_height"] - 2 * self.poster_margin
-        title_region_height = effective_height * self.title_height_fraction
         adaptive_widths = state.get("adaptive_lane_widths")
         if adaptive_widths:
             requested_template = "adaptive_three_column"
@@ -42,17 +41,40 @@ class LayoutAgent:
             requested_template = state.get("resolved_layout_template") or state.get("layout_template", "auto")
         if requested_template == "auto":
             requested_template = "three_column_postergen"
+        poster_margin = self.poster_margin
+        column_spacing = self.column_spacing
+        if self._use_adaptive_dense_layout(state, requested_template):
+            dense = self.config.get("adaptive_auto_dense_layout", {})
+            poster_margin = float(dense.get("poster_margin", poster_margin))
+            column_spacing = float(dense.get("column_spacing", column_spacing))
+        effective_height = state["poster_height"] - 2 * poster_margin
+        title_region_height = effective_height * self.title_height_fraction
 
         template_layout = LayoutTemplates(
             state["poster_width"],
             state["poster_height"],
-            margin=self.poster_margin,
-            col_gap=self.column_spacing,
+            margin=poster_margin,
+            col_gap=column_spacing,
         ).get_template(requested_template, header_height=title_region_height, width_ratios=adaptive_widths)
 
         state["resolved_layout_template"] = template_layout["template_name"]
         state["layout_template_metadata"] = template_layout
         return template_layout
+
+    def _use_adaptive_dense_layout(self, state: PosterState, requested_template: str) -> bool:
+        dense = self.config.get("adaptive_auto_dense_layout", {})
+        if not dense.get("enabled", True):
+            return False
+        if state.get("template_layout_mode") == "template_prior":
+            return False
+        template_name = str(requested_template or "")
+        return template_name in {
+            "adaptive_auto",
+            "three_column_postergen",
+            "two_plus_one_mixed",
+            "one_plus_two_mixed",
+            "adaptive_three_column",
+        }
 
     def _lane_order(self, template_layout: Dict[str, Any]) -> List[str]:
         return [lane["id"] for lane in template_layout.get("lanes", [])]
@@ -353,6 +375,7 @@ class LayoutAgent:
         
         # process each column
         column_assignments = optimized_layout.get("optimized_layout", {}).get("column_assignments", [])
+        highlight_section_ids = self._select_highlight_section_ids(column_assignments, state, base_layout)
         
         for column in column_assignments:
             lane_id = column.get("column_name", "left")
@@ -396,6 +419,7 @@ class LayoutAgent:
                     "priority": 0.1
                 }
                 self._apply_template_panel_style(section_container, base_layout)
+                self._apply_selective_block_frame_style(section_container, section, state, highlight_section_ids)
                 
                 # add debug border only if enabled
                 if self.show_debug_borders:
@@ -409,6 +433,159 @@ class LayoutAgent:
                 log_agent_info(self.name, f"placed section '{section.get('section_id')}' in lane={lane_id} at y={section_start_y:.2f}, height={section_height:.2f}")
         
         return layout_elements
+
+    def _select_highlight_section_ids(
+        self,
+        column_assignments: List[Dict[str, Any]],
+        state: PosterState,
+        template_layout: Dict[str, Any],
+    ) -> Dict[str, int]:
+        """Pick the 1-2 most important sections for subtle panel backgrounds."""
+        highlight_config = self.config.get("selective_block_backgrounds", {})
+        if not highlight_config.get("enabled", False):
+            return {}
+        if template_layout.get("layout_mode") != "template_prior":
+            return {}
+
+        max_blocks = int(highlight_config.get("max_highlight_blocks", 2))
+        if max_blocks <= 0:
+            return {}
+
+        lane_area = {
+            lane["id"]: float(lane.get("w", 0.0)) * float(lane.get("h", 0.0))
+            for lane in template_layout.get("lanes", [])
+        }
+        largest_area = max(lane_area.values(), default=0.0)
+        role_priority = highlight_config.get("role_priority", {})
+        candidates: List[Tuple[float, str]] = []
+
+        for column in column_assignments:
+            lane_id = str(column.get("column_name", ""))
+            for section in column.get("sections", []):
+                section_id = str(section.get("section_id", ""))
+                if not section_id:
+                    continue
+                role = self._section_role(section)
+                score = float(role_priority.get(role, role_priority.get(section_id, 50)))
+                score += max(0, 3 - int(section.get("importance_level", 2))) * 18
+                score += min(len(section.get("visual_assets") or []), 2) * float(highlight_config.get("visual_bonus", 8))
+                if largest_area and lane_area.get(lane_id, 0.0) >= largest_area * 0.85:
+                    score += float(highlight_config.get("large_slot_bonus", 8))
+                candidates.append((score, section_id))
+
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        selected: Dict[str, int] = {}
+        for _, section_id in candidates:
+            if section_id in selected:
+                continue
+            selected[section_id] = len(selected)
+            if len(selected) >= max_blocks:
+                break
+        return selected
+
+    def _apply_selective_highlight_panel(
+        self,
+        section_container: Dict[str, Any],
+        section: Dict[str, Any],
+        state: PosterState,
+        selected: Dict[str, int],
+    ) -> None:
+        rank = selected.get(section_container["section_id"], 0)
+        highlight_config = self.config.get("selective_block_backgrounds", {})
+
+        section_container["highlight_panel"] = True
+        section_container["highlight_rank"] = rank
+        section_container["highlight_role"] = self._section_role(section)
+        section_container["fill_color"] = highlight_config.get("primary_fill_color", "#EEF0F2")
+        border_color = str(highlight_config.get("primary_border_color") or "").strip()
+        border_width = float(highlight_config.get("primary_border_width", 0) or 0)
+        if border_color and border_width > 0:
+            section_container["border_color"] = border_color
+            section_container["border_width"] = border_width
+            section_container["border_style"] = highlight_config.get("primary_border_style", "solid")
+        else:
+            section_container.pop("border_color", None)
+            section_container.pop("border_width", None)
+            section_container.pop("border_style", None)
+        section_container["priority"] = min(float(section_container.get("priority", 0.1)), 0.08)
+
+    def _apply_selective_block_frame_style(
+        self,
+        section_container: Dict[str, Any],
+        section: Dict[str, Any],
+        state: PosterState,
+        selected: Dict[str, int],
+    ) -> None:
+        highlight_config = self.config.get("selective_block_backgrounds", {})
+        if not highlight_config.get("enabled", False):
+            return
+        if not section_container.get("template_prior"):
+            return
+
+        section_id = str(section_container.get("section_id", ""))
+        if section_id in selected:
+            self._apply_selective_highlight_panel(section_container, section, state, selected)
+            return
+
+        if not highlight_config.get("frame_all_blocks", False):
+            return
+
+        support = self._is_supporting_block(section)
+        section_container["highlight_panel"] = False
+        section_container["highlight_role"] = self._section_role(section)
+        section_container.pop("fill_color", None)
+        if support:
+            section_container["border_color"] = highlight_config.get("support_border_color", "#D8DDE3")
+            section_container["border_width"] = float(highlight_config.get("support_border_width", 0.7))
+            section_container["border_style"] = highlight_config.get("support_border_style", "dashed")
+        else:
+            section_container["border_color"] = highlight_config.get("normal_border_color", "#D2D6DC")
+            section_container["border_width"] = float(highlight_config.get("normal_border_width", 0.7))
+            section_container["border_style"] = highlight_config.get("normal_border_style", "solid")
+        section_container["priority"] = min(float(section_container.get("priority", 0.1)), 0.09)
+
+    def _is_supporting_block(self, section: Dict[str, Any]) -> bool:
+        highlight_config = self.config.get("selective_block_backgrounds", {})
+        text = " ".join(
+            str(section.get(key, ""))
+            for key in ("section_id", "section_title", "content_role")
+        ).lower()
+        return any(
+            str(keyword).lower() in text
+            for keyword in highlight_config.get("support_section_keywords", [])
+        )
+
+    def _section_role(self, section: Dict[str, Any]) -> str:
+        role = str(section.get("content_role") or "").strip().lower()
+        if role:
+            return role
+        text = " ".join(
+            str(section.get(key, ""))
+            for key in ("section_id", "section_title", "column_assignment", "slot_id")
+        ).lower()
+        if "result" in text or "performance" in text or "evaluation" in text:
+            return "results"
+        if "method" in text or "framework" in text or "model" in text:
+            return "method"
+        if "problem" in text or "motivation" in text or "fail" in text:
+            return "problem"
+        return "overview"
+
+    def _blend_hex(self, foreground: str, background: str = "#FFFFFF", amount: float = 0.08) -> str:
+        def parse(color: str) -> Tuple[int, int, int]:
+            value = str(color or "").strip().lstrip("#")
+            if len(value) != 6:
+                value = "FFFFFF"
+            try:
+                return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+            except ValueError:
+                return (255, 255, 255)
+
+        amount = min(max(amount, 0.0), 1.0)
+        fg = parse(foreground)
+        bg = parse(background)
+        blended = [round(bg[i] * (1 - amount) + fg[i] * amount) for i in range(3)]
+        return "#" + "".join(f"{channel:02X}" for channel in blended)
 
     def _create_template_style_elements(self, template_layout: Dict[str, Any], poster_width: float, poster_height: float) -> List[Dict[str, Any]]:
         style = template_layout.get("style_tokens") or {}
@@ -473,14 +650,20 @@ class LayoutAgent:
         # extract title and authors from narrative content
         narrative = state.get("narrative_content") or {}
         meta = narrative.get("meta", {})
-        poster_title = meta.get("poster_title", state.get('poster_name', 'Title'))
-        authors = meta.get("authors", "Authors")
+        poster_title = normalize_title_for_poster(meta.get("poster_title", state.get('poster_name', 'Title'))) or "Title"
+        authors = normalize_text_for_poster(meta.get("authors", "Authors")) or "Authors"
         if template_layout.get("layout_mode") == "template_prior" and template_layout.get("orientation") == "portrait":
             title_font_size = 58
             author_font_size = 34
+            author_top_gap_inches = self.config["typography"].get("title_author_gap_points", 16) / 72
+        elif template_layout.get("template_name") == "cluster_72":
+            title_font_size = 108
+            author_font_size = 50
+            author_top_gap_inches = 0.30
         else:
             title_font_size = 100
             author_font_size = 72
+            author_top_gap_inches = self.config["typography"].get("title_author_gap_points", 16) / 72
         
         return {
             "type": "title",
@@ -492,6 +675,7 @@ class LayoutAgent:
             "font_family": self.title_font_family,
             "font_size": title_font_size,
             "author_font_size": author_font_size,
+            "author_top_gap_inches": author_top_gap_inches,
             "priority": 1.0
         }
     
@@ -510,6 +694,12 @@ class LayoutAgent:
             logo for logo in (state.get("affiliation_logos") or [])
             if logo.get("logo_path") and Path(logo["logo_path"]).exists()
         ]
+        manual_aff_logo = self._manual_affiliation_logo_entry(state)
+        if manual_aff_logo and not any(
+            Path(logo["logo_path"]).resolve() == Path(manual_aff_logo["logo_path"]).resolve()
+            for logo in aff_logos
+        ):
+            aff_logos.insert(0, manual_aff_logo)
         logo_config = self.config.get("affiliation_logos", {})
         aff_logos = aff_logos[: logo_config.get("max_logos", 4)]
 
@@ -528,7 +718,23 @@ class LayoutAgent:
             return self._layout_aff_only(aff_logos, region, logo_config)
 
         # both conf + aff: split region
+        if template_layout.get("template_name") == "cluster_72":
+            logo_config = dict(logo_config)
+            logo_config["max_logo_height"] = max(float(logo_config.get("max_logo_height", 1.95)), 2.65)
         return self._layout_combined(state["logo_path"], aff_logos, region, logo_config)
+
+    def _manual_affiliation_logo_entry(self, state: PosterState) -> Dict[str, Any] | None:
+        logo_path = state.get("aff_logo_path")
+        if not logo_path or not Path(logo_path).exists():
+            return None
+
+        return {
+            "institution": state.get("affiliation_logo_label") or "Affiliation",
+            "logo_path": logo_path,
+            "domain": None,
+            "source": "manual",
+            "aspect": self._get_image_aspect_ratio(logo_path),
+        }
 
     # ------------------------------------------------------------------ #
     #  Sub-layouts                                                         #
@@ -697,10 +903,17 @@ class LayoutAgent:
             is_vertical_stack = bool(lanes) and len({round(lane["x"], 3) for lane in lanes}) == 1
 
         has_conf = bool(state and state.get("logo_path") and Path(state["logo_path"]).exists())
-        aff_count = len([
+        aff_logos = [
             logo for logo in ((state or {}).get("affiliation_logos") or [])
             if logo.get("logo_path") and Path(logo["logo_path"]).exists()
-        ])
+        ]
+        manual_aff_logo = self._manual_affiliation_logo_entry(state) if state else None
+        if manual_aff_logo and not any(
+            Path(logo["logo_path"]).resolve() == Path(manual_aff_logo["logo_path"]).resolve()
+            for logo in aff_logos
+        ):
+            aff_logos.append(manual_aff_logo)
+        aff_count = len(aff_logos)
         has_logo = has_conf or aff_count > 0 or state is None
 
         x0 = header["x"]
@@ -728,9 +941,16 @@ class LayoutAgent:
             title_box = {"x": x0, "y": y0, "w": min(title_w, w), "h": max(h - 0.15, 0.8)}
             return title_box, logo_box
 
-        if template_layout.get("layout_mode") == "template_prior":
+        if template_layout.get("template_name") == "cluster_72":
             if has_conf and aff_count:
+                reserve_frac = 0.34
+            elif aff_count >= 3:
                 reserve_frac = 0.32
+            else:
+                reserve_frac = 0.28
+        elif template_layout.get("layout_mode") == "template_prior":
+            if has_conf and aff_count:
+                reserve_frac = 0.36
             elif aff_count >= 3:
                 reserve_frac = 0.30
             else:
@@ -743,7 +963,10 @@ class LayoutAgent:
 
         min_logo_w = 2.8 if template_layout.get("orientation") == "portrait" else 4.0
         logo_w = min(max(w * reserve_frac, min_logo_w), w * 0.38)
-        min_title_w = w * (0.58 if template_layout.get("orientation") == "portrait" else 0.55)
+        if template_layout.get("template_name") == "cluster_72":
+            min_title_w = w * 0.60
+        else:
+            min_title_w = w * (0.58 if template_layout.get("orientation") == "portrait" else 0.55)
         if w - logo_w - gap < min_title_w:
             logo_w = max(w - min_title_w - gap, min_logo_w)
 
@@ -1143,11 +1366,25 @@ class LayoutAgent:
         # calculate original height from aspect ratio
         original_height = visual_width / aspect_ratio
         
-        # check if shrinking is needed (height > 40% of column height)
+        # check if shrinking is needed
         scale_factor = 1.0
-        if available_height and original_height > (available_height * 0.4):
-            scale_factor = 0.8  # shrink to 80% of original size
-            log_agent_info(self.name, f"visual {visual_id} too large ({original_height:.2f}\" > 40% of {available_height:.2f}\"), shrinking to 80%")
+        if available_height and state.get("resolved_layout_template") == "cluster_72":
+            max_visual_height = available_height * 0.95
+            if original_height > max_visual_height:
+                scale_factor = max_visual_height / max(original_height, 0.01)
+                log_agent_info(
+                    self.name,
+                    f"visual {visual_id} capped for cluster_72 ({original_height:.2f}\" > 95% of {available_height:.2f}\"), scale={scale_factor:.2f}",
+                )
+        elif available_height:
+            max_fraction = self._max_visual_height_fraction(visual_id, state)
+            max_visual_height = available_height * max_fraction
+            if original_height > max_visual_height:
+                scale_factor = max_visual_height / max(original_height, 0.01)
+                log_agent_info(
+                    self.name,
+                    f"visual {visual_id} capped ({original_height:.2f}\" > {max_fraction:.0%} of {available_height:.2f}\"), scale={scale_factor:.2f}",
+                )
         
         # apply scaling to both width and height to maintain aspect ratio
         final_width = visual_width * scale_factor
@@ -1157,6 +1394,16 @@ class LayoutAgent:
         
         # return final width, height and scale factor for rendering
         return final_width, final_height, scale_factor
+
+    def _max_visual_height_fraction(self, visual_id: str, state) -> float:
+        fast_visual_policy = (self.config.get("template_fast_mode") or {}).get("visual_policy") or {}
+        if state.get("template_fast_mode"):
+            if str(visual_id).startswith("table_"):
+                return float(fast_visual_policy.get("table_max_height_fraction", 0.62))
+            if str(visual_id).startswith("figure_"):
+                return float(fast_visual_policy.get("figure_max_height_fraction", 0.55))
+            return float(fast_visual_policy.get("default_max_height_fraction", 0.42))
+        return 0.40
     
 
 

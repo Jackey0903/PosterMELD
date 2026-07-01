@@ -1,10 +1,8 @@
 """
 Deterministic template selector for Paper2Poster.
 
-`auto` mode only considers the three user-facing templates:
-- three_column_postergen
-- two_plus_one_mixed
-- one_plus_two_mixed
+`auto` mode only considers the curated standard template set. `adaptive_auto`
+keeps the older no-template automatic choice among the three built-in layouts.
 
 Selection is based on estimated text/visual burden per semantic lane and a
 strong prior preference for the balanced three-column layout.
@@ -16,6 +14,11 @@ from math import ceil
 from statistics import pstdev
 from typing import Any, Dict, List
 
+from src.template_extraction.block_template_registry import (
+    get_block_template_info,
+    list_block_template_ids,
+    load_block_template_layout,
+)
 from src.tools.layout_api import LayoutTemplates
 
 
@@ -23,6 +26,22 @@ AUTO_TEMPLATE_CANDIDATES = [
     "three_column_postergen",
     "two_plus_one_mixed",
     "one_plus_two_mixed",
+]
+
+KEYPOINT_BLOCK_TEMPLATE_PRIOR = [
+    "cluster_104_landscape",
+    "cluster_43_landscape",
+    "cluster_36_landscape",
+    "cluster_3_portrait",
+    "cluster_8_portrait",
+]
+
+DEFAULT_STANDARD_TEMPLATES = [
+    "cluster_2_landscape",
+    "cluster_43_landscape",
+    "cluster_104_landscape",
+    "cluster_3_portrait",
+    "cluster_8_portrait",
 ]
 
 
@@ -41,12 +60,15 @@ class TemplateSelector:
         visual_assets: Dict[str, Any],
     ) -> Dict[str, Any]:
         requested_template = state.get("layout_template", "auto")
-        if requested_template and requested_template != "auto":
+        if requested_template and requested_template not in {"auto", "adaptive_auto"}:
             return {
                 "selected_template": requested_template,
                 "selection_mode": "manual",
                 "candidates": [],
             }
+
+        if requested_template == "auto":
+            return self._select_standard_template(state, structured_sections, classified_visuals, visual_assets)
 
         lane_buckets = self._build_lane_buckets(structured_sections, classified_visuals, visual_assets)
         preferred_template = self._prefer_template_from_lane_pressure(lane_buckets, visual_assets)
@@ -67,10 +89,162 @@ class TemplateSelector:
         selected = candidate_scores[0]
         return {
             "selected_template": selected["template_name"],
-            "selection_mode": "auto",
+            "selection_mode": "adaptive_auto" if requested_template == "adaptive_auto" else "auto",
             "candidates": candidate_scores,
             "lane_buckets": lane_buckets,
             "preferred_template": preferred_template,
+        }
+
+    def _select_standard_template(
+        self,
+        state: Dict[str, Any],
+        structured_sections: Dict[str, Any],
+        classified_visuals: Dict[str, Any],
+        visual_assets: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        policy = self.config.get("standard_template_policy", {})
+        enabled_templates = list(policy.get("auto_templates") or DEFAULT_STANDARD_TEMPLATES)
+        section_count = len((structured_sections or {}).get("paper_sections") or [])
+        visual_count = len(visual_assets or {})
+        table_count = sum(
+            1
+            for visual_id, asset in (visual_assets or {}).items()
+            if str(visual_id).startswith("table_") or str(asset.get("asset_type") or "").lower() == "table"
+        )
+        figure_count = sum(
+            1
+            for visual_id, asset in (visual_assets or {}).items()
+            if str(visual_id).startswith("figure_") or str(asset.get("asset_type") or "").lower() == "figure"
+        )
+        has_table = table_count > 0 or any(
+            str(visual_id).startswith("table_")
+            for bucket in ("main_results", "comparative_results", "supporting")
+            for visual_id in (classified_visuals or {}).get(bucket) or []
+        )
+        dense = (
+            section_count >= int(policy.get("dense_section_threshold", 6))
+            or visual_count >= int(policy.get("dense_visual_threshold", 3))
+            or has_table
+        )
+        portrait_requested = float(state.get("poster_width") or 0.0) < float(state.get("poster_height") or 0.0)
+
+        if portrait_requested:
+            selected = (
+                policy.get("default_dense_portrait_template", "cluster_3_portrait")
+                if dense
+                else policy.get("default_light_portrait_template", "cluster_8_portrait")
+            )
+        elif dense:
+            selected = policy.get("default_dense_landscape_template", "cluster_104_landscape")
+        elif visual_count >= 2 or figure_count >= 2:
+            selected = policy.get("default_visual_landscape_template", "cluster_43_landscape")
+        else:
+            selected = policy.get("default_light_landscape_template", "cluster_2_landscape")
+
+        if selected not in enabled_templates:
+            selected = enabled_templates[0]
+
+        candidates = []
+        for template_id in enabled_templates:
+            info = get_block_template_info(template_id) or {}
+            orientation = info.get("orientation")
+            score = 50.0
+            if template_id == selected:
+                score += 50.0
+            if dense and template_id == policy.get("default_dense_landscape_template", "cluster_104_landscape"):
+                score += 20.0
+            if not dense and template_id == policy.get("default_light_landscape_template", "cluster_2_landscape"):
+                score += 10.0
+            if orientation == "portrait" and not portrait_requested:
+                score -= 40.0
+            if orientation == "landscape" and portrait_requested:
+                score -= 40.0
+            candidates.append({
+                "template_name": template_id,
+                "score": round(score, 3),
+                "orientation": orientation,
+                "content_blocks": max(int(info.get("slot_count") or 0) - 1, 0),
+                "slot_count": info.get("slot_count"),
+                "recommended_canvas_size": info.get("recommended_canvas_size"),
+            })
+        candidates.sort(key=lambda item: item["score"], reverse=True)
+
+        return {
+            "selected_template": selected,
+            "selection_mode": "standard_auto",
+            "candidates": candidates,
+            "standard_template_policy": {
+                "section_count": section_count,
+                "visual_count": visual_count,
+                "figure_count": figure_count,
+                "table_count": table_count,
+                "has_table": has_table,
+                "dense": dense,
+                "portrait_requested": portrait_requested,
+            },
+        }
+
+    def _select_keypoint_block_template(self, state: Dict[str, Any]) -> Dict[str, Any] | None:
+        keypoints = state.get("paper_poster_keypoints") or []
+        target_count = min(max(len(keypoints), 8), 10)
+        candidate_scores = []
+
+        for template_id in list_block_template_ids():
+            info = get_block_template_info(template_id)
+            if not info or info.get("orientation") != "landscape":
+                continue
+            recommended = info.get("recommended_canvas_size") or {}
+            layout = load_block_template_layout(
+                template_id,
+                float(recommended.get("width") or state.get("poster_width") or 54.0),
+                float(recommended.get("height") or state.get("poster_height") or 36.0),
+                margin=float(self.layout_config.get("poster_margin", 1.0)),
+            )
+            if not layout:
+                continue
+            content_blocks = int(layout.get("slot_count") or len(layout.get("regions") or []))
+            if content_blocks not in {8, 9, 10}:
+                continue
+            score = 100.0
+            score -= abs(content_blocks - target_count) * 30.0
+            if content_blocks == 10:
+                score += 20.0
+            if content_blocks < target_count:
+                score -= 8.0
+            if template_id in KEYPOINT_BLOCK_TEMPLATE_PRIOR:
+                score += 12.0 - KEYPOINT_BLOCK_TEMPLATE_PRIOR.index(template_id)
+            aspect_ratio = float(info.get("aspect_ratio") or 1.0)
+            if aspect_ratio > 2.1:
+                score -= 1000.0
+            candidate_scores.append({
+                "template_name": template_id,
+                "score": round(score, 3),
+                "content_blocks": content_blocks,
+                "slot_count": info.get("slot_count"),
+                "orientation": info.get("orientation"),
+                "aspect_ratio": round(aspect_ratio, 3),
+                "recommended_canvas_size": recommended,
+            })
+
+        if not candidate_scores:
+            return None
+
+        candidate_scores.sort(
+            key=lambda item: (
+                item["score"],
+                -KEYPOINT_BLOCK_TEMPLATE_PRIOR.index(item["template_name"])
+                if item["template_name"] in KEYPOINT_BLOCK_TEMPLATE_PRIOR
+                else -999,
+            ),
+            reverse=True,
+        )
+        selected = candidate_scores[0]
+        return {
+            "selected_template": selected["template_name"],
+            "selection_mode": "auto_keypoint_block",
+            "candidates": candidate_scores,
+            "keypoint_count": len(keypoints),
+            "target_content_blocks": target_count,
         }
 
     def _build_template_layout(self, state: Dict[str, Any], template_name: str) -> Dict[str, Any]:
@@ -78,6 +252,10 @@ class TemplateSelector:
         poster_height = state["poster_height"]
         poster_margin = self.layout_config["poster_margin"]
         column_spacing = self.layout_config["column_spacing"]
+        dense = self.config.get("adaptive_auto_dense_layout", {})
+        if dense.get("enabled", True) and template_name in AUTO_TEMPLATE_CANDIDATES:
+            poster_margin = float(dense.get("poster_margin", poster_margin))
+            column_spacing = float(dense.get("column_spacing", column_spacing))
         title_height_fraction = self.layout_config["title_height_fraction"]
         effective_height = poster_height - 2 * poster_margin
         title_region_height = effective_height * title_height_fraction
