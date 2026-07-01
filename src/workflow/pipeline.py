@@ -16,6 +16,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.state.poster_state import create_state, PosterState
 from src.tools.layout_api import LayoutTemplates
 from src.template_extraction.block_template_registry import get_block_template_info, is_block_template_id
+from src.config.poster_config import load_config
+from src.utils.style_options import (
+    available_poster_styles,
+    available_visual_densities,
+    normalize_poster_style,
+    normalize_visual_density,
+)
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error
 
 env_path = Path(__file__).parent.parent.parent / '.env'
@@ -112,8 +119,6 @@ def create_timing_wrapper(node_func: Callable, component_name: str) -> Callable:
 
 
 def _block_refinement_max_iterations(state: PosterState | None = None) -> int:
-    from src.config.poster_config import load_config
-
     config = load_config()
     if state and state.get("template_fast_mode"):
         return int(config.get("template_fast_mode", {}).get("emergency_repair_max_iterations", 1))
@@ -218,7 +223,6 @@ def _load_content_json(state: PosterState, filename: str) -> Dict[str, Any]:
 
 def _run_final_quality_gate(state: PosterState) -> PosterState:
     from src.agents.block_occupancy_analyzer import BlockOccupancyAnalyzer
-    from src.config.poster_config import load_config
 
     if state.get("template_layout_mode") != "template_prior":
         state["final_quality_gate"] = {"accepted": True, "reason": "not a template-prior poster"}
@@ -467,7 +471,6 @@ def save_timing_log(state: PosterState):
 
     metrics = state["timing_metrics"]
     total_time = metrics.get_total_time()
-    from src.config.poster_config import load_config
 
     block_settings = (
         (state.get("block_occupancy_report") or {}).get("settings")
@@ -615,6 +618,7 @@ def save_timing_log(state: PosterState):
 
 
 def main():
+    config = load_config()
     default_text_model = os.getenv("PAPER2POSTER_TEXT_MODEL") or os.getenv("PAPER2POSTER_MODEL") or "gpt-5.4"
     default_vision_model = (
         os.getenv("PAPER2POSTER_VISION_MODEL")
@@ -623,6 +627,10 @@ def main():
         or default_text_model
     )
     default_vlm_model = os.getenv("PAPER2POSTER_VLM_MODEL") or os.getenv("VLM_MODEL")
+    poster_style_choices = available_poster_styles(config)
+    visual_density_choices = available_visual_densities(config)
+    default_poster_style = normalize_poster_style(os.getenv("PAPER2POSTER_STYLE"), config)
+    default_visual_density = normalize_visual_density(os.getenv("PAPER2POSTER_VISUAL_DENSITY"), config)
 
     parser = argparse.ArgumentParser(description="Paper2Poster: Multi-agent Aesthetic-aware Paper-to-poster generation")
     parser.add_argument("paper_path_positional", nargs="?", help="Path to the PDF paper")
@@ -691,6 +699,18 @@ def main():
         choices=["light_blue", "light_gray"],
         default=None,
         help="Palette for the generated poster background when --enable-generated-background is set.",
+    )
+    parser.add_argument(
+        "--poster-style",
+        choices=poster_style_choices,
+        default=default_poster_style,
+        help="Typography and color preset for poster title bars, panels, and highlights.",
+    )
+    parser.add_argument(
+        "--visual-density",
+        choices=visual_density_choices,
+        default=default_visual_density,
+        help="How aggressively the planner should preserve figures and result tables.",
     )
     parser.add_argument(
         "--vlm-model",
@@ -804,6 +824,8 @@ def main():
     print(f"🔎 Visual Legibility Review: {'enabled' if args.enable_visual_legibility_review else 'disabled'}")
     print(f"🧱 Block 95% Refinement: {'enabled' if args.enable_block_vlm_review else 'disabled'}")
     print(f"📐 Adaptive Column Width: {'enabled' if args.enable_adaptive_column_width else 'disabled'}")
+    print(f"🎭 Poster Style: {args.poster_style}")
+    print(f"📊 Visual Density: {args.visual_density}")
     print(f"🎨 Generated Background: {'enabled' if args.enable_generated_background else 'disabled'}")
     if args.enable_generated_background:
         print(f"🎨 Background Palette: {args.background_palette or 'config default'}")
@@ -822,6 +844,8 @@ def main():
             enable_adaptive_column_width=args.enable_adaptive_column_width,
             enable_generated_background=args.enable_generated_background,
             background_palette=args.background_palette,
+            poster_style_preset=args.poster_style,
+            visual_density=args.visual_density,
             vlm_model=args.vlm_model,
             conference_name=conference_name,
         )

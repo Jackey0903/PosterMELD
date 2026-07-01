@@ -175,6 +175,8 @@ class PosterState(TypedDict):
     enable_adaptive_column_width: bool
     enable_generated_background: bool
     background_palette: Optional[str]
+    poster_style_preset: Optional[str]
+    visual_density: Optional[str]
     background_image_path: Optional[str]
     background_image_report: Optional[Dict[str, Any]]
     vlm_model: Optional[str]
@@ -222,6 +224,8 @@ def create_state(
     enable_adaptive_column_width: bool = False,
     enable_generated_background: bool = False,
     background_palette: Optional[str] = None,
+    poster_style_preset: Optional[str] = None,
+    visual_density: Optional[str] = None,
     vlm_model: Optional[str] = None,
     conference_name: Optional[str] = None,
 ) -> PosterState:
@@ -320,6 +324,8 @@ def create_state(
         enable_adaptive_column_width=enable_adaptive_column_width,
         enable_generated_background=enable_generated_background,
         background_palette=background_palette,
+        poster_style_preset=poster_style_preset,
+        visual_density=visual_density,
         background_image_path=None,
         background_image_report=None,
         vlm_model=vlm_model,

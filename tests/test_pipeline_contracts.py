@@ -402,6 +402,24 @@ def test_template_capacity_planner_builds_landscape_fast_contract(tmp_path):
     assert Path(state["output_dir"], "content", "fast_block_contract.json").exists()
 
 
+def test_template_capacity_planner_applies_rich_visual_density(tmp_path):
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        visual_density="rich",
+    )
+    state["output_dir"] = str(tmp_path / "output_rich")
+
+    result = TemplateCapacityPlanner()(state)
+
+    assert result["fast_visual_policy"]["visual_density"] == "rich"
+    assert result["fast_visual_policy"]["figure_count"] == 3
+    assert result["fast_visual_policy"]["table_count"] == 2
+    assert result["fast_visual_policy"]["max_visuals_total"] == 5
+
+
 def test_standard_template_preselector_auto_selects_dense_landscape_template(tmp_path):
     state = create_state(str(tmp_path / "paper.pdf"), layout_template="auto", width=54, height=36)
     state["output_dir"] = str(tmp_path / "output")
@@ -565,7 +583,7 @@ def test_curator_block_template_key_visual_validation_uses_slot_mapping_not_midd
     )
 
 
-def test_curator_portrait_standard_template_keeps_one_key_visual(tmp_path):
+def test_curator_portrait_standard_template_keeps_key_visual_and_result_table(tmp_path):
     capacity_state = create_state(
         str(tmp_path / "paper.pdf"),
         layout_template="cluster_8_portrait",
@@ -617,8 +635,8 @@ def test_curator_portrait_standard_template_keeps_one_key_visual(tmp_path):
         for visual in section.get("visual_assets", [])
     ]
     assert "Produce exactly 4 grouped poster sections" in guidance
-    assert "Use exactly 1 total visual" in guidance
-    assert visual_ids == ["figure_1"]
+    assert "Use up to 2 total visuals" in guidance
+    assert visual_ids == ["figure_1", "table_1"]
     assert curator._validate_story_board(story_board, classified_visuals, visual_context)
 
 
@@ -897,6 +915,24 @@ def test_section_title_designer_emits_navy_band_template():
     application = design["section_applications"][0]
     assert application["accent_styling"]["type"] == "full_width_bar"
     assert application["title_styling"]["font_family"] == "Georgia"
+
+
+def test_section_title_designer_uses_selected_style_preset():
+    state = create_state("/tmp/paper.pdf", poster_style_preset="teal_modern")
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {"section_id": "method", "section_title": "Method"},
+            ]
+        }
+    }
+    state["color_scheme"] = {"theme": "#335f91", "mono_light": "#8AA0BA", "mono_dark": "#001E44"}
+
+    result = SectionTitleDesigner()(state)
+
+    application = result["section_title_design"]["section_title_design"]["section_applications"][0]
+    assert application["accent_styling"]["color"] == "#0B4F5C"
+    assert application["title_styling"]["font_family"] == "Helvetica Neue"
 
 
 def test_layout_agent_uses_manual_aff_logo_with_conference_logo(tmp_path):

@@ -80,10 +80,11 @@ PDF 输入
 当前每个 block 的目标利用率：
 
 ```text
-target_utilization = 0.95
-acceptable_range = 0.90 - 0.97
-hard_max = 0.98
-final_min = 0.88
+target_utilization = 0.96
+acceptable_range = 0.94 - 0.985
+hard_max = 0.985
+final_min = 0.94
+final_mean = 0.96
 ```
 
 如果 block 偏空，系统只允许从论文事实中补充内容；如果 block 太挤或溢出，只允许压缩或删减。禁止为了填满而编造论文没有的实验结果。
@@ -211,9 +212,25 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
   --layout-template auto \
   --logo data/Active_Geospatial_Search_for_Efficient_Tenant_Eviction_Outreach/logo.png \
   --aff-logo data/Active_Geospatial_Search_for_Efficient_Tenant_Eviction_Outreach/aff.png \
+  --poster-style navy_serif \
+  --visual-density rich \
   --enable-generated-background \
   --background-palette light_blue
 ```
+
+可选视觉风格：
+
+```text
+--poster-style navy_serif | teal_modern | burgundy_classic
+```
+
+可选图表密度：
+
+```text
+--visual-density lean | balanced | rich
+```
+
+`balanced` 是默认值。论文图表较多、表格比较可读时建议用 `rich`，会优先保留方法图、系统图和关键结果表；空间紧张或竖版实验时可用 `lean`。
 
 固定使用当前效果较好的横版模板：
 

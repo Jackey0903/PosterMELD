@@ -16,6 +16,7 @@ from src.config.poster_config import load_config
 from src.state.poster_state import PosterState
 from src.template_extraction.block_template_registry import is_block_template_id
 from src.tools.layout_api import LayoutTemplates
+from src.utils.style_options import normalize_visual_density, resolve_visual_density_settings
 from utils.src.logging_utils import log_agent_info, log_agent_success
 
 
@@ -44,11 +45,12 @@ class TemplateCapacityPlanner:
 
         template_layout = self._resolve_template_layout(state, template_name)
         contract = self._build_contract(template_layout, template_name)
-        visual_policy = self._build_visual_policy(template_name, contract)
+        visual_policy = self._build_visual_policy(template_name, contract, template_layout, state)
         report = {
             "enabled": True,
             "source": self.name,
             "template_id": template_name,
+            "visual_density": visual_policy.get("visual_density"),
             "block_count": len(contract.get("blocks") or []),
             "slot_order": contract.get("slot_order") or [],
             "strategy": "template bbox and visual policy are fixed before keypoint/content generation",
@@ -144,11 +146,36 @@ class TemplateCapacityPlanner:
             "by_slot": {block["slot_id"]: block for block in blocks},
         }
 
-    def _build_visual_policy(self, template_name: str, contract: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_visual_policy(
+        self,
+        template_name: str,
+        contract: Dict[str, Any],
+        template_layout: Dict[str, Any],
+        state: PosterState,
+    ) -> Dict[str, Any]:
         policy = self.fast_config.get("visual_policy") or {}
         blocks = contract.get("blocks") or []
-        figure_count = int(policy.get("figure_count", 2))
-        table_count = int(policy.get("table_count", 1))
+        density_settings = resolve_visual_density_settings(state, self.config)
+        visual_density = normalize_visual_density(state.get("visual_density"), self.config)
+        is_portrait = template_layout.get("orientation") == "portrait"
+        figure_count = int(
+            density_settings.get(
+                "portrait_figure_count" if is_portrait else "figure_count",
+                policy.get("figure_count", 2),
+            )
+        )
+        table_count = int(
+            density_settings.get(
+                "portrait_table_count" if is_portrait else "table_count",
+                policy.get("table_count", 1),
+            )
+        )
+        max_visuals_total = int(
+            density_settings.get(
+                "portrait_max_visuals_total" if is_portrait else "max_visuals_total",
+                figure_count + table_count,
+            )
+        )
         figure_slots = [block["slot_id"] for block in blocks if "figure" in str(block.get("visual_policy") or "")]
         table_slots = [block["slot_id"] for block in blocks if "table" in str(block.get("visual_policy") or "")]
         figure_slots = self._merge_slot_order(figure_slots, list(policy.get("figure_slots") or ["slot_2", "slot_3"]))
@@ -156,11 +183,15 @@ class TemplateCapacityPlanner:
         return {
             "source": "fast_template_first_visual_policy",
             "template_id": template_name,
+            "visual_density": visual_density,
             "figure_count": figure_count,
             "table_count": table_count,
             "figure_slots": figure_slots[:figure_count],
             "table_slots": table_slots[:table_count],
-            "max_visuals_total": figure_count + table_count,
+            "max_visuals_total": max(0, min(max_visuals_total, figure_count + table_count)),
+            "figure_max_height_fraction": policy.get("figure_max_height_fraction", 0.55),
+            "table_max_height_fraction": policy.get("table_max_height_fraction", 0.62),
+            "default_max_height_fraction": policy.get("default_max_height_fraction", 0.42),
             "table_unreadable_strategy": policy.get("table_unreadable_strategy") or "summarize_as_text",
         }
 

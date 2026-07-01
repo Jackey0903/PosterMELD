@@ -11,6 +11,7 @@ from src.state.poster_state import PosterState
 from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error, log_agent_warning
 from src.config.poster_config import load_config
+from src.utils.style_options import resolve_color_scheme_overrides
 
 
 class ColorAgent:
@@ -38,6 +39,7 @@ class ColorAgent:
             
             color_scheme = self._generate_color_scheme(theme_color)
             color_scheme = self._add_contrast_color(color_scheme)
+            color_scheme.update(resolve_color_scheme_overrides(state, self.config))
             
             state["color_scheme"] = color_scheme
             state["current_agent"] = self.name

@@ -39,6 +39,114 @@ typography:
   paragraph_spacing: 0.0
   title_author_gap_points: 16
 
+default_poster_style: "navy_serif"
+poster_style_presets:
+  navy_serif:
+    label: "Navy Serif"
+    color_scheme: {}
+    typography:
+      fonts:
+        title: "Georgia"
+        authors: "Arial"
+        section_title: "Georgia"
+        body_text: "Arial"
+    poster_visual_style:
+      main_title:
+        font_family: "Georgia"
+        font_color: "#07164A"
+        author_font_family: "Arial"
+        author_font_color: "#111111"
+      section_title:
+        font_family: "Georgia"
+        font_color: "#FFFFFF"
+        bar_fill_color: "#06134A"
+      block_panel:
+        fill_color: "#F1F2F4"
+        border_color: "#E5E7EE"
+  teal_modern:
+    label: "Teal Modern"
+    color_scheme:
+      theme: "#0F766E"
+      mono_light: "#E6F2F0"
+      mono_dark: "#0B4F5C"
+      text: "#111827"
+      text_on_theme: "#FFFFFF"
+      contrast: "#0B4F5C"
+    typography:
+      fonts:
+        title: "Helvetica Neue"
+        authors: "Arial"
+        section_title: "Helvetica Neue"
+        body_text: "Arial"
+    poster_visual_style:
+      main_title:
+        font_family: "Helvetica Neue"
+        font_color: "#0B2F36"
+        author_font_family: "Arial"
+        author_font_color: "#27343A"
+      section_title:
+        font_family: "Helvetica Neue"
+        font_color: "#FFFFFF"
+        bar_fill_color: "#0B4F5C"
+      block_panel:
+        fill_color: "#F3F8F7"
+        border_color: "#D5E7E4"
+  burgundy_classic:
+    label: "Burgundy Classic"
+    color_scheme:
+      theme: "#7A1F2B"
+      mono_light: "#F5ECEE"
+      mono_dark: "#5A1420"
+      text: "#151515"
+      text_on_theme: "#FFFFFF"
+      contrast: "#7A1F2B"
+    typography:
+      fonts:
+        title: "Georgia"
+        authors: "Arial"
+        section_title: "Georgia"
+        body_text: "Arial"
+    poster_visual_style:
+      main_title:
+        font_family: "Georgia"
+        font_color: "#4A1020"
+        author_font_family: "Arial"
+        author_font_color: "#211517"
+      section_title:
+        font_family: "Georgia"
+        font_color: "#FFFFFF"
+        bar_fill_color: "#5A1420"
+      block_panel:
+        fill_color: "#F6F0F1"
+        border_color: "#E8D7DB"
+
+default_visual_density: "balanced"
+visual_density_presets:
+  lean:
+    label: "Lean"
+    figure_count: 1
+    table_count: 1
+    max_visuals_total: 2
+    portrait_figure_count: 1
+    portrait_table_count: 0
+    portrait_max_visuals_total: 1
+  balanced:
+    label: "Balanced"
+    figure_count: 2
+    table_count: 2
+    max_visuals_total: 4
+    portrait_figure_count: 1
+    portrait_table_count: 1
+    portrait_max_visuals_total: 2
+  rich:
+    label: "Rich"
+    figure_count: 3
+    table_count: 2
+    max_visuals_total: 5
+    portrait_figure_count: 2
+    portrait_table_count: 1
+    portrait_max_visuals_total: 3
+
 colors:
   # defaults
   fallback_theme: "#1E3A8A"

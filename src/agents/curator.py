@@ -382,10 +382,11 @@ class StoryBoardCurator:
                 for normalized in [self._normalize_visual_reference(visual) for visual in section.get("visual_assets", [])]
                 if normalized and normalized.get("visual_id")
             ]
-            if len(selected_visual_ids) > 1:
+            max_visuals = self._max_visuals_for_context(visual_context or {})
+            if len(selected_visual_ids) > max_visuals:
                 log_agent_warning(
                     self.name,
-                    f"validation error: portrait template allows only 1 total visual, got {selected_visual_ids}",
+                    f"validation error: portrait template allows only {max_visuals} total visuals, got {selected_visual_ids}",
                 )
                 return False
         
@@ -478,11 +479,16 @@ class StoryBoardCurator:
             ]
             section_count = len(blocks) or self._keypoint_section_target_count(visual_context)
             if self._is_portrait_or_vertical_template(visual_context):
+                figure_count = int(visual_policy.get("figure_count") or 1)
+                table_count = int(visual_policy.get("table_count") or 0)
+                max_visuals = int(visual_policy.get("max_visuals_total") or max(1, figure_count + table_count))
                 return (
                     f"FAST PORTRAIT TEMPLATE-FIRST MODE for {visual_context.get('requested_layout_template')}. "
                     f"Produce exactly {section_count} grouped poster sections from the keypoint pool. Preserve every "
-                    "keypoint id in source_keypoint_ids. Use exactly 1 total visual: the key method visual. "
-                    "Do not include result tables as visuals; convert tables and ablations into short factual text. "
+                    f"keypoint id in source_keypoint_ids. Use up to {max_visuals} total visuals: prioritize one key "
+                    f"method figure, then up to {table_count} readable result table/chart, then remaining method/result "
+                    f"figures up to the {figure_count}-figure budget. Convert only unreadable or overflow-prone tables "
+                    "and ablations into short factual text. "
                     "Match text_content length to each slot's min/target/max chars while keeping the portrait layout readable. "
                     f"Visual policy: {json.dumps(visual_policy, ensure_ascii=False)}. "
                     f"Slot contracts: {json.dumps(blocks, ensure_ascii=False)}"
@@ -522,8 +528,8 @@ class StoryBoardCurator:
         if self._is_portrait_or_vertical_template(visual_context):
             return (
                 "Portrait extracted template. Use exactly 5 compact sections across the three vertical bands. "
-                "Use exactly 1 total visual: the key visual in the middle band. Do not include result tables as "
-                "visuals; convert all secondary tables and ablations into short text bullets. Avoid splitting one "
+                "Use 1-2 total visuals: the key visual plus the most readable result table or chart when it fits. "
+                "Convert secondary tables and ablations into short text bullets. Avoid splitting one "
                 "idea into multiple small sections."
             )
         if template_layout.get("extracted_template"):
@@ -546,6 +552,15 @@ class StoryBoardCurator:
         lanes = template_layout.get("lanes") or []
         is_vertical_stack = bool(lanes) and len({round(lane.get("x", 0), 3) for lane in lanes}) == 1
         return template_layout.get("orientation") == "portrait" or is_vertical_stack
+
+    def _max_visuals_for_context(self, visual_context: Dict[str, Any]) -> int:
+        visual_policy = (visual_context or {}).get("fast_visual_policy") or {}
+        if visual_policy.get("max_visuals_total") is not None:
+            try:
+                return max(1, int(visual_policy.get("max_visuals_total")))
+            except (TypeError, ValueError):
+                pass
+        return 2 if self._is_portrait_or_vertical_template(visual_context or {}) else 4
 
     def _max_visual_height_percentage(self, visual_context: Dict[str, Any]) -> float:
         template_layout = visual_context.get("template_layout") or {}
@@ -697,6 +712,7 @@ class StoryBoardCurator:
             "template_layout": template_layout_for_context,
             "valid_visual_ids": list((state.get("visual_assets") or {}).keys()),
             "requested_layout_template": resolved_template,
+            "visual_density": state.get("visual_density"),
             "template_fast_mode": bool(state.get("template_fast_mode")),
             "fast_block_contract": state.get("fast_block_contract") or {},
             "fast_visual_policy": state.get("fast_visual_policy") or {},
@@ -1363,35 +1379,49 @@ class StoryBoardCurator:
         figure_candidates = self._cluster_72_figure_candidates(classified_visuals or {}, valid_ids, visual_context)
         table_candidates = self._cluster_72_table_candidates(classified_visuals or {}, valid_ids, visual_context)
 
-        if self._is_portrait_or_vertical_template(visual_context):
-            visual_id = figure_candidates[0] if figure_candidates else None
-            if not visual_id:
-                return
-            slot_id = figure_slots[0] if figure_slots else ""
-            holder = slot_map.get(slot_id)
-            if holder is None:
-                holder = self._first_section_by_role(sections, "method") or sections[min(1, len(sections) - 1)]
-            self._set_single_visual(holder, visual_id, "Primary method or contribution visual for the portrait template")
-            holder["importance_level"] = 1
-            return
-
         figure_count = int(fast_visual_policy.get("figure_count") or 2)
         table_count = int(fast_visual_policy.get("table_count") or 1)
+        max_visuals_total = int(fast_visual_policy.get("max_visuals_total") or (figure_count + table_count))
         used_visuals: set[str] = set()
-        for slot_id, visual_id in zip(figure_slots[:figure_count], figure_candidates[:figure_count]):
+
+        def place_visual(slot_id: str, visual_id: str, purpose: str, *, importance: int) -> bool:
+            if len(used_visuals) >= max_visuals_total:
+                return False
+            if not visual_id or visual_id in used_visuals:
+                return False
             holder = slot_map.get(slot_id)
-            if holder and visual_id not in used_visuals:
-                self._set_single_visual(holder, visual_id, "Primary method or system figure for the standard template")
-                holder["importance_level"] = 1
-                used_visuals.add(visual_id)
+            if not holder:
+                return False
+            self._set_single_visual(holder, visual_id, purpose)
+            holder["importance_level"] = min(int(holder.get("importance_level") or importance), importance)
+            used_visuals.add(visual_id)
+            return True
+
+        if self._is_portrait_or_vertical_template(visual_context):
+            if figure_slots and figure_candidates:
+                place_visual(
+                    figure_slots[0],
+                    figure_candidates[0],
+                    "Primary method or contribution visual for the portrait template",
+                    importance=1,
+                )
+            selected_tables = [visual_id for visual_id in table_candidates if visual_id not in used_visuals][:table_count]
+            if table_slots and selected_tables:
+                place_visual(table_slots[0], selected_tables[0], "Readable quantitative result table", importance=2)
+            remaining_figures = [visual_id for visual_id in figure_candidates[1:figure_count] if visual_id not in used_visuals]
+            for slot_id, visual_id in zip(figure_slots[1:figure_count], remaining_figures):
+                place_visual(slot_id, visual_id, "Supporting method or result figure", importance=2)
+            remaining_tables = [visual_id for visual_id in table_candidates if visual_id not in used_visuals][:table_count]
+            for slot_id, selected_table in zip(table_slots[1:table_count], remaining_tables):
+                place_visual(slot_id, selected_table, "Supporting quantitative result table", importance=2)
+            return
+
+        for slot_id, visual_id in zip(figure_slots[:figure_count], figure_candidates[:figure_count]):
+            place_visual(slot_id, visual_id, "Primary method or system figure for the standard template", importance=1)
 
         selected_tables = [visual_id for visual_id in table_candidates if visual_id not in used_visuals][:table_count]
         for slot_id, selected_table in zip(table_slots[:table_count], selected_tables):
-            holder = slot_map.get(slot_id)
-            if holder and selected_table and selected_table not in used_visuals:
-                self._set_single_visual(holder, selected_table, "Primary quantitative result table")
-                holder["importance_level"] = min(int(holder.get("importance_level") or 2), 2)
-                used_visuals.add(selected_table)
+            place_visual(slot_id, selected_table, "Primary quantitative result table", importance=2)
 
     def _limit_keypoint_visuals(self, sections: List[Dict[str, Any]], classified_visuals: Dict[str, Any]) -> None:
         key_visual = (classified_visuals or {}).get("key_visual")

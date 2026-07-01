@@ -13,6 +13,7 @@ from src.layout.text_height_measurement import measure_text_height
 from src.config.poster_config import load_config
 from src.tools.layout_api import LayoutTemplates, SEMANTIC_LANES
 from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_for_poster
+from src.utils.style_options import resolve_poster_visual_style, resolve_typography_config
 
 class LayoutAgent:
     """creates optimized layouts using css box model"""
@@ -34,6 +35,15 @@ class LayoutAgent:
         
         # debug configuration
         self.show_debug_borders = self.config["rendering"]["debug_borders"]  ## enable to see section boundaries for debugging
+
+    def _apply_state_style(self, state: PosterState) -> None:
+        self.visual_style_config = resolve_poster_visual_style(state, self.config)
+        typography = resolve_typography_config(state, self.config)
+        fonts = typography.get("fonts", {})
+        self.title_font_family = fonts.get("title", self.title_font_family)
+        self.authors_font_family = fonts.get("authors", self.authors_font_family)
+        self.section_title_font_family = fonts.get("section_title", self.section_title_font_family)
+        self.body_text_font_family = fonts.get("body_text", self.body_text_font_family)
     
     def _resolve_template_layout(self, state: PosterState) -> Dict[str, Any]:
         adaptive_widths = state.get("adaptive_lane_widths")
@@ -106,6 +116,7 @@ class LayoutAgent:
     def _generate_initial_layout(self, state: PosterState) -> PosterState:
         """generate initial layout without optimization - direct curator mapping"""
         log_agent_info(self.name, "generating initial layout from story board")
+        self._apply_state_style(state)
         
         try:
             story_board = state.get("story_board")
@@ -144,6 +155,7 @@ class LayoutAgent:
     def _generate_final_layout(self, state: PosterState) -> PosterState:
         """generate final layout from optimized story board"""
         log_agent_info(self.name, "generating final layout from optimized story board")
+        self._apply_state_style(state)
         
         try:
             optimized_story_board = state.get("optimized_story_board")
@@ -1187,7 +1199,9 @@ class LayoutAgent:
             "font_color": title_styling.get("color", section_style.get("font_color", "#FFFFFF")),
             "alignment": title_styling.get("alignment", section_style.get("alignment", "left")),
             "wordart_style": {
-                "name": "navy_band_serif",
+                "name": "navy_band_serif"
+                if self.visual_style_config.get("selected_preset", "navy_serif") == "navy_serif"
+                else f"{self.visual_style_config.get('selected_preset')}_band",
                 "shadow": section_style.get("shadow", {}),
             },
             "priority": 0.8
@@ -1424,7 +1438,7 @@ class LayoutAgent:
         return final_width, final_height, scale_factor
 
     def _max_visual_height_fraction(self, visual_id: str, state) -> float:
-        fast_visual_policy = (self.config.get("template_fast_mode") or {}).get("visual_policy") or {}
+        fast_visual_policy = state.get("fast_visual_policy") or (self.config.get("template_fast_mode") or {}).get("visual_policy") or {}
         if state.get("template_fast_mode"):
             if str(visual_id).startswith("table_"):
                 return float(fast_visual_policy.get("table_max_height_fraction", 0.62))

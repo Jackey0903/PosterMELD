@@ -11,6 +11,7 @@ from src.state.poster_state import PosterState
 from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error, log_agent_warning
 from src.config.poster_config import load_config
+from src.utils.style_options import resolve_poster_visual_style, resolve_typography_config
 from src.utils.text_cleanup import normalize_text_for_poster
 from jinja2 import Template
 
@@ -21,6 +22,7 @@ class FontAgent:
     def __init__(self):
         self.name = "font_agent"
         self.keyword_extraction_prompt = load_prompt("config/prompts/extract_keywords.txt")
+        self.config = load_config()
 
     def __call__(self, state: PosterState) -> PosterState:
         log_agent_info(self.name, "starting font styling")
@@ -42,7 +44,7 @@ class FontAgent:
             
             # apply styling to layout
             styled_layout = self._apply_styling(design_layout, color_scheme, keywords, state)
-            styling_interfaces = self.get_styling_interfaces()
+            styling_interfaces = self.get_styling_interfaces(state)
             
             state["styled_layout"] = styled_layout
             state["keywords"] = keywords
@@ -113,7 +115,7 @@ class FontAgent:
                 self._apply_section_container_styling(styled_element, colors, state)
                 
             elif element.get("type") in ["text", "visual", "mixed"]:
-                self._apply_content_styling(styled_element, colors, section_keywords)
+                self._apply_content_styling(styled_element, colors, section_keywords, state)
             
             elif element.get("type") in ["conf_logo", "aff_logo", "institution_logo", "logo_divider"]:
                 # logos don't need text styling
@@ -134,15 +136,21 @@ class FontAgent:
         """apply styling to title elements"""
         if element.get("content"):
             element["content"] = normalize_text_for_poster(element["content"])
-        element["font_family"] = "Helvetica Neue"
+        typography = resolve_typography_config(state, self.config)
+        visual_style = resolve_poster_visual_style(state, self.config)
+        main_title_style = visual_style.get("main_title", {}) if visual_style.get("enabled", False) else {}
+        element["font_family"] = main_title_style.get("font_family") or typography.get("fonts", {}).get("title", "Helvetica Neue")
         template_meta = (state or {}).get("layout_template_metadata") or {}
         header_color = (template_meta.get("style_tokens") or {}).get("header_background")
-        if template_meta.get("extracted_template") and header_color and self._is_dark_color(header_color):
+        if main_title_style.get("font_color"):
+            element["font_color"] = main_title_style["font_color"]
+        elif template_meta.get("extracted_template") and header_color and self._is_dark_color(header_color):
             element["font_color"] = "#FFFFFF"
         else:
             element["font_color"] = colors.get("text_on_theme", "#FFFFFF")
-        element["font_size"] = 100
-        element["author_font_size"] = 72
+        sizes = typography.get("sizes", {})
+        element["font_size"] = sizes.get("title", 100)
+        element["author_font_size"] = sizes.get("authors", 72)
         element["font_weight"] = "bold"
 
     def _is_dark_color(self, color: str) -> bool:
@@ -167,8 +175,9 @@ class FontAgent:
             element.setdefault("border_width", 1)
             element.setdefault("fill_color", "#FFFFFF")
 
-    def _apply_content_styling(self, element: Dict, colors: Dict, section_keywords: Dict):
+    def _apply_content_styling(self, element: Dict, colors: Dict, section_keywords: Dict, state: PosterState = None):
         """apply styling to content elements with keyword highlighting"""
+        typography = resolve_typography_config(state, self.config)
         # determine parent section for keyword lookup
         parent_section = self._extract_parent_section(element)
         keywords_for_section = section_keywords.get(parent_section, {})
@@ -193,9 +202,9 @@ class FontAgent:
                 log_agent_warning(self.name, f"Keywords found for {parent_section} ({total_keywords} total) but no highlighting applied")
         
         # apply base text styling
-        element["font_family"] = "Arial"
+        element["font_family"] = typography.get("fonts", {}).get("body_text", "Arial")
         element["font_color"] = colors.get("text", "#000000")
-        element["font_size"] = 44
+        element["font_size"] = typography.get("sizes", {}).get("body_text", 44)
 
     def _extract_parent_section(self, element: Dict) -> str:
         """extract parent section id from element"""
@@ -321,10 +330,9 @@ class FontAgent:
         
         return '\n'.join(formatted_lines)
 
-    def get_styling_interfaces(self) -> Dict[str, Any]:
+    def get_styling_interfaces(self, state: PosterState = None) -> Dict[str, Any]:
         """return interfaces for renderer to properly handle styled content"""
-        config = load_config()
-        font_params = config["typography"]
+        font_params = resolve_typography_config(state, self.config)
         
         return {
             "bullet_point_marker": "•",
@@ -359,7 +367,7 @@ class FontAgent:
         
         # styling interfaces
         with open(output_dir / "styling_interfaces.json", "w", encoding='utf-8') as f:
-            json.dump(state.get("styling_interfaces", self.get_styling_interfaces()), f, indent=2)
+            json.dump(state.get("styling_interfaces", self.get_styling_interfaces(state)), f, indent=2)
 
 
 def font_agent_node(state: PosterState) -> Dict[str, Any]:

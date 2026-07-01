@@ -19,6 +19,7 @@ from pptx.dml.color import RGBColor
 from src.state.poster_state import PosterState
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error
 from src.config.poster_config import load_config
+from src.utils.style_options import resolve_poster_visual_style, resolve_typography_config
 
 
 class Renderer:
@@ -40,6 +41,8 @@ class Renderer:
         log_agent_info(self.name, "Starting Rendering Process")
         
         try:
+            self.visual_style_config = resolve_poster_visual_style(state, self.config)
+            self.typography_config = resolve_typography_config(state, self.config)
             self.styling_interfaces = self._load_styling_interfaces(state)
             render_stage = state.get("render_stage", "final")
             suffix = "_draft" if render_stage == "draft" else ""
