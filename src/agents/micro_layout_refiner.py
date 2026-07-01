@@ -604,15 +604,6 @@ class MicroLayoutRefiner:
         best_overflow = overflow
         best_utilization = utilization
 
-        if state.get("enable_block_vlm_review", False):
-            return best_layout, {
-                "expanded": False,
-                "overflow": best_overflow,
-                "utilization": best_utilization,
-                "params": best_params,
-                "underflow_expansion_skipped": "block_refinement_enabled",
-            }
-
         if free_space < self.refine_config.get("underflow_expand_threshold", 1.0) or utilization >= target_utilization:
             return best_layout, {
                 "expanded": False,

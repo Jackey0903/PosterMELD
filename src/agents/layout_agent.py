@@ -3,6 +3,7 @@ precise layout generation using css box model
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
@@ -26,6 +27,7 @@ class LayoutAgent:
         self.authors_font_family = self.config["typography"]["fonts"]["authors"]
         self.section_title_font_family = self.config["typography"]["fonts"]["section_title"]
         self.body_text_font_family = self.config["typography"]["fonts"]["body_text"]
+        self.visual_style_config = self.config.get("poster_visual_style", {})
         # layout constants
         self.layout_constants = self.config["layout_constants"]
         self.column_balancing = self.config["column_balancing"]
@@ -420,6 +422,7 @@ class LayoutAgent:
                 }
                 self._apply_template_panel_style(section_container, base_layout)
                 self._apply_selective_block_frame_style(section_container, section, state, highlight_section_ids)
+                self._apply_visual_block_panel_style(section_container)
                 
                 # add debug border only if enabled
                 if self.show_debug_borders:
@@ -543,6 +546,30 @@ class LayoutAgent:
             section_container["border_width"] = float(highlight_config.get("normal_border_width", 0.7))
             section_container["border_style"] = highlight_config.get("normal_border_style", "solid")
         section_container["priority"] = min(float(section_container.get("priority", 0.1)), 0.09)
+
+    def _apply_visual_block_panel_style(self, section_container: Dict[str, Any]) -> None:
+        panel_style = (self.visual_style_config.get("block_panel") or {})
+        if not self.visual_style_config.get("enabled", False):
+            return
+        if not panel_style.get("enabled", False):
+            return
+        if not section_container.get("template_prior"):
+            return
+
+        section_container["fill_color"] = section_container.get("fill_color") or panel_style.get(
+            "fill_color",
+            "#F1F2F4",
+        )
+        border_color = str(panel_style.get("border_color") or "").strip()
+        border_width = float(panel_style.get("border_width", 0) or 0)
+        if border_color and border_width > 0:
+            section_container["border_color"] = border_color
+            section_container["border_width"] = border_width
+            section_container["border_style"] = panel_style.get("border_style", "solid")
+        shadow = panel_style.get("shadow")
+        if shadow and shadow.get("enabled", True):
+            section_container["shadow"] = shadow
+        section_container["priority"] = min(float(section_container.get("priority", 0.1)), 0.07)
 
     def _is_supporting_block(self, section: Dict[str, Any]) -> bool:
         highlight_config = self.config.get("selective_block_backgrounds", {})
@@ -1098,7 +1125,7 @@ class LayoutAgent:
         return elements
     
     def _create_section_title_design(self, section: Dict, column_x: float, start_y: float, column_width: float, state: PosterState) -> List[Dict]:
-        """create section title with colorblock styling"""
+        """create section title with a full-width word-art band."""
         elements = []
         section_title = section.get("section_title", "")
         section_id = section.get("section_id", "")
@@ -1117,66 +1144,67 @@ class LayoutAgent:
         # extract styling information
         title_styling = section_app.get("title_styling", {})
         accent_styling = section_app.get("accent_styling", {})
-        
-        # create title textbox positioning
-        title_padding = self.layout_constants["title_padding"]
-        title_width = column_width - (2 * title_padding)
-        base_title_x = column_x + title_padding
-        
+        section_style = self.visual_style_config.get("section_title", {}) if self.visual_style_config.get("enabled", False) else {}
+
         section_title_font_size = title_styling.get(
             "font_size",
-            self.config["typography"]["sizes"]["section_title"],
+            section_style.get("font_size", self.config["typography"]["sizes"]["section_title"]),
         )
-        
-        # calculate rectangle dimensions (same as before)
-        rect_height = section_title_font_size / 72  # convert pt to inches precisely
-        rect_width = rect_height * 0.618  # golden ratio width
-        
-        # apply user-requested coordinate modifications
-        rect_y_offset = 10 / 72  # 10pt converted to inches
-        title_x_offset = rect_height  # offset by rectangle height
-        
-        # create rectangle background element with y offset
-        rectangle_element = {
+        horizontal_padding = float(section_style.get("horizontal_padding_inches", 0.28))
+        vertical_padding = float(section_style.get("vertical_padding_inches", 0.04))
+        min_bar_height = float(section_title_font_size) / 72 + (2 * vertical_padding)
+        bar_height = max(float(section_style.get("bar_height_inches", min_bar_height)), min_bar_height)
+        bar_color = accent_styling.get("color") or section_style.get("bar_fill_color", "#06134A")
+        display_title = self._section_title_label(section, section_title)
+
+        bar_element = {
             "type": "title_accent_block",
-            "x": base_title_x,
-            "y": start_y + rect_y_offset,  # user modification: y + 10pt
-            "width": rect_width,
-            "height": rect_height,
+            "x": column_x,
+            "y": start_y,
+            "width": column_width,
+            "height": bar_height,
             "section_id": section_id,
             "lane_id": section.get("column_assignment"),
             "slot_id": section.get("slot_id"),
-            "color": accent_styling.get("color", "#335f91"),
+            "color": bar_color,
             "priority": 0.7
         }
-        elements.append(rectangle_element)
-        
-        # adjust title content (add 4 spaces prefix for rectangle_left template)
-        display_title = "    " + section_title
-        
-        # create title element with x offset using precise font-based height
-        precise_title_height = section_title_font_size / 72  # pt to inches
-        
+        elements.append(bar_element)
+
         title_element = {
             "type": "section_title",
-            "x": base_title_x + title_x_offset,  # x + rectangle height
-            "y": start_y,
-            "width": title_width,
-            "height": precise_title_height,
+            "x": column_x + horizontal_padding,
+            "y": start_y + vertical_padding,
+            "width": max(column_width - (2 * horizontal_padding), 0.1),
+            "height": max(bar_height - (2 * vertical_padding), 0.1),
             "section_id": section_id,
             "lane_id": section.get("column_assignment"),
             "slot_id": section.get("slot_id"),
             "section_title": display_title,
-            "font_family": title_styling.get("font_family", self.section_title_font_family),
+            "font_family": title_styling.get("font_family", section_style.get("font_family", self.section_title_font_family)),
             "font_size": section_title_font_size,
-            "font_weight": title_styling.get("font_weight", "bold"),
-            "font_color": title_styling.get("color", "#000000"),
-            "alignment": title_styling.get("alignment", "left"),
+            "font_weight": title_styling.get("font_weight", section_style.get("font_weight", "bold")),
+            "font_color": title_styling.get("color", section_style.get("font_color", "#FFFFFF")),
+            "alignment": title_styling.get("alignment", section_style.get("alignment", "left")),
+            "wordart_style": {
+                "name": "navy_band_serif",
+                "shadow": section_style.get("shadow", {}),
+            },
             "priority": 0.8
         }
         elements.append(title_element)
         
         return elements
+
+    def _section_title_label(self, section: Dict[str, Any], title: str) -> str:
+        raw_title = str(title or "").strip()
+        if re.match(r"^\d+[\.)]\s+", raw_title):
+            return raw_title
+        for key in ("slot_id", "column_assignment", "lane_id"):
+            match = re.search(r"(\d+)", str(section.get(key, "")))
+            if match:
+                return f"{int(match.group(1))}. {raw_title}"
+        return raw_title
     
     def _validate_precise_layout(self, layout_data: List[Dict], poster_width: float, 
                                poster_height: float) -> Dict[str, Any]:

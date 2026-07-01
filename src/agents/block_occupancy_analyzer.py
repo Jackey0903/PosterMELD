@@ -28,7 +28,7 @@ class BlockOccupancyAnalyzer:
         if not state.get("enable_block_vlm_review", False):
             return state
 
-        log_agent_info(self.name, "measuring block occupancy toward 95% utilization")
+        log_agent_info(self.name, "measuring block occupancy toward configured utilization target")
 
         try:
             report = self.analyze(state)
@@ -133,6 +133,8 @@ class BlockOccupancyAnalyzer:
         target_used_height = available_height * settings["target_utilization"]
         missing_height = max(target_used_height - used_height, 0.0)
         extra_lines = max(int(math.floor(missing_height / max(line_height, 0.01))), 0)
+        if extra_lines == 0 and missing_height >= settings["min_missing_height_for_expand"]:
+            extra_lines = 1
         target_extra_chars = int(extra_lines * chars_per_line * settings["safety_factor"])
         target_extra_chars = min(target_extra_chars, settings["max_extra_chars_per_block"])
         if target_extra_chars < settings["min_extra_chars"]:
@@ -232,6 +234,7 @@ class BlockOccupancyAnalyzer:
             "hard_max": float(self.block_config.get("hard_max", 0.98)),
             "safety_factor": float(self.block_config.get("safety_factor", 0.82)),
             "min_extra_chars": int(self.block_config.get("min_extra_chars", 40)),
+            "min_missing_height_for_expand": float(self.block_config.get("min_missing_height_for_expand", 0.25)),
             "max_extra_chars_per_block": int(self.block_config.get("max_extra_chars_per_block", 700)),
         }
 

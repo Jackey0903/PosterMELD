@@ -141,6 +141,47 @@ rendering:
   default_shape_fill: "#FFFFFF"
   section_title_chars_per_inch_at_48pt: 3.1
 
+poster_visual_style:
+  enabled: true
+  main_title:
+    font_family: "Georgia"
+    font_color: "#07164A"
+    author_font_family: "Arial"
+    author_font_color: "#111111"
+    shadow:
+      enabled: true
+      color: "#AEB5CC"
+      offset_x_inches: 0.035
+      offset_y_inches: 0.035
+  section_title:
+    font_family: "Georgia"
+    font_size: 48
+    font_weight: "bold"
+    font_color: "#FFFFFF"
+    alignment: "left"
+    bar_fill_color: "#06134A"
+    bar_height_inches: 0.78
+    horizontal_padding_inches: 0.28
+    vertical_padding_inches: 0.04
+    shadow:
+      enabled: true
+      color: "#B4BDD8"
+      offset_x_inches: 0.02
+      offset_y_inches: 0.02
+  block_panel:
+    enabled: true
+    fill_color: "#F1F2F4"
+    border_color: "#E5E7EE"
+    border_width: 0.25
+    border_style: "solid"
+    shadow:
+      enabled: true
+      color: "#000000"
+      alpha: 0.16
+      blur_pt: 5
+      distance_pt: 2.4
+      angle: 45
+
 selective_block_backgrounds:
   enabled: true
   frame_all_blocks: false
@@ -329,11 +370,11 @@ template_fast_mode:
     - "cluster_25_portrait"
     - "cluster_27_portrait"
     - "cluster_29_portrait"
-  emergency_repair_max_iterations: 1
-  hard_min_utilization: 0.88
-  emergency_underfill_threshold: 0.85
+  emergency_repair_max_iterations: 2
+  hard_min_utilization: 0.94
+  emergency_underfill_threshold: 0.92
   allow_text_fill_repair: true
-  fast_text_fill_max_extra_chars: 280
+  fast_text_fill_max_extra_chars: 420
   visual_policy:
     figure_count: 2
     table_count: 2
@@ -477,11 +518,12 @@ vlm_layout_review:
 
 block_refinement:
   enabled: false
-  target_utilization: 0.95
-  acceptable_min: 0.90
-  acceptable_max: 0.97
-  final_min_utilization: 0.88
-  hard_max: 0.98
+  target_utilization: 0.96
+  acceptable_min: 0.94
+  acceptable_max: 0.985
+  final_min_utilization: 0.94
+  final_mean_utilization: 0.96
+  hard_max: 0.985
   safety_factor: 0.82
   capacity_min_factor: 0.88
   capacity_max_factor: 1.08
@@ -495,6 +537,7 @@ block_refinement:
   visual_policy_too_small_width_inches: 13.0
   max_iterations: 2
   min_extra_chars: 20
+  min_missing_height_for_expand: 0.22
   vlm_underfilled_min_extra_chars: 120
   max_extra_chars_per_block: 620
   chars_per_bullet: 120
@@ -552,11 +595,11 @@ micro_layout_refinement:
   visual_scale_step: 0.05
   section_gap_step: 0.15
   max_iterations: 16
-  target_lane_utilization: 0.9
-  underflow_expand_threshold: 1.0
-  max_underflow_iterations: 8
-  max_body_font_boost: 8
-  max_section_title_font_boost: 4
+  target_lane_utilization: 0.96
+  underflow_expand_threshold: 0.45
+  max_underflow_iterations: 10
+  max_body_font_boost: 10
+  max_section_title_font_boost: 6
   body_font_boost_step: 2
   title_font_boost_step: 1
   section_gap_expand_step: 0.12

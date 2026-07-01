@@ -108,6 +108,7 @@ class PPTXDirector:
         border_color: Optional[str] = None,
         border_width: float = 1.0,
         border_style: str = "solid",
+        shadow: Optional[Dict[str, Any]] = None,
     ):
         """
         添加形状（如矩形、圆形等）。支持设置填充色和边框色。
@@ -130,8 +131,39 @@ class PPTXDirector:
                 ln.append(prstDash)
         else:
             shape.line.fill.background()
+
+        if shadow and shadow.get("enabled", True):
+            self._apply_outer_shadow(shape, shadow)
             
         return shape
+
+    def _apply_outer_shadow(self, shape, shadow: Dict[str, Any]) -> None:
+        """Apply a DrawingML outer shadow to a shape."""
+        color = str(shadow.get("color", "#000000")).lstrip("#")[:6].upper()
+        if len(color) != 6:
+            color = "000000"
+        alpha_raw = float(shadow.get("alpha", 0.16))
+        alpha = int(alpha_raw * 100000) if alpha_raw <= 1 else int(alpha_raw)
+        alpha = max(0, min(alpha, 100000))
+        blur_pt = max(float(shadow.get("blur_pt", shadow.get("blur", 4.0))), 0.0)
+        distance_pt = max(float(shadow.get("distance_pt", shadow.get("distance", 2.0))), 0.0)
+        angle = float(shadow.get("angle", 45.0))
+        blur_emu = int(blur_pt * 12700)
+        distance_emu = int(distance_pt * 12700)
+        direction = int(angle * 60000)
+
+        sp_pr = shape._element.spPr
+        for child in list(sp_pr):
+            if child.tag == qn("a:effectLst"):
+                sp_pr.remove(child)
+        effect_xml = (
+            f'<a:effectLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            f'<a:outerShdw blurRad="{blur_emu}" dist="{distance_emu}" dir="{direction}" '
+            f'algn="ctr" rotWithShape="0">'
+            f'<a:srgbClr val="{color}"><a:alpha val="{alpha}"/></a:srgbClr>'
+            f'</a:outerShdw></a:effectLst>'
+        )
+        sp_pr.append(parse_xml(effect_xml))
 
     def add_connector(
         self,

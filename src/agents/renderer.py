@@ -34,6 +34,7 @@ class Renderer:
         self.powerpoint_config = self.config["powerpoint"]
         self.indentation_config = self.config["indentation"]
         self.typography_config = self.config["typography"]
+        self.visual_style_config = self.config.get("poster_visual_style", {})
 
     def __call__(self, state: PosterState) -> PosterState:
         log_agent_info(self.name, "Starting Rendering Process")
@@ -177,6 +178,7 @@ class Renderer:
             fill_color=fill_color,
             border_color=border_color,
             border_width=border_width,
+            shadow=element.get("shadow"),
         )
 
     def _render_title(self, slide, element: Dict, state: PosterState):
@@ -196,6 +198,14 @@ class Renderer:
         author_font_size = self.styling_interfaces.get("font_sizes", {}).get("authors", 72)
         title_font_size = element.get("font_size", title_font_size)
         author_font_size = element.get("author_font_size", author_font_size)
+        style_enabled = self.visual_style_config.get("enabled", False)
+        title_style = self.visual_style_config.get("main_title", {}) if style_enabled else {}
+        title_font_family = element.get("font_family") or title_style.get("font_family", "Georgia")
+        author_font_family = element.get("author_font_family") or title_style.get("author_font_family", "Arial")
+        title_color = self._parse_color(element.get("font_color") or title_style.get("font_color", "#07164A"))
+        author_color = self._parse_color(title_style.get("author_font_color", "#333333"))
+        title_shadow_cfg = title_style.get("shadow") or {}
+        title_shadow = title_shadow_cfg if title_shadow_cfg.get("enabled", False) else None
 
         if authors_text:
             author_gap_inches = float(
@@ -220,10 +230,11 @@ class Renderer:
                 w.inches,
                 title_box_height,
                 font_size=title_font_size,
-                font_family=element.get("font_family", "Helvetica Neue"),
+                font_family=title_font_family,
                 bold=True,
-                color=RGBColor(0, 0, 0),
+                color=title_color,
                 line_spacing=self.typography_config["line_spacing"],
+                shadow=title_shadow,
             )
             self._add_title_textbox(
                 slide,
@@ -234,33 +245,28 @@ class Renderer:
                 w.inches,
                 min(author_box_height, max(y.inches + h.inches - author_y, 0.4)),
                 font_size=author_font_size,
-                font_family="Arial",
+                font_family=author_font_family,
                 bold=False,
-                color=RGBColor(60, 60, 60),
+                color=author_color,
                 line_spacing=self.typography_config["line_spacing"] + 0.1,
             )
             return
 
-        tb = slide.shapes.add_textbox(x, y, w, h)
-        tf = tb.text_frame
-        tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE  # Make sure title fits in the fixed-height textbox
-        tf.word_wrap = True
-        
-        # add title lines
-        for i, title_line in enumerate(title_lines):
-            if i == 0:
-                p = tf.paragraphs[0]
-            else:
-                p = tf.add_paragraph()
-            
-            p.text = title_line.strip()
-            p.font.name = element.get("font_family", "Helvetica Neue")
-            p.font.size = Pt(title_font_size)
-            p.font.bold = True
-            p.font.color.rgb = RGBColor(0, 0, 0)  # black for readability
-            p.alignment = PP_ALIGN.LEFT
-            p.line_spacing = self.typography_config["line_spacing"]
-            p.space_after = Pt(0)
+        self._add_title_textbox(
+            slide,
+            "\n".join(title_line.strip() for title_line in title_lines if title_line.strip()),
+            element,
+            x.inches,
+            y.inches,
+            w.inches,
+            h.inches,
+            font_size=title_font_size,
+            font_family=title_font_family,
+            bold=True,
+            color=title_color,
+            line_spacing=self.typography_config["line_spacing"],
+            shadow=title_shadow,
+        )
 
     def _add_title_textbox(
         self,
@@ -276,7 +282,25 @@ class Renderer:
         bold: bool,
         color: RGBColor,
         line_spacing: float,
+        alignment: str = "left",
+        shadow: Optional[Dict[str, Any]] = None,
     ):
+        if shadow and shadow.get("enabled", True):
+            self._add_title_textbox(
+                slide,
+                text,
+                element,
+                x + float(shadow.get("offset_x_inches", 0.04)),
+                y + float(shadow.get("offset_y_inches", 0.04)),
+                width,
+                height,
+                font_size=font_size,
+                font_family=font_family,
+                bold=bold,
+                color=self._parse_color(shadow.get("color", "#8E96B2")),
+                line_spacing=line_spacing,
+                alignment=alignment,
+            )
         tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(width), Inches(height))
         tf = tb.text_frame
         tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
@@ -287,7 +311,12 @@ class Renderer:
         p.font.size = Pt(font_size)
         p.font.bold = bold
         p.font.color.rgb = color
-        p.alignment = PP_ALIGN.LEFT
+        if alignment.lower() == "center":
+            p.alignment = PP_ALIGN.CENTER
+        elif alignment.lower() == "right":
+            p.alignment = PP_ALIGN.RIGHT
+        else:
+            p.alignment = PP_ALIGN.LEFT
         p.line_spacing = line_spacing
         p.space_before = Pt(0)
         p.space_after = Pt(0)
@@ -295,45 +324,93 @@ class Renderer:
 
     def _render_section_title(self, slide, element: Dict, state: PosterState):
         """render section title with enhanced styling"""
-        x, y, w, h = (Inches(element[k]) for k in ["x", "y", "width", "height"])
+        x, y, w, h = (float(element[k]) for k in ["x", "y", "width", "height"])
         
         section_title = element.get("section_title", "").strip()
         if not section_title:
             return
         
         log_agent_info(self.name, f"rendering section title: '{section_title}'")
-        
-        # create textbox for section title
-        textbox = slide.shapes.add_textbox(x, y, w, h)
+
+        style_enabled = self.visual_style_config.get("enabled", False)
+        section_style = self.visual_style_config.get("section_title", {}) if style_enabled else {}
+        section_title_font_size = self.styling_interfaces.get("font_sizes", {}).get("section_title", 48)
+        font_size = self._fit_section_title_font_size(section_title, element, section_title_font_size)
+        font_family = element.get("font_family") or section_style.get("font_family", "Georgia")
+        font_weight = element.get("font_weight", section_style.get("font_weight", "bold"))
+        font_color = element.get("font_color") or section_style.get("font_color", "#FFFFFF")
+        alignment = element.get("alignment", section_style.get("alignment", "left")).lower()
+        wordart_style = element.get("wordart_style") or {}
+        shadow = wordart_style.get("shadow") or section_style.get("shadow")
+
+        if shadow and shadow.get("enabled", True):
+            self._add_section_title_textbox(
+                slide,
+                section_title,
+                x + float(shadow.get("offset_x_inches", 0.025)),
+                y + float(shadow.get("offset_y_inches", 0.025)),
+                w,
+                h,
+                font_family,
+                font_size,
+                font_weight,
+                shadow.get("color", "#AEB6D6"),
+                alignment,
+            )
+
+        self._add_section_title_textbox(
+            slide,
+            section_title,
+            x,
+            y,
+            w,
+            h,
+            font_family,
+            font_size,
+            font_weight,
+            font_color,
+            alignment,
+        )
+
+    def _add_section_title_textbox(
+        self,
+        slide,
+        section_title: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        font_family: str,
+        font_size: int,
+        font_weight: str,
+        font_color: str,
+        alignment: str,
+    ):
+        textbox = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
         tf = textbox.text_frame
         tf.auto_size = MSO_AUTO_SIZE.NONE
         tf.word_wrap = False
         tf.clear()
-        tf.vertical_anchor = MSO_VERTICAL_ANCHOR.TOP
+        tf.vertical_anchor = MSO_VERTICAL_ANCHOR.MIDDLE
         
-        # use existing first paragraph to avoid extra newline
         if len(tf.paragraphs) > 0:
             p = tf.paragraphs[0]
         else:
             p = tf.add_paragraph()
         p.text = section_title
-        p.font.name = element.get("font_family", "Helvetica Neue")
-        section_title_font_size = self.styling_interfaces.get("font_sizes", {}).get("section_title", 48)
-        p.font.size = Pt(self._fit_section_title_font_size(section_title, element, section_title_font_size))
-        p.font.bold = element.get("font_weight", "bold") == "bold"
-        
-        # apply color styling
-        font_color = element.get("font_color", "#000000")
+        p.font.name = font_family
+        p.font.size = Pt(font_size)
+        p.font.bold = font_weight == "bold"
         p.font.color.rgb = self._parse_color(font_color)
-        
-        # apply alignment based on design template
-        alignment = element.get("alignment", "left").lower()
         if alignment == "center":
             p.alignment = PP_ALIGN.CENTER
         elif alignment == "right":
             p.alignment = PP_ALIGN.RIGHT
         else:
             p.alignment = PP_ALIGN.LEFT
+        p.space_before = Pt(0)
+        p.space_after = Pt(0)
+        return textbox
 
     def _fit_section_title_font_size(self, title: str, element: Dict, fallback_size: int) -> int:
         font_size = int(element.get("font_size", fallback_size))
@@ -357,7 +434,15 @@ class Renderer:
         
         log_agent_info(self.name, f"rendering title accent block: {fill_color} at ({x.inches:.2f}, {y.inches:.2f})")
         
-        self.director.add_shape(MSO_SHAPE.RECTANGLE, element["x"], element["y"], element["width"], element["height"], fill_color=fill_color)
+        self.director.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            element["x"],
+            element["y"],
+            element["width"],
+            element["height"],
+            fill_color=fill_color,
+            shadow=element.get("shadow"),
+        )
 
     def _render_title_accent_line(self, slide, element: Dict, state: PosterState):
         """render underline accent for section titles"""
@@ -368,7 +453,15 @@ class Renderer:
         
         log_agent_info(self.name, f"rendering title accent line: {fill_color} at ({x.inches:.2f}, {y.inches:.2f})")
         
-        self.director.add_shape(MSO_SHAPE.RECTANGLE, element["x"], element["y"], element["width"], element["height"], fill_color=fill_color)
+        self.director.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            element["x"],
+            element["y"],
+            element["width"],
+            element["height"],
+            fill_color=fill_color,
+            shadow=element.get("shadow"),
+        )
 
     def _render_section_container(self, slide, element: Dict, state: PosterState):
         """render section container with optional debug border and mono_light background for critical sections"""
@@ -412,6 +505,7 @@ class Renderer:
             border_color=border_color,
             border_width=border_width,
             border_style=border_style,
+            shadow=element.get("shadow"),
         )
 
     def _render_text(self, slide, element: Dict, state: PosterState):

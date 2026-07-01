@@ -9,14 +9,16 @@ from typing import Dict, Any, List
 
 from src.state.poster_state import PosterState
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error
+from src.config.poster_config import load_config
 
 
 class SectionTitleDesigner:
     def __init__(self):
         self.name = "section_title_designer"
+        self.config = load_config()
 
     def __call__(self, state: PosterState) -> PosterState:
-        log_agent_info(self.name, "generating section title styling (code-based, Style 2 only)")
+        log_agent_info(self.name, "generating section title styling (navy band word-art)")
         
         try:
             story_board = state.get("story_board")
@@ -51,7 +53,7 @@ class SectionTitleDesigner:
         
         sections = story_board.get("spatial_content_plan", {}).get("sections", [])
         
-        # color mapping from color_scheme for rectangle_left template
+        # color mapping from config for navy_band_wordart template
         colors = self._map_rectangle_colors(color_scheme)
         
         # applications for all sections
@@ -59,20 +61,21 @@ class SectionTitleDesigner:
         
         return {
             "section_title_design": {
-                "selected_template": "rectangle_left",
-                "design_rationale": "Code-generated rectangle_left template for modern, design-forward appearance with color accent",
+                "selected_template": "navy_band_wordart",
+                "design_rationale": "Code-generated full-width navy title band with serif word-art section text",
                 "color_palette": colors,
                 "spacing_specifications": {
-                    "title_left_padding": "4_spaces",
-                    "rectangle_to_content_gap": 0.15
+                    "title_left_padding_inches": colors["horizontal_padding_inches"],
+                    "bar_height_inches": colors["bar_height_inches"]
                 },
                 "section_applications": applications
             }
         }
 
     def _map_rectangle_colors(self, color_scheme: Dict) -> Dict:
-        """Map color scheme to rectangle_left template colors"""
+        """Map config to navy_band_wordart template colors"""
         
+        section_style = (self.config.get("poster_visual_style") or {}).get("section_title", {})
         theme_color = color_scheme.get("theme", "#1E3A8A")
         mono_light = color_scheme.get("mono_light", "#335f91")
         mono_dark = color_scheme.get("mono_dark", "#002c5e")
@@ -81,9 +84,16 @@ class SectionTitleDesigner:
             "theme_color": theme_color,
             "mono_light": mono_light,
             "mono_dark": mono_dark,
-            "title_text_color": "#000000",  # black for readability on colored background
-            "accent_rectangle_color": theme_color,
-            "background_color": "#FFFFFF"
+            "title_text_color": section_style.get("font_color", "#FFFFFF"),
+            "accent_rectangle_color": section_style.get("bar_fill_color", "#06134A"),
+            "background_color": "#FFFFFF",
+            "font_family": section_style.get("font_family", "Georgia"),
+            "font_size": section_style.get("font_size", 48),
+            "font_weight": section_style.get("font_weight", "bold"),
+            "alignment": section_style.get("alignment", "left"),
+            "bar_height_inches": section_style.get("bar_height_inches", 0.78),
+            "horizontal_padding_inches": section_style.get("horizontal_padding_inches", 0.28),
+            "shadow": section_style.get("shadow", {}),
         }
 
     def _generate_rectangle_applications(self, sections: List[Dict], colors: Dict) -> List[Dict]:
@@ -95,17 +105,18 @@ class SectionTitleDesigner:
                 "section_id": section["section_id"],
                 "section_title": section.get("section_title", ""),
                 "title_styling": {
-                    "font_family": "Helvetica Neue",
-                    "font_size": 48,  # this will be overridden by styling_interfaces font_sizes
-                    "font_weight": "bold",
+                    "font_family": colors["font_family"],
+                    "font_size": colors["font_size"],
+                    "font_weight": colors["font_weight"],
                     "color": colors["title_text_color"],
-                    "alignment": "left"
+                    "alignment": colors["alignment"]
                 },
                 "accent_styling": {
-                    "type": "rectangle",
+                    "type": "full_width_bar",
                     "color": colors["accent_rectangle_color"],
-                    "dimensions": {"width": "golden_ratio_based_on_height", "height": "title_height"},
-                    "position": "same_row"
+                    "dimensions": {"width": "full_block_width", "height_inches": colors["bar_height_inches"]},
+                    "position": "top_band",
+                    "shadow": colors["shadow"],
                 }
             }
             

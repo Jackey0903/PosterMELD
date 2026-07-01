@@ -226,10 +226,12 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
 
     block_settings = load_config().get("block_refinement", {})
     min_utilization = float(block_settings.get("final_min_utilization", 0.88))
+    min_mean_utilization = float(block_settings.get("final_mean_utilization", min_utilization))
     gate: Dict[str, Any] = {
         "source": "deterministic_final_gate",
         "accepted": True,
         "min_utilization": min_utilization,
+        "min_mean_utilization": min_mean_utilization,
         "failures": [],
     }
 
@@ -262,6 +264,15 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
             gate["failures"].append({"category": "occupancy", "reason": "no content blocks measured"})
         if low_blocks:
             gate["failures"].append({"category": "occupancy", "low_blocks": low_blocks})
+        mean_utilization = float((occupancy_report.get("summary") or {}).get("mean_utilization") or 0.0)
+        if occupancy_report.get("blocks") and mean_utilization < min_mean_utilization:
+            gate["failures"].append(
+                {
+                    "category": "occupancy_mean",
+                    "mean_utilization": mean_utilization,
+                    "required": min_mean_utilization,
+                }
+            )
     except Exception as exc:
         gate["failures"].append({"category": "occupancy", "reason": str(exc)})
 

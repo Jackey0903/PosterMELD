@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE
 
 from src.agents.affiliation_logo_agent import AffiliationLogoAgent
 from src.agents.adaptive_column_relayout import AdaptiveColumnRelayoutAgent
@@ -19,6 +20,7 @@ from src.agents.micro_layout_refiner import MicroLayoutRefiner
 from src.agents.parser import Parser
 from src.agents.poster_keypoint_selector import PosterKeypointSelector
 from src.agents.renderer import Renderer
+from src.agents.section_title_designer import SectionTitleDesigner
 from src.agents.standard_template_preselector import StandardTemplatePreselector
 from src.agents.template_capacity_planner import TemplateCapacityPlanner
 from src.agents.template_block_planner import TemplateBlockPlanner
@@ -38,6 +40,7 @@ from src.template_extraction.extract_templates import build_template
 from src.template_extraction.registry import list_extracted_template_ids, load_extracted_template
 from src.tools.image_api import ImageTools
 from src.tools.layout_api import LayoutTemplates
+from src.tools.pptx_api import PPTXDirector
 from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_for_poster
 from src.workflow.pipeline import _run_final_quality_gate, resolve_poster_dimensions
 
@@ -853,6 +856,49 @@ def test_layout_agent_new_landscape_header_keeps_title_and_logo_zone(tmp_path):
     assert title["author_font_size"] <= 72
 
 
+def test_layout_agent_section_title_uses_navy_band_wordart():
+    agent = LayoutAgent()
+    state = create_state("/tmp/paper.pdf")
+    section = {
+        "section_id": "method",
+        "section_title": "Method",
+        "column_assignment": "slot_3",
+        "slot_id": "slot_3",
+    }
+
+    elements = agent._create_section_title_design(section, column_x=1.0, start_y=2.0, column_width=6.0, state=state)
+
+    bar = next(element for element in elements if element["type"] == "title_accent_block")
+    title = next(element for element in elements if element["type"] == "section_title")
+    assert bar["x"] == pytest.approx(1.0)
+    assert bar["width"] == pytest.approx(6.0)
+    assert bar["color"] == "#06134A"
+    assert title["section_title"] == "3. Method"
+    assert title["font_family"] == "Georgia"
+    assert title["font_color"] == "#FFFFFF"
+    assert title["wordart_style"]["name"] == "navy_band_serif"
+
+
+def test_section_title_designer_emits_navy_band_template():
+    state = create_state("/tmp/paper.pdf")
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {"section_id": "method", "section_title": "Method"},
+            ]
+        }
+    }
+    state["color_scheme"] = {"theme": "#335f91", "mono_light": "#8AA0BA", "mono_dark": "#001E44"}
+
+    result = SectionTitleDesigner()(state)
+
+    design = result["section_title_design"]["section_title_design"]
+    assert design["selected_template"] == "navy_band_wordart"
+    application = design["section_applications"][0]
+    assert application["accent_styling"]["type"] == "full_width_bar"
+    assert application["title_styling"]["font_family"] == "Georgia"
+
+
 def test_layout_agent_uses_manual_aff_logo_with_conference_logo(tmp_path):
     conf_path = tmp_path / "conference.png"
     aff_path = tmp_path / "affiliation.png"
@@ -1025,6 +1071,7 @@ def test_renderer_draws_explicit_section_container_fill_for_standard_templates()
         "border_color": "#C9DDF5",
         "border_width": 0.9,
         "border_style": "dashed",
+        "shadow": {"enabled": True, "color": "#000000", "alpha": 0.16},
     }
 
     renderer._render_section_container(None, element, create_state("/tmp/paper.pdf"))
@@ -1033,6 +1080,25 @@ def test_renderer_draws_explicit_section_container_fill_for_standard_templates()
     assert calls[0][1]["fill_color"] == "#F0F6FF"
     assert calls[0][1]["border_color"] == "#C9DDF5"
     assert calls[0][1]["border_style"] == "dashed"
+    assert calls[0][1]["shadow"] == element["shadow"]
+
+
+def test_pptx_director_add_shape_applies_outer_shadow_xml():
+    director = PPTXDirector()
+
+    shape = director.add_shape(
+        MSO_SHAPE.RECTANGLE,
+        0.1,
+        0.1,
+        1.0,
+        1.0,
+        fill_color="#F1F2F4",
+        shadow={"enabled": True, "color": "#000000", "alpha": 0.16, "blur_pt": 5, "distance_pt": 2.4},
+    )
+
+    xml = shape._element.xml
+    assert "outerShdw" in xml
+    assert 'alpha val="16000"' in xml
 
 
 def test_renderer_draws_background_image_before_layout(tmp_path):
@@ -1094,7 +1160,7 @@ def test_renderer_separates_title_and_authors_with_physical_gap():
 
     renderer._render_title(slide, element, create_state("/tmp/paper.pdf"))
 
-    assert len(slide.shapes) == before_shape_count + 2
+    assert len(slide.shapes) == before_shape_count + 3
     title_box = slide.shapes[-2]
     author_box = slide.shapes[-1]
     actual_gap = author_box.top.inches - (title_box.top.inches + title_box.height.inches)
@@ -3227,6 +3293,28 @@ def test_final_quality_gate_rejects_block_below_hard_minimum(tmp_path):
     assert (content_dir / "final_quality_gate.json").exists()
 
 
+def test_final_quality_gate_rejects_mean_below_96_percent(tmp_path):
+    state = _block_refinement_state(tmp_path, utilization=0.95)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_poster_accepted"] is False
+    assert result["final_quality_gate"]["accepted"] is False
+    assert any(
+        failure["category"] == "occupancy_mean"
+        for failure in result["final_quality_gate"]["failures"]
+    )
+
+
 def test_block_content_refiner_expands_underfilled_block_without_changing_refs(tmp_path, monkeypatch):
     state = _block_refinement_state(tmp_path, utilization=0.45)
     state["block_occupancy_report"] = BlockOccupancyAnalyzer().analyze(state)
@@ -3520,7 +3608,7 @@ def test_block_content_refiner_fast_allows_light_text_fill_repair(tmp_path):
 
     assert actions
     assert actions[0]["action"] == "expand"
-    assert actions[0]["target_extra_chars"] <= 280
+    assert actions[0]["target_extra_chars"] <= 420
 
 
 def test_block_vlm_reviewer_falls_back_when_request_fails(tmp_path, monkeypatch):
