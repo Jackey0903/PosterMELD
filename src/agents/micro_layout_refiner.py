@@ -700,7 +700,15 @@ class MicroLayoutRefiner:
                     child["x"] = lane["x"] + child_x_offset
                     child["y"] = section_y + child_y_offset
                     child["height"] = max(child.get("height", 0.3) * title_scale, 0.08)
-                    child["width"] = max(child.get("width", 0.3) * title_scale, 0.08)
+                    if (
+                        child_type in {"title_accent_block", "title_accent_line"}
+                        and abs(child_x_offset) <= 0.05
+                        and float(child.get("width", 0.0) or 0.0) >= float(container.get("width", lane["w"]) or lane["w"]) * 0.9
+                    ):
+                        child["x"] = lane["x"]
+                        child["width"] = lane["w"]
+                    else:
+                        child["width"] = max(child.get("width", 0.3) * title_scale, 0.08)
                 rebuilt_children.append(child)
                 content_bottom = max(content_bottom, child["y"] + child["height"])
 

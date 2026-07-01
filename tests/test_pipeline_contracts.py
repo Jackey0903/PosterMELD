@@ -1167,6 +1167,40 @@ def test_renderer_separates_title_and_authors_with_physical_gap():
     assert actual_gap == pytest.approx(16 / 72, abs=0.01)
 
 
+def test_renderer_main_title_visual_style_overrides_element_color():
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    renderer = Renderer()
+    renderer.styling_interfaces = {"font_sizes": {"title": 100, "authors": 72}}
+    element = {
+        "type": "title",
+        "x": 1,
+        "y": 1,
+        "width": 12,
+        "height": 4,
+        "content": "Styled Title\nA. Author",
+        "font_color": "#FFFFFF",
+        "font_family": "Helvetica Neue",
+    }
+
+    renderer._render_title(slide, element, create_state("/tmp/paper.pdf"))
+
+    title_box = slide.shapes[-2]
+    paragraph = title_box.text_frame.paragraphs[0]
+    assert paragraph.font.name == "Georgia"
+    assert str(paragraph.font.color.rgb) == "07164A"
+
+
+def test_renderer_tokenizer_consumes_malformed_markdown_marker():
+    renderer = Renderer()
+    text = "*Ablation:** Tabular records are slightly stronger than imagery alone."
+
+    segments = renderer._tokenize_formatting(text)
+
+    assert "".join(segment["text"] for segment in segments)
+    assert any(segment["text"] == "*" for segment in segments)
+
+
 def test_block_template_registry_exposes_cluster_templates():
     template_ids = set(list_block_template_ids())
 
@@ -2832,6 +2866,62 @@ def test_micro_layout_refiner_expands_underfilled_lane():
 
     assert refined_bottom > original_bottom
     assert refined_bottom <= left_lane["y"] + left_lane["h"] + 0.05
+
+
+def test_micro_layout_refiner_does_not_scale_full_width_title_bar():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_104_landscape")
+    lane = {"id": "slot_5", "x": 1.0, "y": 5.0, "w": 10.0, "h": 10.0}
+    group = {
+        "section_id": "slot_5_eval_setup",
+        "container": {
+            "type": "section_container",
+            "section_id": "slot_5_eval_setup",
+            "lane_id": "slot_5",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": 3.0,
+        },
+        "children": [
+            {
+                "type": "title_accent_block",
+                "section_id": "slot_5_eval_setup",
+                "lane_id": "slot_5",
+                "x": lane["x"],
+                "y": lane["y"],
+                "width": lane["w"],
+                "height": 0.78,
+            },
+            {
+                "type": "section_title",
+                "section_id": "slot_5_eval_setup",
+                "lane_id": "slot_5",
+                "x": lane["x"] + 0.28,
+                "y": lane["y"] + 0.04,
+                "width": lane["w"] - 0.56,
+                "height": 0.7,
+                "font_size": 48,
+            },
+        ],
+    }
+    params = {
+        "section_gap": 0.5,
+        "title_to_content_gap": 0.25,
+        "visual_gap": 0.18,
+        "text_padding": 0.24,
+        "body_font_reduction": 0,
+        "title_font_reduction": 0,
+        "body_font_boost": 0,
+        "title_font_boost": 4,
+        "visual_scale": 1.0,
+    }
+
+    elements, _ = refiner._layout_section(group, lane, lane["y"], state, params, {"template_name": "cluster_104_landscape"})
+
+    bar = next(element for element in elements if element["type"] == "title_accent_block")
+    assert bar["x"] == pytest.approx(lane["x"])
+    assert bar["width"] == pytest.approx(lane["w"])
 
 
 def test_micro_layout_refiner_validation_rejects_child_outside_container():

@@ -200,9 +200,9 @@ class Renderer:
         author_font_size = element.get("author_font_size", author_font_size)
         style_enabled = self.visual_style_config.get("enabled", False)
         title_style = self.visual_style_config.get("main_title", {}) if style_enabled else {}
-        title_font_family = element.get("font_family") or title_style.get("font_family", "Georgia")
-        author_font_family = element.get("author_font_family") or title_style.get("author_font_family", "Arial")
-        title_color = self._parse_color(element.get("font_color") or title_style.get("font_color", "#07164A"))
+        title_font_family = title_style.get("font_family") or element.get("font_family", "Georgia")
+        author_font_family = title_style.get("author_font_family") or element.get("author_font_family", "Arial")
+        title_color = self._parse_color(title_style.get("font_color") or element.get("font_color", "#07164A"))
         author_color = self._parse_color(title_style.get("author_font_color", "#333333"))
         title_shadow_cfg = title_style.get("shadow") or {}
         title_shadow = title_shadow_cfg if title_shadow_cfg.get("enabled", False) else None
@@ -756,7 +756,17 @@ class Renderer:
                 })
             
             if next_format:
-                i += next_format.start()
+                if next_format.start() == 0:
+                    marker = next_format.group(1)
+                    segments.append({
+                        'text': marker,
+                        'bold': False,
+                        'italic': False,
+                        'color': None
+                    })
+                    i += len(marker)
+                else:
+                    i += next_format.start()
             else:
                 break
         
