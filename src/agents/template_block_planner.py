@@ -18,6 +18,7 @@ from src.state.poster_state import PosterState
 from src.tools.layout_api import LayoutTemplates
 from src.template_extraction.block_template_registry import is_block_template_id
 from src.utils.text_cleanup import normalize_text_for_poster, repair_truncated_sentence_end
+from src.utils.visual_footprint import visual_requirements
 from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success, log_agent_warning
 
@@ -678,6 +679,7 @@ class TemplatePriorPlanner:
                 "max_chars": int(fast_budget.get("max_chars") or budget["max_chars"]),
                 "target_bullets": int(fast_budget.get("target_bullets") or budget["target_bullets"]),
                 "visual_policy": fast_budget.get("visual_policy") or budget.get("visual_policy"),
+                "visual_footprint": fast_budget.get("visual_footprint"),
                 "capacity_warning": fast_budget.get("capacity_warning"),
                 "hard_min_utilization": fast_budget.get("hard_min_utilization"),
                 "source_keypoint_ids": fast_budget.get("source_keypoint_ids") or [],
@@ -736,7 +738,19 @@ class TemplatePriorPlanner:
                 aspect = float(asset.get("aspect") or 1.0)
             original_height = visual_width / max(aspect, 0.2)
             scale = 0.8 if original_height > slot_height * 0.4 else 1.0
-            total += original_height * scale
+            footprint = visual_requirements(
+                visual_id,
+                asset,
+                {
+                    "w": visual_width,
+                    "h": slot_height,
+                    "poster_orientation": "portrait"
+                    if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0)
+                    else "landscape",
+                },
+                self.config,
+            )
+            total += max(original_height * scale, float(footprint.get("min_height") or 0.0))
         return total
 
     def _visual_policy(self, section: Dict[str, Any], visual_width: float, state: PosterState) -> str:

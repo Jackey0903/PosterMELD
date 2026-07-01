@@ -313,7 +313,7 @@ def test_curator_groups_keypoints_for_dense_landscape_template(tmp_path):
     assert all(section.get("source_keypoint_ids") for section in sections)
     assert "figure_2" in visual_ids
     assert "figure_3" in visual_ids
-    assert "table_3" in visual_ids
+    assert "table_3" not in visual_ids
 
 
 def test_curator_groups_keypoints_for_six_slot_landscape_template(tmp_path):
@@ -418,6 +418,8 @@ def test_template_capacity_planner_applies_rich_visual_density(tmp_path):
     assert result["fast_visual_policy"]["figure_count"] == 3
     assert result["fast_visual_policy"]["table_count"] == 2
     assert result["fast_visual_policy"]["max_visuals_total"] == 5
+    assert result["fast_visual_policy"]["visual_footprint"]["enabled"] is True
+    assert result["fast_block_contract"]["by_slot"]["slot_2"]["visual_footprint"]["min_width"] > 0
 
 
 def test_standard_template_preselector_auto_selects_dense_landscape_template(tmp_path):
@@ -2960,6 +2962,122 @@ def test_micro_layout_refiner_does_not_scale_full_width_title_bar():
     assert bar["width"] == pytest.approx(lane["w"])
 
 
+def test_micro_layout_refiner_preserves_visual_scale_floor_for_key_visual():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_104_landscape")
+    state["template_fast_mode"] = True
+    groups = [
+        {
+            "container": {"importance_level": 1},
+            "children": [{"type": "visual", "visual_id": "figure_1"}],
+        }
+    ]
+    params = {
+        "section_gap": 0.5,
+        "title_to_content_gap": 0.25,
+        "visual_gap": 0.18,
+        "text_padding": 0.24,
+        "body_font_reduction": 0,
+        "title_font_reduction": 0,
+        "body_font_boost": 0,
+        "title_font_boost": 0,
+        "visual_scale": 1.0,
+    }
+
+    tightened = refiner._tighten_params(params, groups, state, {"template_name": "cluster_104_landscape"})
+
+    assert tightened["visual_scale"] == pytest.approx(1.0)
+
+
+def test_micro_layout_refiner_enlarges_visual_to_footprint_contract():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_104_landscape")
+    state["template_fast_mode"] = True
+    state["visual_assets"] = {"figure_2": {"asset_type": "figure", "aspect": 2.84}}
+    lane = {"id": "slot_2", "x": 1.0, "y": 5.0, "w": 17.16, "h": 7.15}
+    group = {
+        "section_id": "slot_2_method",
+        "container": {
+            "type": "section_container",
+            "section_id": "slot_2_method",
+            "lane_id": "slot_2",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": 4.0,
+            "importance_level": 1,
+        },
+        "children": [
+            {
+                "type": "visual",
+                "id": "slot_2_method_visual_figure_2",
+                "visual_id": "figure_2",
+                "section_id": "slot_2_method",
+                "lane_id": "slot_2",
+                "x": lane["x"] + 4.0,
+                "y": lane["y"],
+                "width": 7.84,
+                "height": 2.76,
+            }
+        ],
+    }
+    params = {
+        "section_gap": 0.5,
+        "title_to_content_gap": 0.25,
+        "visual_gap": 0.18,
+        "text_padding": 0.24,
+        "body_font_reduction": 0,
+        "title_font_reduction": 0,
+        "body_font_boost": 0,
+        "title_font_boost": 0,
+        "visual_scale": 0.85,
+    }
+
+    elements, _ = refiner._layout_section(group, lane, lane["y"], state, params, {"template_name": "cluster_104_landscape"})
+
+    visual = next(element for element in elements if element.get("type") == "visual")
+    assert visual["width"] >= 10.5
+    assert visual["visual_footprint"]["ok"] is True
+
+
+def test_micro_layout_force_fit_preserves_visual_footprint_contract():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_104_landscape", width=54, height=27)
+    state["template_fast_mode"] = True
+    state["visual_assets"] = {"figure_2": {"asset_type": "figure", "aspect": 2.84}}
+    lane = {"id": "slot_2", "x": 18.94, "y": 5.35, "w": 17.16, "h": 7.15}
+    layout = [
+        {
+            "type": "visual",
+            "id": "slot_2_method_visual_figure_2",
+            "visual_id": "figure_2",
+            "section_id": "slot_2_method_visual",
+            "lane_id": "slot_2",
+            "x": lane["x"] + 3.0,
+            "y": lane["y"] + 0.9,
+            "width": 11.17,
+            "height": 3.93,
+        },
+        {
+            "type": "text",
+            "id": "slot_2_method_visual_text",
+            "section_id": "slot_2_method_visual",
+            "lane_id": "slot_2",
+            "x": lane["x"] + 0.3,
+            "y": lane["y"] + 6.8,
+            "width": 16.5,
+            "height": 1.0,
+            "font_size": 44,
+        },
+    ]
+
+    compressed = refiner._force_fit_lane(layout, lane, state, {"template_name": "cluster_104_landscape"})
+
+    visual = next(element for element in compressed if element.get("type") == "visual")
+    assert visual["width"] >= 10.63
+    assert visual["visual_footprint"]["ok"] is True
+
+
 def test_micro_layout_refiner_validation_rejects_child_outside_container():
     state = create_state("/tmp/paper.pdf", layout_template="three_column_postergen")
     template = LayoutTemplates(54, 36, margin=1.0, col_gap=1.0).get_template(
@@ -3437,6 +3555,43 @@ def test_final_quality_gate_rejects_mean_below_96_percent(tmp_path):
     assert result["final_quality_gate"]["accepted"] is False
     assert any(
         failure["category"] == "occupancy_mean"
+        for failure in result["final_quality_gate"]["failures"]
+    )
+
+
+def test_final_quality_gate_rejects_visual_below_footprint_contract(tmp_path):
+    state = _block_refinement_state(tmp_path, utilization=0.96)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    state["visual_assets"] = {"figure_1": {"asset_type": "figure", "aspect": 2.8}}
+    state["styled_layout"].append(
+        {
+            "type": "visual",
+            "id": "method_visual_figure_1",
+            "visual_id": "figure_1",
+            "section_id": "method",
+            "lane_id": "slot_1",
+            "slot_id": "method_visual_figure_1",
+            "x": 2.0,
+            "y": 4.0,
+            "width": 6.0,
+            "height": 2.1,
+        }
+    )
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_poster_accepted"] is False
+    assert result["final_quality_gate"]["accepted"] is False
+    assert any(
+        failure["category"] == "visual_footprint"
         for failure in result["final_quality_gate"]["failures"]
     )
 

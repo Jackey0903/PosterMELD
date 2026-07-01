@@ -16,6 +16,7 @@ from src.config.poster_config import load_config
 from src.layout.text_height_measurement import measure_text_height
 from src.state.poster_state import PosterState
 from src.tools.layout_api import LayoutTemplates
+from src.utils.visual_footprint import enforce_visual_footprint, visual_footprint_config
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success, log_agent_warning
 
 
@@ -468,6 +469,10 @@ class MicroLayoutRefiner:
                 "title_font_reduction": 10,
                 "visual_scale": 0.82,
             })
+        params["visual_scale"] = max(
+            params["visual_scale"],
+            self._visual_scale_floor(groups, state, template_layout),
+        )
 
         best_layout = None
         best_overflow = float("inf")
@@ -510,7 +515,7 @@ class MicroLayoutRefiner:
                     },
                 }
 
-            params = self._tighten_params(params)
+            params = self._tighten_params(params, groups, state, template_layout)
 
         if self._is_soft_portrait_template(template_layout) and best_overflow <= 0.5:
             return {
@@ -537,7 +542,13 @@ class MicroLayoutRefiner:
             },
         }
 
-    def _tighten_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _tighten_params(
+        self,
+        params: Dict[str, Any],
+        groups: Optional[List[Dict[str, Any]]] = None,
+        state: Optional[PosterState] = None,
+        template_layout: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         tightened = deepcopy(params)
         tightened["section_gap"] = max(
             self.refine_config["min_section_gap"],
@@ -557,8 +568,14 @@ class MicroLayoutRefiner:
         )
         tightened["body_font_reduction"] += self.refine_config["body_font_shrink_step"]
         tightened["title_font_reduction"] += self.refine_config["title_font_shrink_step"]
+        min_visual_scale = self.refine_config["min_visual_scale"]
+        if groups is not None and state is not None and template_layout is not None:
+            min_visual_scale = max(
+                min_visual_scale,
+                self._visual_scale_floor(groups, state, template_layout),
+            )
         tightened["visual_scale"] = max(
-            self.refine_config["min_visual_scale"],
+            min_visual_scale,
             tightened["visual_scale"] - self.refine_config["visual_scale_step"],
         )
         return tightened
@@ -731,14 +748,34 @@ class MicroLayoutRefiner:
         else:
             visual_available_width = self._get_visual_width_for_lane(lane, state, template_layout, params)
             for visual in visual_elements:
+                lane_for_footprint = dict(lane)
+                lane_for_footprint.setdefault(
+                    "poster_orientation",
+                    template_layout.get("orientation")
+                    or (
+                        "portrait"
+                        if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0)
+                        else "landscape"
+                    ),
+                )
                 aspect_ratio = visual.get("width", 1.0) / max(visual.get("height", 0.01), 0.01)
                 scaled_width = min(visual_available_width, visual.get("width", visual_available_width) * params["visual_scale"])
                 scaled_height = scaled_width / max(aspect_ratio, 0.01)
+                scaled_width, scaled_height, footprint_report = enforce_visual_footprint(
+                    visual.get("visual_id") or visual.get("id"),
+                    scaled_width,
+                    scaled_height,
+                    visual_available_width,
+                    lane_for_footprint,
+                    state,
+                    self.config,
+                )
 
                 visual["width"] = scaled_width
                 visual["height"] = scaled_height
                 visual["x"] = lane["x"] + (lane["w"] - scaled_width) / 2
                 visual["y"] = current_y
+                visual["visual_footprint"] = footprint_report
 
                 rebuilt_children.append(visual)
                 current_y = visual["y"] + visual["height"] + params["visual_gap"]
@@ -930,6 +967,33 @@ class MicroLayoutRefiner:
             visual_width = min(visual_width, visual_width_cap * params["visual_scale"])
         return max(visual_width, 0.4)
 
+    def _visual_scale_floor(
+        self,
+        groups: List[Dict[str, Any]],
+        state: PosterState,
+        template_layout: Dict[str, Any],
+    ) -> float:
+        if not state.get("template_fast_mode"):
+            return float(self.refine_config.get("min_visual_scale", 0.72))
+        if not any(
+            child.get("type") == "visual"
+            for group in groups
+            for child in group.get("children", [])
+        ):
+            return float(self.refine_config.get("min_visual_scale", 0.72))
+        cfg = visual_footprint_config(self.config)
+        floor = float(cfg.get("min_visual_scale_in_visual_blocks", 0.95) or 0.95)
+        has_key_visual = any(
+            int((group.get("container") or {}).get("importance_level") or 2) <= 1
+            for group in groups
+            if any(child.get("type") == "visual" for child in group.get("children", []))
+        )
+        if has_key_visual:
+            floor = max(floor, float(cfg.get("key_visual_min_scale", 1.0) or 1.0))
+        if self._is_soft_portrait_template(template_layout):
+            floor = min(floor, 0.95)
+        return max(float(self.refine_config.get("min_visual_scale", 0.72)), floor)
+
     def _is_soft_portrait_template(self, template_layout: Dict[str, Any]) -> bool:
         lanes = template_layout.get("lanes") or []
         is_vertical_stack = bool(lanes) and len({round(lane.get("x", 0), 3) for lane in lanes}) == 1
@@ -983,6 +1047,30 @@ class MicroLayoutRefiner:
                 center_x = lane["x"] + lane["w"] / 2
                 item["width"] = new_width
                 item["x"] = center_x - new_width / 2
+                lane_for_footprint = dict(lane)
+                lane_for_footprint.setdefault(
+                    "poster_orientation",
+                    template_layout.get("orientation")
+                    or (
+                        "portrait"
+                        if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0)
+                        else "landscape"
+                    ),
+                )
+                max_visual_width = max(lane["w"] - 2 * self.refine_config.get("min_text_padding", 0.18), 0.4)
+                protected_width, protected_height, footprint_report = enforce_visual_footprint(
+                    item.get("visual_id") or item.get("id"),
+                    item["width"],
+                    item["height"],
+                    max_visual_width,
+                    lane_for_footprint,
+                    state,
+                    self.config,
+                )
+                item["width"] = protected_width
+                item["height"] = protected_height
+                item["x"] = center_x - protected_width / 2
+                item["visual_footprint"] = footprint_report
             elif item.get("type") in {"title_accent_block", "title_accent_line"}:
                 original_width = item.get("width", 0.2)
                 item["width"] = max(original_width * compression_ratio, 0.05)

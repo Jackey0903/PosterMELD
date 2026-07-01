@@ -17,6 +17,7 @@ from src.state.poster_state import PosterState
 from src.template_extraction.block_template_registry import is_block_template_id
 from src.tools.layout_api import LayoutTemplates
 from src.utils.style_options import normalize_visual_density, resolve_visual_density_settings
+from src.utils.visual_footprint import visual_footprint_config, visual_requirements
 from utils.src.logging_utils import log_agent_info, log_agent_success
 
 
@@ -100,7 +101,8 @@ class TemplateCapacityPlanner:
         for slot_id in slot_order:
             if slot_id not in slot_specs:
                 continue
-            region = regions[slot_id]
+            region = dict(regions[slot_id])
+            region.setdefault("poster_orientation", template_layout.get("orientation"))
             spec = slot_specs[slot_id]
             min_chars = int(spec.get("min_chars", 90))
             target_chars = int(spec.get("target_chars", max(min_chars, 120)))
@@ -128,6 +130,7 @@ class TemplateCapacityPlanner:
                 "hard_min_utilization": float(self.fast_config.get("hard_min_utilization", 0.88)),
                 "hard_max": float(self.config.get("block_refinement", {}).get("hard_max", 0.98)),
                 "capacity_warning": None,
+                "visual_footprint": self._visual_footprint_for_policy(spec.get("visual_policy") or "text_only", region),
                 "source": "fast_template_first_fixed_contract",
             })
 
@@ -193,7 +196,16 @@ class TemplateCapacityPlanner:
             "table_max_height_fraction": policy.get("table_max_height_fraction", 0.62),
             "default_max_height_fraction": policy.get("default_max_height_fraction", 0.42),
             "table_unreadable_strategy": policy.get("table_unreadable_strategy") or "summarize_as_text",
+            "visual_footprint": visual_footprint_config(self.config),
         }
+
+    def _visual_footprint_for_policy(self, visual_policy: str, region: Dict[str, Any]) -> Dict[str, Any]:
+        visual_policy = str(visual_policy or "")
+        if "figure" in visual_policy:
+            return visual_requirements("figure_contract", {"asset_type": "figure"}, region, self.config)
+        if "table" in visual_policy:
+            return visual_requirements("table_contract", {"asset_type": "table"}, region, self.config)
+        return {"enabled": bool(visual_footprint_config(self.config).get("enabled", True)), "visual_type": "none"}
 
     def _merge_slot_order(self, primary: List[str], fallback: List[str]) -> List[str]:
         ordered: List[str] = []
@@ -233,7 +245,9 @@ class TemplateCapacityPlanner:
                 configured_figure_slots,
                 configured_table_slots,
             )
-            capacity = self._estimate_capacity(regions[slot_id], visual_policy)
+            region = dict(regions[slot_id])
+            region.setdefault("poster_orientation", template_layout.get("orientation"))
+            capacity = self._estimate_capacity(region, visual_policy)
             specs[slot_id] = {
                 "role": role_spec["role"],
                 "content_role": role_spec["content_role"],
@@ -316,9 +330,11 @@ class TemplateCapacityPlanner:
         padding = float(block_cfg.get("section_padding_inches", 0.4))
         visual_reserved = 0.0
         if "figure" in visual_policy:
-            visual_reserved = height * 0.58
+            footprint = visual_requirements("figure_contract", {"asset_type": "figure"}, region, self.config)
+            visual_reserved = max(height * 0.58, float(footprint.get("min_height") or 0.0))
         elif "table" in visual_policy:
-            visual_reserved = height * 0.50
+            footprint = visual_requirements("table_contract", {"asset_type": "table"}, region, self.config)
+            visual_reserved = max(height * 0.50, float(footprint.get("min_height") or 0.0))
         line_height = max((float((typography.get("sizes") or {}).get("body_text", 44)) / 72.0) * 1.05, 0.32)
         chars_per_inch = float(block_cfg.get("ppt_chars_per_inch_at_44pt", 4.2))
         chars_per_line = max(20, int(max(width - padding * 2, 0.5) * chars_per_inch))

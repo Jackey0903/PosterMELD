@@ -18,6 +18,7 @@ from src.layout.template_selector import TemplateSelector
 from src.tools.layout_api import LayoutTemplates
 from src.template_extraction.block_template_registry import get_block_template_info, is_block_template_id
 from src.utils.text_cleanup import normalize_text_for_poster
+from src.utils.visual_footprint import visual_slot_is_feasible
 from jinja2 import Template
 
 class StoryBoardCurator:
@@ -716,6 +717,7 @@ class StoryBoardCurator:
             "template_fast_mode": bool(state.get("template_fast_mode")),
             "fast_block_contract": state.get("fast_block_contract") or {},
             "fast_visual_policy": state.get("fast_visual_policy") or {},
+            "visual_assets": state.get("visual_assets") or {},
             "paper_poster_keypoints": state.get("paper_poster_keypoints") or [],
             "poster_reading_order": state.get("poster_reading_order") or [],
             "keypoint_target_count": min(len(state.get("paper_poster_keypoints") or []), 10)
@@ -1392,6 +1394,12 @@ class StoryBoardCurator:
             holder = slot_map.get(slot_id)
             if not holder:
                 return False
+            if not self._slot_can_hold_visual(slot_id, visual_id, visual_context):
+                log_agent_info(
+                    self.name,
+                    f"skip {visual_id} in {slot_id}: below visual footprint feasibility",
+                )
+                return False
             self._set_single_visual(holder, visual_id, purpose)
             holder["importance_level"] = min(int(holder.get("importance_level") or importance), importance)
             used_visuals.add(visual_id)
@@ -1422,6 +1430,35 @@ class StoryBoardCurator:
         selected_tables = [visual_id for visual_id in table_candidates if visual_id not in used_visuals][:table_count]
         for slot_id, selected_table in zip(table_slots[:table_count], selected_tables):
             place_visual(slot_id, selected_table, "Primary quantitative result table", importance=2)
+
+    def _slot_can_hold_visual(self, slot_id: str, visual_id: str, visual_context: Dict[str, Any]) -> bool:
+        template_layout = (visual_context or {}).get("template_layout") or {}
+        lanes = template_layout.get("lanes") or []
+        lane = next((lane for lane in lanes if str(lane.get("id") or "") == str(slot_id)), None)
+        if not lane:
+            return True
+        lane = dict(lane)
+        lane.setdefault("poster_orientation", template_layout.get("orientation"))
+        text_padding = 2 * float(self.config["layout"]["text_padding"]["left_right"])
+        max_width = max(float(lane.get("w", 0.0) or 0.0) - text_padding, 0.1)
+        visual_width_cap = template_layout.get("visual_width_cap")
+        if visual_width_cap:
+            max_width = min(max_width, float(visual_width_cap))
+        visual_assets = dict((visual_context or {}).get("visual_assets") or {})
+        if visual_id not in visual_assets:
+            estimate = ((visual_context or {}).get("visual_assets_heights") or {}).get(visual_id) or {}
+            if estimate:
+                visual_assets[visual_id] = {
+                    "asset_type": "table" if str(visual_id).startswith("table_") else "figure",
+                    "aspect": estimate.get("aspect_ratio") or estimate.get("aspect"),
+                }
+        return visual_slot_is_feasible(
+            visual_id,
+            lane,
+            visual_assets,
+            self.config,
+            max_width=max_width,
+        )
 
     def _limit_keypoint_visuals(self, sections: List[Dict[str, Any]], classified_visuals: Dict[str, Any]) -> None:
         key_visual = (classified_visuals or {}).get("key_visual")

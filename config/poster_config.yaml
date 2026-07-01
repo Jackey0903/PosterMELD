@@ -610,6 +610,32 @@ visual_refinement:
   dpi: 300
   edit_aspect_mismatch_threshold: 0.35
 
+visual_footprint:
+  enabled: true
+  figure_min_width_inches: 10.5
+  figure_min_height_inches: 3.0
+  figure_min_area_inches: 30.0
+  figure_min_slot_width_fraction: 0.62
+  figure_min_slot_height_fraction: 0.18
+  table_min_width_inches: 12.0
+  table_min_height_inches: 3.0
+  table_min_area_inches: 34.0
+  table_min_slot_width_fraction: 0.60
+  table_min_slot_height_fraction: 0.16
+  portrait_figure_min_width_inches: 8.5
+  portrait_figure_min_height_inches: 3.0
+  portrait_figure_min_area_inches: 25.0
+  portrait_figure_min_slot_width_fraction: 0.25
+  portrait_figure_min_slot_height_fraction: 0.08
+  portrait_table_min_width_inches: 10.5
+  portrait_table_min_height_inches: 3.0
+  portrait_table_min_area_inches: 30.0
+  portrait_table_min_slot_width_fraction: 0.30
+  portrait_table_min_slot_height_fraction: 0.08
+  feasibility_max_slot_height_fraction: 0.95
+  min_visual_scale_in_visual_blocks: 0.95
+  key_visual_min_scale: 1.0
+
 vlm_layout_review:
   enabled: false
   max_iterations: 1

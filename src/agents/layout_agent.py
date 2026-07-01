@@ -14,6 +14,7 @@ from src.config.poster_config import load_config
 from src.tools.layout_api import LayoutTemplates, SEMANTIC_LANES
 from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_for_poster
 from src.utils.style_options import resolve_poster_visual_style, resolve_typography_config
+from src.utils.visual_footprint import enforce_visual_footprint
 
 class LayoutAgent:
     """creates optimized layouts using css box model"""
@@ -1431,6 +1432,30 @@ class LayoutAgent:
         # apply scaling to both width and height to maintain aspect ratio
         final_width = visual_width * scale_factor
         final_height = original_height * scale_factor
+        lane = {
+            "id": "",
+            "w": visual_width,
+            "h": available_height or final_height,
+            "poster_orientation": "portrait"
+            if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0)
+            else "landscape",
+        }
+        final_width, final_height, footprint_report = enforce_visual_footprint(
+            visual_id,
+            final_width,
+            final_height,
+            visual_width,
+            lane,
+            state,
+            self.config,
+        )
+        if footprint_report.get("adjusted"):
+            scale_factor = final_width / max(visual_width, 0.01)
+            log_agent_info(
+                self.name,
+                f"visual {visual_id} enlarged to footprint contract "
+                f"({final_width:.2f}\"x{final_height:.2f}\")",
+            )
         
         log_agent_info(self.name, f"visual {visual_id}: orig_w={visual_width:.2f}\", orig_h={original_height:.2f}\", scale={scale_factor:.1f}, final_w={final_width:.2f}\", final_h={final_height:.2f}\"")
         

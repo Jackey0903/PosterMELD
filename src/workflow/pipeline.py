@@ -223,12 +223,14 @@ def _load_content_json(state: PosterState, filename: str) -> Dict[str, Any]:
 
 def _run_final_quality_gate(state: PosterState) -> PosterState:
     from src.agents.block_occupancy_analyzer import BlockOccupancyAnalyzer
+    from src.utils.visual_footprint import evaluate_visual_footprints
 
     if state.get("template_layout_mode") != "template_prior":
         state["final_quality_gate"] = {"accepted": True, "reason": "not a template-prior poster"}
         return state
 
-    block_settings = load_config().get("block_refinement", {})
+    config = load_config()
+    block_settings = config.get("block_refinement", {})
     min_utilization = float(block_settings.get("final_min_utilization", 0.88))
     min_mean_utilization = float(block_settings.get("final_mean_utilization", min_utilization))
     gate: Dict[str, Any] = {
@@ -279,6 +281,24 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
             )
     except Exception as exc:
         gate["failures"].append({"category": "occupancy", "reason": str(exc)})
+
+    try:
+        visual_footprint = evaluate_visual_footprints(
+            state.get("styled_layout") or [],
+            state.get("layout_template_metadata") or {},
+            state,
+            config,
+        )
+        gate["visual_footprint"] = visual_footprint
+        if visual_footprint.get("violations"):
+            gate["failures"].append(
+                {
+                    "category": "visual_footprint",
+                    "violations": visual_footprint["violations"],
+                }
+            )
+    except Exception as exc:
+        gate["failures"].append({"category": "visual_footprint", "reason": str(exc)})
 
     micro_report = _load_content_json(state, "micro_layout_report.json")
     micro_issues = ((micro_report.get("validation") or {}).get("issues") or [])
