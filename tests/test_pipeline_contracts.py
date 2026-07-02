@@ -3490,8 +3490,8 @@ def test_block_occupancy_analyzer_formula_actions(tmp_path):
 
     low = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.45))["blocks"][0]
     moderate = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.92))["blocks"][0]
-    near_target = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.96))["blocks"][0]
-    crowded = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.99))["blocks"][0]
+    near_target = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.986))["blocks"][0]
+    crowded = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.997))["blocks"][0]
 
     assert low["action"] == "expand"
     assert low["target_extra_chars"] > moderate["target_extra_chars"]
@@ -3537,7 +3537,7 @@ def test_final_quality_gate_rejects_block_below_hard_minimum(tmp_path):
     assert (content_dir / "final_quality_gate.json").exists()
 
 
-def test_final_quality_gate_rejects_mean_below_96_percent(tmp_path):
+def test_final_quality_gate_rejects_mean_below_98_percent(tmp_path):
     state = _block_refinement_state(tmp_path, utilization=0.95)
     state["output_dir"] = str(tmp_path / "output")
     state["template_layout_mode"] = "template_prior"
@@ -3555,6 +3555,28 @@ def test_final_quality_gate_rejects_mean_below_96_percent(tmp_path):
     assert result["final_quality_gate"]["accepted"] is False
     assert any(
         failure["category"] == "occupancy_mean"
+        for failure in result["final_quality_gate"]["failures"]
+    )
+
+
+def test_final_quality_gate_rejects_excessive_bottom_whitespace(tmp_path):
+    state = _block_refinement_state(tmp_path, utilization=0.98)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_poster_accepted"] is False
+    assert result["final_quality_gate"]["accepted"] is False
+    assert any(
+        failure["category"] == "bottom_whitespace"
         for failure in result["final_quality_gate"]["failures"]
     )
 
@@ -3633,7 +3655,7 @@ def test_block_content_refiner_expands_underfilled_block_without_changing_refs(t
 
 
 def test_block_content_refiner_reduces_crowded_block_without_changing_refs(tmp_path):
-    state = _block_refinement_state(tmp_path, utilization=0.99)
+    state = _block_refinement_state(tmp_path, utilization=0.997)
     section = state["story_board"]["spatial_content_plan"]["sections"][0]
     section["text_content"] = [
         "A long factual bullet that is useful but can be shortened when the block is crowded by too much text.",

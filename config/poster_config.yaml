@@ -478,7 +478,7 @@ template_fast_mode:
     - "cluster_25_portrait"
     - "cluster_27_portrait"
     - "cluster_29_portrait"
-  emergency_repair_max_iterations: 2
+  emergency_repair_max_iterations: 3
   hard_min_utilization: 0.94
   emergency_underfill_threshold: 0.92
   allow_text_fill_repair: true
@@ -652,12 +652,14 @@ vlm_layout_review:
 
 block_refinement:
   enabled: false
-  target_utilization: 0.96
-  acceptable_min: 0.94
-  acceptable_max: 0.985
-  final_min_utilization: 0.94
-  final_mean_utilization: 0.96
-  hard_max: 0.985
+  target_utilization: 0.985
+  acceptable_min: 0.97
+  acceptable_max: 0.992
+  final_min_utilization: 0.97
+  final_mean_utilization: 0.98
+  final_max_bottom_whitespace_inches: 0.18
+  final_max_bottom_whitespace_fraction: 0.02
+  hard_max: 0.995
   safety_factor: 0.82
   capacity_min_factor: 0.88
   capacity_max_factor: 1.08
@@ -669,9 +671,9 @@ block_refinement:
   max_capacity_chars: 900
   visual_min_text_chars: 90
   visual_policy_too_small_width_inches: 13.0
-  max_iterations: 2
-  min_extra_chars: 20
-  min_missing_height_for_expand: 0.22
+  max_iterations: 3
+  min_extra_chars: 10
+  min_missing_height_for_expand: 0.08
   vlm_underfilled_min_extra_chars: 120
   max_extra_chars_per_block: 620
   chars_per_bullet: 120
@@ -729,8 +731,8 @@ micro_layout_refinement:
   visual_scale_step: 0.05
   section_gap_step: 0.15
   max_iterations: 16
-  target_lane_utilization: 0.96
-  underflow_expand_threshold: 0.45
+  target_lane_utilization: 0.985
+  underflow_expand_threshold: 0.08
   max_underflow_iterations: 10
   max_body_font_boost: 10
   max_section_title_font_boost: 6
@@ -738,9 +740,9 @@ micro_layout_refinement:
   title_font_boost_step: 1
   section_gap_expand_step: 0.12
   ppt_chars_per_inch_at_44pt: 4.2
-  text_height_safety_factor: 1.2
-  text_height_safety_padding: 0.25
-  container_bottom_padding: 0.2
+  text_height_safety_factor: 1.12
+  text_height_safety_padding: 0.12
+  container_bottom_padding: 0.08
 
 # spacing presets
 spacing_presets:

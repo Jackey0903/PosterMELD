@@ -233,11 +233,15 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
     block_settings = config.get("block_refinement", {})
     min_utilization = float(block_settings.get("final_min_utilization", 0.88))
     min_mean_utilization = float(block_settings.get("final_mean_utilization", min_utilization))
+    max_bottom_whitespace_inches = float(block_settings.get("final_max_bottom_whitespace_inches", 0.0) or 0.0)
+    max_bottom_whitespace_fraction = float(block_settings.get("final_max_bottom_whitespace_fraction", 0.0) or 0.0)
     gate: Dict[str, Any] = {
         "source": "deterministic_final_gate",
         "accepted": True,
         "min_utilization": min_utilization,
         "min_mean_utilization": min_mean_utilization,
+        "max_bottom_whitespace_inches": max_bottom_whitespace_inches,
+        "max_bottom_whitespace_fraction": max_bottom_whitespace_fraction,
         "failures": [],
     }
 
@@ -251,6 +255,7 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
                 "section_id": block.get("section_id"),
                 "section_title": block.get("section_title"),
                 "utilization": block.get("utilization"),
+                "bottom_whitespace": block.get("bottom_whitespace"),
                 "action": block.get("action"),
                 "visual_count": block.get("visual_count"),
             }
@@ -266,10 +271,37 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
             for block in occupancy_report.get("blocks", [])
             if float(block.get("utilization") or 0.0) < min_utilization
         ]
+        whitespace_blocks = []
+        for block in occupancy_report.get("blocks", []):
+            available_height = float(block.get("available_height") or 0.0)
+            bottom_whitespace = float(block.get("bottom_whitespace") or 0.0)
+            allowed_values = [
+                value
+                for value in (
+                    max_bottom_whitespace_inches,
+                    available_height * max_bottom_whitespace_fraction if max_bottom_whitespace_fraction > 0 else 0.0,
+                )
+                if value > 0
+            ]
+            if not allowed_values:
+                continue
+            allowed_whitespace = min(allowed_values)
+            if bottom_whitespace > allowed_whitespace + 1e-6:
+                whitespace_blocks.append(
+                    {
+                        "slot_id": block.get("slot_id"),
+                        "section_id": block.get("section_id"),
+                        "section_title": block.get("section_title"),
+                        "bottom_whitespace": block.get("bottom_whitespace"),
+                        "allowed": round(allowed_whitespace, 4),
+                    }
+                )
         if not occupancy_report.get("blocks"):
             gate["failures"].append({"category": "occupancy", "reason": "no content blocks measured"})
         if low_blocks:
             gate["failures"].append({"category": "occupancy", "low_blocks": low_blocks})
+        if whitespace_blocks:
+            gate["failures"].append({"category": "bottom_whitespace", "blocks": whitespace_blocks})
         mean_utilization = float((occupancy_report.get("summary") or {}).get("mean_utilization") or 0.0)
         if occupancy_report.get("blocks") and mean_utilization < min_mean_utilization:
             gate["failures"].append(
