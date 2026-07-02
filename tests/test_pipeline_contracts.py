@@ -1471,6 +1471,36 @@ def test_create_state_uses_draft_stage_when_post_render_pass_is_enabled():
     assert create_state("/tmp/paper.pdf", enable_block_vlm_review=True)["render_stage"] == "draft"
 
 
+def test_generated_teaser_agent_is_noop_when_disabled(tmp_path, monkeypatch):
+    def fail_generate_image(self, prompt, width, height, output_path):
+        raise AssertionError("generated teaser API should not be called when disabled")
+
+    monkeypatch.setattr("src.agents.generated_teaser_agent.ImageTools.generate_image", fail_generate_image)
+    state = create_state(str(tmp_path / "paper.pdf"))
+    state["output_dir"] = str(tmp_path / "output")
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Why Search",
+                    "content_role": "foundation",
+                    "text_content": ["Keep the original motivation text."],
+                    "visual_assets": [],
+                }
+            ]
+        },
+    }
+    state["visual_assets"] = {}
+
+    result = GeneratedTeaserAgent()(state)
+
+    section = result["story_board"]["spatial_content_plan"]["sections"][0]
+    assert result.get("generated_teaser_report") is None
+    assert section["visual_assets"] == []
+    assert section["text_content"] == ["Keep the original motivation text."]
+
+
 def test_generated_teaser_agent_injects_motivation_visual(tmp_path, monkeypatch):
     def fake_generate_image(self, prompt, width, height, output_path):
         Image.new("RGB", (width, height), color=(230, 240, 250)).save(output_path)

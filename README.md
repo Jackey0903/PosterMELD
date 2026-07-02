@@ -233,6 +233,29 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
 
 `balanced` 是默认值。论文图表较多、表格比较可读时建议用 `rich`，会优先保留方法图、系统图和关键结果表；空间紧张或竖版实验时可用 `lean`。
 
+可选 AI teaser 图：
+
+```text
+--enable-generated-teaser
+```
+
+默认不生成 teaser，流程会按论文原始图表和模板正常排版。只有显式传入 `--enable-generated-teaser` 时，pipeline 才会为 introduction/motivation 类 block 生成一张论文相关的顶会风格概念图，并自动压缩该 block 下方文字摘要。
+
+带 teaser 的运行示例：
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
+  data/Active_Geospatial_Search_for_Efficient_Tenant_Eviction_Outreach/paper.pdf \
+  --layout-template auto \
+  --logo data/Active_Geospatial_Search_for_Efficient_Tenant_Eviction_Outreach/logo.png \
+  --aff-logo data/Active_Geospatial_Search_for_Efficient_Tenant_Eviction_Outreach/aff.png \
+  --poster-style navy_serif \
+  --visual-density rich \
+  --enable-generated-teaser \
+  --enable-generated-background \
+  --background-palette light_blue
+```
+
 固定使用当前效果较好的横版模板：
 
 ```bash
