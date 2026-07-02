@@ -2906,7 +2906,7 @@ def test_micro_layout_refiner_expands_underfilled_lane():
     assert refined_bottom <= left_lane["y"] + left_lane["h"] + 0.05
 
 
-def test_micro_layout_refiner_does_not_scale_full_width_title_bar():
+def test_micro_layout_refiner_stretches_title_bar_to_full_block_width():
     refiner = MicroLayoutRefiner()
     state = create_state("/tmp/paper.pdf", layout_template="cluster_104_landscape")
     lane = {"id": "slot_5", "x": 1.0, "y": 5.0, "w": 10.0, "h": 10.0}
@@ -2926,9 +2926,9 @@ def test_micro_layout_refiner_does_not_scale_full_width_title_bar():
                 "type": "title_accent_block",
                 "section_id": "slot_5_eval_setup",
                 "lane_id": "slot_5",
-                "x": lane["x"],
+                "x": lane["x"] + 0.4,
                 "y": lane["y"],
-                "width": lane["w"],
+                "width": lane["w"] - 0.8,
                 "height": 0.78,
             },
             {
@@ -2958,6 +2958,53 @@ def test_micro_layout_refiner_does_not_scale_full_width_title_bar():
     elements, _ = refiner._layout_section(group, lane, lane["y"], state, params, {"template_name": "cluster_104_landscape"})
 
     bar = next(element for element in elements if element["type"] == "title_accent_block")
+    assert bar["x"] == pytest.approx(lane["x"])
+    assert bar["width"] == pytest.approx(lane["w"])
+
+
+def test_micro_layout_refiner_force_fit_keeps_title_bar_full_width():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_104_landscape")
+    lane = {"id": "slot_5", "x": 1.0, "y": 5.0, "w": 10.0, "h": 5.0}
+    lane_layout = [
+        {
+            "type": "section_container",
+            "section_id": "slot_5_eval_setup",
+            "lane_id": "slot_5",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": 6.0,
+        },
+        {
+            "type": "title_accent_block",
+            "section_id": "slot_5_eval_setup",
+            "lane_id": "slot_5",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": 0.78,
+        },
+        {
+            "type": "text",
+            "section_id": "slot_5_eval_setup",
+            "lane_id": "slot_5",
+            "x": lane["x"] + 0.24,
+            "y": lane["y"] + 1.0,
+            "width": lane["w"] - 0.48,
+            "height": 5.2,
+            "font_size": 44,
+        },
+    ]
+
+    compressed = refiner._force_fit_lane(
+        lane_layout,
+        lane,
+        state,
+        {"template_name": "cluster_104_landscape", "orientation": "landscape"},
+    )
+
+    bar = next(element for element in compressed if element["type"] == "title_accent_block")
     assert bar["x"] == pytest.approx(lane["x"])
     assert bar["width"] == pytest.approx(lane["w"])
 

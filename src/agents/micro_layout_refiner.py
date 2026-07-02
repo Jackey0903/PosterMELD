@@ -717,11 +717,7 @@ class MicroLayoutRefiner:
                     child["x"] = lane["x"] + child_x_offset
                     child["y"] = section_y + child_y_offset
                     child["height"] = max(child.get("height", 0.3) * title_scale, 0.08)
-                    if (
-                        child_type in {"title_accent_block", "title_accent_line"}
-                        and abs(child_x_offset) <= 0.05
-                        and float(child.get("width", 0.0) or 0.0) >= float(container.get("width", lane["w"]) or lane["w"]) * 0.9
-                    ):
+                    if child_type in {"title_accent_block", "title_accent_line"}:
                         child["x"] = lane["x"]
                         child["width"] = lane["w"]
                     else:
@@ -1072,8 +1068,8 @@ class MicroLayoutRefiner:
                 item["x"] = center_x - protected_width / 2
                 item["visual_footprint"] = footprint_report
             elif item.get("type") in {"title_accent_block", "title_accent_line"}:
-                original_width = item.get("width", 0.2)
-                item["width"] = max(original_width * compression_ratio, 0.05)
+                item["x"] = lane["x"]
+                item["width"] = lane["w"]
             elif item.get("type") == "text":
                 item["font_size"] = max(
                     self._min_body_font_size(template_layout),
