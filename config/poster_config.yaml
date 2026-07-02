@@ -333,6 +333,7 @@ generated_background:
   white_overlay_alpha: 0.40
   blur_radius: 0.75
   max_saturation: 0.58
+  api_timeout_seconds: 75
   prompt_style: "premium top-tier AI conference poster background, visible pale blue/cyan geometry, polished and readable"
   output_filename: "generated_background.png"
   palettes:
@@ -609,6 +610,21 @@ visual_refinement:
   max_reflow_count: 1
   dpi: 300
   edit_aspect_mismatch_threshold: 0.35
+
+generated_teaser:
+  enabled: false
+  asset_id: "generated_teaser_1"
+  width_px: 1800
+  height_px: 650
+  aspect: 2.7692
+  target_block_height_fraction: 0.72
+  max_block_height_fraction: 0.74
+  summary_text_height_inches: 1.15
+  summary_max_items: 2
+  summary_max_chars: 260
+  layout_max_height_fraction: 0.76
+  allow_existing_visual: false
+  prompt_style: "top-tier AI conference panoramic teaser banner, clean conceptual schematic, polished NeurIPS/ICLR-style visual"
 
 visual_footprint:
   enabled: true

@@ -6,10 +6,12 @@ image at the bottom of the slide.
 """
 
 import json
+import os
 import random
+import signal
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, TypeVar
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageStat
 
@@ -17,6 +19,8 @@ from src.config.poster_config import load_config
 from src.state.poster_state import PosterState
 from src.tools.image_api import ImageTools
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success
+
+T = TypeVar("T")
 
 
 class BackgroundImageAgent:
@@ -45,30 +49,52 @@ class BackgroundImageAgent:
             width, height = self._background_dimensions(state)
             procedural_only = bool(self.background_config.get("procedural_only", False))
             if procedural_only:
-                img = self._procedural_academic_background(width, height, state)
-                self._save_light_background(img, final_path, width, height, state)
+                self._save_procedural_fallback(final_path, width, height, state)
                 used_fallback = True
                 generation_mode = "procedural_only"
                 raw_path_value = ""
             elif reference_path:
-                generated_path = ImageTools().edit_image(str(reference_path), prompt, output_path=str(raw_path))
-                if Path(generated_path).exists() and Path(generated_path) != raw_path and Path(generated_path) != reference_path:
-                    shutil.copyfile(generated_path, raw_path)
-                if raw_path.exists():
-                    used_fallback = self._postprocess_background(raw_path, final_path, width, height, state)
-                    generation_mode = "poster_conditioned_image_api_with_procedural_fallback"
-                    raw_path_value = str(raw_path)
-                else:
-                    img = self._procedural_academic_background(width, height, state)
-                    self._save_light_background(img, final_path, width, height, state)
+                try:
+                    generated_path = self._run_image_call_with_timeout(
+                        lambda: ImageTools().edit_image(str(reference_path), prompt, output_path=str(raw_path))
+                    )
+                    if Path(generated_path).exists() and Path(generated_path) != raw_path and Path(generated_path) != reference_path:
+                        shutil.copyfile(generated_path, raw_path)
+                    if raw_path.exists():
+                        used_fallback = self._postprocess_background(raw_path, final_path, width, height, state)
+                        generation_mode = "poster_conditioned_image_api_with_procedural_fallback"
+                        raw_path_value = str(raw_path)
+                    else:
+                        self._save_procedural_fallback(final_path, width, height, state)
+                        used_fallback = True
+                        generation_mode = "poster_conditioned_image_api_failed_procedural_fallback"
+                        raw_path_value = ""
+                except Exception as e:
+                    log_agent_error(self.name, f"image API failed; using procedural background: {e}")
+                    self._save_procedural_fallback(final_path, width, height, state)
                     used_fallback = True
                     generation_mode = "poster_conditioned_image_api_failed_procedural_fallback"
                     raw_path_value = ""
             else:
-                ImageTools().generate_image(prompt, width=width, height=height, output_path=str(raw_path))
-                used_fallback = self._postprocess_background(raw_path, final_path, width, height, state)
-                generation_mode = "image_api_with_procedural_fallback"
-                raw_path_value = str(raw_path)
+                try:
+                    self._run_image_call_with_timeout(
+                        lambda: ImageTools().generate_image(prompt, width=width, height=height, output_path=str(raw_path))
+                    )
+                    if raw_path.exists():
+                        used_fallback = self._postprocess_background(raw_path, final_path, width, height, state)
+                        generation_mode = "image_api_with_procedural_fallback"
+                        raw_path_value = str(raw_path)
+                    else:
+                        self._save_procedural_fallback(final_path, width, height, state)
+                        used_fallback = True
+                        generation_mode = "image_api_failed_procedural_fallback"
+                        raw_path_value = ""
+                except Exception as e:
+                    log_agent_error(self.name, f"image API failed; using procedural background: {e}")
+                    self._save_procedural_fallback(final_path, width, height, state)
+                    used_fallback = True
+                    generation_mode = "image_api_failed_procedural_fallback"
+                    raw_path_value = ""
 
             report = {
                 "enabled": True,
@@ -98,6 +124,34 @@ class BackgroundImageAgent:
             state["errors"].append(f"{self.name}: {e}")
 
         return state
+
+    def _run_image_call_with_timeout(self, call: Callable[[], T]) -> T:
+        timeout = self._api_timeout_seconds()
+        if timeout <= 0 or not hasattr(signal, "SIGALRM"):
+            return call()
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+        def handle_timeout(signum: int, frame: Any) -> None:
+            raise TimeoutError(f"background image API timed out after {timeout:g}s")
+
+        signal.signal(signal.SIGALRM, handle_timeout)
+        signal.setitimer(signal.ITIMER_REAL, timeout)
+        try:
+            return call()
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+            if previous_timer and previous_timer[0] > 0:
+                signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
+
+    def _api_timeout_seconds(self) -> float:
+        value = os.getenv("BACKGROUND_IMAGE_API_TIMEOUT_SECONDS", self.background_config.get("api_timeout_seconds", 75))
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return 75.0
 
     def _build_prompt(self, state: PosterState) -> str:
         title = self._poster_title(state)
@@ -179,6 +233,10 @@ class BackgroundImageAgent:
                 img = self._procedural_academic_background(width, height, state)
             self._save_light_background(img, final_path, width, height, state)
             return used_fallback
+
+    def _save_procedural_fallback(self, final_path: Path, width: int, height: int, state: PosterState) -> None:
+        img = self._procedural_academic_background(width, height, state)
+        self._save_light_background(img, final_path, width, height, state)
 
     def _save_light_background(self, img: Image.Image, final_path: Path, width: int, height: int, state: PosterState) -> None:
         img = img.convert("RGB")

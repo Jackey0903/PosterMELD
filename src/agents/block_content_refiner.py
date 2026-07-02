@@ -144,12 +144,15 @@ class BlockContentRefiner:
         fast_hard_min = float(fast_config.get("hard_min_utilization", self.block_config.get("final_min_utilization", 0.88)))
         allow_text_fill_repair = bool(fast_config.get("allow_text_fill_repair", True))
         fast_text_fill_cap = int(fast_config.get("fast_text_fill_max_extra_chars", 280))
+        protected_teaser_sections = self._protected_teaser_sections(state)
 
         actions = []
         for block in occupancy.get("blocks", []):
             slot_id = str(block.get("slot_id") or "")
             section_id = str(block.get("section_id") or "")
             if not slot_id or not section_id:
+                continue
+            if section_id in protected_teaser_sections:
                 continue
 
             vlm = vlm_by_slot.get(slot_id, {})
@@ -256,6 +259,23 @@ class BlockContentRefiner:
                 })
 
         return actions
+
+    def _protected_teaser_sections(self, state: PosterState) -> set[str]:
+        sections = ((state.get("story_board") or {}).get("spatial_content_plan") or {}).get("sections") or []
+        protected: set[str] = set()
+        for section in sections:
+            if section.get("generated_teaser_summary"):
+                section_id = str(section.get("section_id") or "")
+                if section_id:
+                    protected.add(section_id)
+                continue
+            for visual in section.get("visual_assets") or []:
+                if str(visual.get("visual_id") or "").startswith("generated_teaser"):
+                    section_id = str(section.get("section_id") or "")
+                    if section_id:
+                        protected.add(section_id)
+                    break
+        return protected
 
     def _reduce_bullets_fast(
         self,

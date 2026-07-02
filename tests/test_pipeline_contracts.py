@@ -15,6 +15,7 @@ from src.agents.block_occupancy_analyzer import BlockOccupancyAnalyzer
 from src.agents.block_vlm_reviewer import BlockVLMReviewer
 from src.agents.curator import StoryBoardCurator
 from src.agents.font_agent import FontAgent
+from src.agents.generated_teaser_agent import GeneratedTeaserAgent
 from src.agents.layout_agent import LayoutAgent
 from src.agents.micro_layout_refiner import MicroLayoutRefiner
 from src.agents.parser import Parser
@@ -1463,10 +1464,151 @@ def test_layout_agent_frames_normal_and_support_blocks():
 
 def test_create_state_uses_draft_stage_when_post_render_pass_is_enabled():
     assert create_state("/tmp/paper.pdf")["render_stage"] == "final"
+    assert create_state("/tmp/paper.pdf", enable_generated_teaser=True)["render_stage"] == "final"
     assert create_state("/tmp/paper.pdf", enable_generated_background=True)["render_stage"] == "draft"
     assert create_state("/tmp/paper.pdf", enable_vlm_layout_review=True)["render_stage"] == "draft"
     assert create_state("/tmp/paper.pdf", enable_visual_legibility_review=True)["render_stage"] == "draft"
     assert create_state("/tmp/paper.pdf", enable_block_vlm_review=True)["render_stage"] == "draft"
+
+
+def test_generated_teaser_agent_injects_motivation_visual(tmp_path, monkeypatch):
+    def fake_generate_image(self, prompt, width, height, output_path):
+        Image.new("RGB", (width, height), color=(230, 240, 250)).save(output_path)
+        assert "conceptual teaser/motivation figure" in prompt
+        assert "no readable text" in prompt
+        assert "no question marks" in prompt
+        assert "Primary accent color: #0057B8" in prompt
+        assert "Paper title: Active Search for Outreach" in prompt
+        assert "poster slot aperture" in prompt
+        assert width > height
+        return output_path
+
+    monkeypatch.setattr("src.agents.generated_teaser_agent.ImageTools.generate_image", fake_generate_image)
+    state = create_state(str(tmp_path / "paper.pdf"), width=54, height=27, enable_generated_teaser=True)
+    state["output_dir"] = str(tmp_path / "output")
+    state["resolved_layout_template"] = "cluster_104_landscape"
+    state["color_scheme"] = {"theme": "#0057B8"}
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Active Search for Outreach",
+        }
+    }
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Why Search",
+                    "content_role": "foundation",
+                    "preferred_slot_id": "slot_1",
+                    "column_assignment": "slot_1",
+                    "text_content": ["Outreach teams must choose where to visit under limited budgets."],
+                    "visual_assets": [],
+                },
+                {
+                    "section_id": "method",
+                    "section_title": "Method",
+                    "content_role": "method",
+                    "column_assignment": "slot_2",
+                    "text_content": ["A model selects the next parcel."],
+                    "visual_assets": [],
+                },
+            ]
+        },
+    }
+    state["visual_assets"] = {}
+
+    result = GeneratedTeaserAgent()(state)
+    section = result["story_board"]["spatial_content_plan"]["sections"][0]
+    visual_id = section["visual_assets"][0]["visual_id"]
+
+    assert visual_id == "generated_teaser_1"
+    assert result["visual_assets"][visual_id]["provenance"] == "generated_teaser"
+    assert result["visual_assets"][visual_id]["aspect"] > 2.5
+    assert Path(result["visual_assets"][visual_id]["source_path"]).exists()
+    assert result["generated_teaser_report"]["target_section_id"] == "motivation"
+    assert result["generated_teaser_report"]["geometry"]["source"] == "template_slot"
+    assert result["generated_teaser_report"]["geometry"]["slot_id"] == "slot_1"
+    geometry = result["generated_teaser_report"]["geometry"]
+    assert geometry["target_height_inches"] > geometry["slot_height_inches"] * 0.65
+    assert section["generated_teaser_summary"] is True
+    assert len(section["text_content"]) <= 2
+
+
+def test_generated_teaser_agent_skips_sections_with_existing_visuals_by_default(tmp_path, monkeypatch):
+    def fake_generate_image(self, prompt, width, height, output_path):
+        Image.new("RGB", (width, height), color=(230, 240, 250)).save(output_path)
+        return output_path
+
+    monkeypatch.setattr("src.agents.generated_teaser_agent.ImageTools.generate_image", fake_generate_image)
+    state = create_state(str(tmp_path / "paper.pdf"), enable_generated_teaser=True)
+    state["output_dir"] = str(tmp_path / "output")
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Why Search",
+                    "content_role": "foundation",
+                    "column_assignment": "slot_1",
+                    "text_content": ["Motivation"],
+                    "visual_assets": [{"visual_id": "figure_1"}],
+                },
+                {
+                    "section_id": "method",
+                    "section_title": "Method",
+                    "content_role": "method",
+                    "column_assignment": "slot_2",
+                    "text_content": ["Method"],
+                    "visual_assets": [],
+                },
+            ]
+        },
+    }
+    state["visual_assets"] = {"figure_1": {"asset_type": "figure"}}
+
+    result = GeneratedTeaserAgent()(state)
+
+    assert result["generated_teaser_report"]["applied"] is False
+    assert result["story_board"]["spatial_content_plan"]["sections"][0]["visual_assets"][0]["visual_id"] == "figure_1"
+
+
+def test_generated_teaser_summary_blocks_are_protected_from_expansion(tmp_path):
+    state = create_state(str(tmp_path / "paper.pdf"), enable_block_vlm_review=True)
+    state["output_dir"] = str(tmp_path / "output")
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "slot_1_problem",
+                    "section_title": "Search Problem",
+                    "generated_teaser_summary": True,
+                    "visual_assets": [{"visual_id": "generated_teaser_1"}],
+                    "text_content": ["Short motivation summary."],
+                }
+            ]
+        }
+    }
+    state["block_occupancy_report"] = {
+        "settings": {"acceptable_min": 0.97, "hard_max": 0.995},
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "slot_1_problem",
+                "utilization": 0.72,
+                "target_extra_chars": 240,
+                "action": "expand",
+                "visual_count": 1,
+            }
+        ],
+    }
+    state["block_vlm_review"] = {"blocks": []}
+
+    report = BlockContentRefiner().refine(state)
+
+    assert report["applied"] is False
+    assert report["actions_considered"] == []
+    assert state["story_board"]["spatial_content_plan"]["sections"][0]["text_content"] == ["Short motivation summary."]
 
 
 def test_background_image_agent_prompt_is_background_only():
@@ -1548,6 +1690,40 @@ def test_background_image_agent_uses_poster_preview_as_reference(tmp_path, monke
     assert Path(result["background_image_path"]).exists()
     assert result["background_image_report"]["generation_mode"] == "poster_conditioned_image_api_with_procedural_fallback"
     assert result["background_image_report"]["reference_poster_path"] == str(preview_path)
+
+
+def test_background_image_agent_api_failure_falls_back_without_error(tmp_path, monkeypatch):
+    def fail_edit_image(self, image_path, prompt, output_path):
+        raise TimeoutError("stuck image API")
+
+    monkeypatch.setattr("src.agents.background_image_agent.ImageTools.edit_image", fail_edit_image)
+    state = create_state(str(tmp_path / "paper.pdf"), enable_generated_background=True, background_palette="light_blue")
+    state["output_dir"] = str(tmp_path / "output")
+    state["color_scheme"] = {"theme": "#0057B8", "mono_light": "#E6EAEF"}
+    preview_path = tmp_path / "draft.png"
+    Image.new("RGB", (160, 120), color=(255, 255, 255)).save(preview_path)
+    state["poster_preview_path"] = str(preview_path)
+    agent = BackgroundImageAgent()
+    agent.background_config["width_px"] = 160
+    agent.background_config["height_px"] = 120
+    agent.background_config["procedural_only"] = False
+    agent.background_config["api_timeout_seconds"] = 1
+
+    result = agent(state)
+
+    assert result["errors"] == []
+    assert Path(result["background_image_path"]).exists()
+    assert result["background_image_report"]["used_procedural_fallback"] is True
+    assert result["background_image_report"]["generation_mode"] == "poster_conditioned_image_api_failed_procedural_fallback"
+    assert result["background_image_report"]["raw_path"] == ""
+
+
+def test_background_image_agent_timeout_can_use_environment_override(monkeypatch):
+    monkeypatch.setenv("BACKGROUND_IMAGE_API_TIMEOUT_SECONDS", "2.5")
+    agent = BackgroundImageAgent()
+    agent.background_config["api_timeout_seconds"] = 75
+
+    assert agent._api_timeout_seconds() == 2.5
 
 
 def test_background_image_agent_procedural_only_skips_image_api(tmp_path, monkeypatch):
@@ -1645,6 +1821,32 @@ def test_image_tools_base_url_list_takes_priority_over_legacy_env(monkeypatch):
     tool = ImageTools(api_key="test-key", model="gpt-image-2", retry_attempts=1, retry_delay=0)
 
     assert tool.base_urls == ["https://first.example/v1", "https://second.example/v1"]
+
+
+def test_image_tools_falls_back_from_gpt_image_to_gemini_without_retrying_model_errors():
+    tool = ImageTools(
+        api_key="test-key",
+        base_url="https://example.test/v1",
+        model="gpt-image-2",
+        retry_attempts=5,
+        retry_delay=0,
+    )
+    calls = []
+
+    def operation(base_url):
+        calls.append((tool.model, base_url))
+        if tool.model == "gpt-image-2":
+            raise RuntimeError("No available channel for model gpt-image-2 under group auto")
+        return "ok"
+
+    result = tool._request_with_failover("image model fallback test", operation)
+
+    assert result == "ok"
+    assert tool.models[:2] == ["gpt-image-2", "gemini-3.1-flash-image-preview"]
+    assert calls == [
+        ("gpt-image-2", "https://example.test/v1"),
+        ("gemini-3.1-flash-image-preview", "https://example.test/v1"),
+    ]
 
 
 def test_template_block_planner_matches_block_count_to_content_slots(monkeypatch):

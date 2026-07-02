@@ -78,21 +78,55 @@ class FontAgent:
         # extract keywords using LLM with external prompt
         log_agent_info(self.name, "identifying keywords for highlighting")
         
-        agent = LangGraphAgent("expert at identifying key terms for visual highlighting", state["text_model"], state, "font_agent")
-        
-        template_data = {
-            "enhanced_narrative": json.dumps(narrative_content, indent=2),
-            "curated_content": json.dumps(story_board, indent=2)
+        try:
+            agent = LangGraphAgent("expert at identifying key terms for visual highlighting", state["text_model"], state, "font_agent")
+
+            template_data = {
+                "enhanced_narrative": json.dumps(narrative_content, indent=2),
+                "curated_content": json.dumps(story_board, indent=2)
+            }
+
+            prompt = Template(self.keyword_extraction_prompt).render(**template_data)
+            response = agent.step(prompt)
+            result = extract_json(response.content)
+
+            # add token usage
+            state["tokens"].add_text(response.input_tokens, response.output_tokens)
+
+            return result
+        except Exception as exc:
+            log_agent_warning(self.name, f"keyword extraction unavailable; using heuristic fallback: {exc}")
+            return self._fallback_keywords(story_board)
+
+    def _fallback_keywords(self, story_board: Dict) -> Dict[str, Any]:
+        section_keywords: Dict[str, Dict[str, List[str]]] = {}
+        sections = (story_board.get("spatial_content_plan") or {}).get("sections") or []
+        for section in sections:
+            section_id = str(section.get("section_id") or "")
+            if not section_id:
+                continue
+            text = " ".join([str(section.get("section_title") or ""), *[str(item) for item in section.get("text_content") or []]])
+            acronyms = re.findall(r"\b[A-Z][A-Z0-9]{2,}\b", text)
+            terms = re.findall(r"\b[A-Za-z][A-Za-z-]{5,}\b", text)
+            seen = set()
+            bold_contrast = []
+            for term in [*acronyms, *terms]:
+                key = term.lower()
+                if key in seen or key in {"section", "figure", "result", "results", "poster"}:
+                    continue
+                seen.add(key)
+                bold_contrast.append(term)
+                if len(bold_contrast) >= 4:
+                    break
+            section_keywords[section_id] = {
+                "bold_contrast": bold_contrast,
+                "bold": [],
+                "italic": [],
+            }
+        return {
+            "section_keywords": section_keywords,
+            "formatting_summary": {"fallback": "heuristic_keywords"},
         }
-        
-        prompt = Template(self.keyword_extraction_prompt).render(**template_data)
-        response = agent.step(prompt)
-        result = extract_json(response.content)
-        
-        # add token usage
-        state["tokens"].add_text(response.input_tokens, response.output_tokens)
-        
-        return result
 
     def _apply_styling(self, layout: List[Dict], colors: Dict, keywords: Dict, state: PosterState) -> List[Dict]:
         """apply styling with proper bullet point and bold formatting"""

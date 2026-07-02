@@ -97,6 +97,8 @@ def create_timing_wrapper(node_func: Callable, component_name: str) -> Callable:
             result["timing_metrics"].title_designer_time = elapsed
         elif component_name == "visual_asset_agent":
             result["timing_metrics"].visual_asset_agent_time = elapsed
+        elif component_name == "generated_teaser_agent":
+            result["timing_metrics"].generated_teaser_agent_time = elapsed
         elif component_name == "affiliation_logo_agent":
             result["timing_metrics"].affiliation_logo_agent_time = elapsed
         elif component_name == "renderer":
@@ -390,6 +392,7 @@ def create_workflow_graph():
     from src.agents.affiliation_logo_agent import affiliation_logo_agent_node
     from src.agents.curator import curator_node
     from src.agents.font_agent import font_agent_node
+    from src.agents.generated_teaser_agent import generated_teaser_agent_node
     from src.agents.layout_with_balancer import layout_with_balancer_node as layout_optimizer_node
     from src.agents.micro_layout_refiner import micro_layout_refiner_node
     from src.agents.parser import parser_node
@@ -412,6 +415,7 @@ def create_workflow_graph():
     graph.add_node("template_capacity_planner", create_timing_wrapper(template_capacity_planner_node, "template_capacity_planner"))
     graph.add_node("poster_keypoint_selector", create_timing_wrapper(poster_keypoint_selector_node, "poster_keypoint_selector"))
     graph.add_node("curator", create_timing_wrapper(curator_node, "curator"))
+    graph.add_node("generated_teaser_agent", create_timing_wrapper(generated_teaser_agent_node, "generated_teaser_agent"))
     graph.add_node("template_block_planner", create_timing_wrapper(template_block_planner_node, "template_block_planner"))
     graph.add_node("color_agent", create_timing_wrapper(color_agent_node, "color_agent"))
     graph.add_node("section_title_designer", create_timing_wrapper(section_title_designer_node, "section_title_designer"))
@@ -436,9 +440,10 @@ def create_workflow_graph():
     graph.add_edge("standard_template_preselector", "template_capacity_planner")
     graph.add_edge("template_capacity_planner", "poster_keypoint_selector")
     graph.add_edge("poster_keypoint_selector", "curator")
-    graph.add_edge("curator", "template_block_planner")
-    graph.add_edge("template_block_planner", "color_agent")
-    graph.add_edge("color_agent", "section_title_designer")
+    graph.add_edge("curator", "color_agent")
+    graph.add_edge("color_agent", "generated_teaser_agent")
+    graph.add_edge("generated_teaser_agent", "template_block_planner")
+    graph.add_edge("template_block_planner", "section_title_designer")
     graph.add_edge("section_title_designer", "layout_optimizer")
     graph.add_edge("layout_optimizer", "font_agent")
     graph.add_edge("font_agent", "micro_layout_refiner")
@@ -607,6 +612,10 @@ def save_timing_log(state: PosterState):
                 "time_seconds": round(metrics.visual_asset_agent_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.visual_asset_agent_time)
             },
+            "generated_teaser_agent": {
+                "time_seconds": round(metrics.generated_teaser_agent_time, 2),
+                "percentage": metrics.get_component_percentage(metrics.generated_teaser_agent_time)
+            },
             "affiliation_logo_agent": {
                 "time_seconds": round(metrics.affiliation_logo_agent_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.affiliation_logo_agent_time)
@@ -658,6 +667,11 @@ def save_timing_log(state: PosterState):
                 "enabled": state.get("enable_block_vlm_review", False),
                 "block_refinement_count": state.get("block_refinement_count", 0),
                 "target_utilization": block_settings.get("target_utilization", 0.95),
+            },
+            "generated_teaser": {
+                "enabled": state.get("enable_generated_teaser", False),
+                "target_section_id": (state.get("generated_teaser_report") or {}).get("target_section_id"),
+                "asset_id": (state.get("generated_teaser_report") or {}).get("asset_id"),
             },
         }
     }
@@ -745,6 +759,11 @@ def main():
         "--enable-generated-background",
         action="store_true",
         help="Generate a low-contrast academic background image and place it behind the poster.",
+    )
+    parser.add_argument(
+        "--enable-generated-teaser",
+        action="store_true",
+        help="Generate a paper-specific conceptual teaser visual for the motivation/introduction block.",
     )
     parser.add_argument(
         "--background-palette",
@@ -878,6 +897,7 @@ def main():
     print(f"📐 Adaptive Column Width: {'enabled' if args.enable_adaptive_column_width else 'disabled'}")
     print(f"🎭 Poster Style: {args.poster_style}")
     print(f"📊 Visual Density: {args.visual_density}")
+    print(f"🖼️ Generated Teaser: {'enabled' if args.enable_generated_teaser else 'disabled'}")
     print(f"🎨 Generated Background: {'enabled' if args.enable_generated_background else 'disabled'}")
     if args.enable_generated_background:
         print(f"🎨 Background Palette: {args.background_palette or 'config default'}")
@@ -895,6 +915,7 @@ def main():
             enable_block_vlm_review=args.enable_block_vlm_review,
             enable_adaptive_column_width=args.enable_adaptive_column_width,
             enable_generated_background=args.enable_generated_background,
+            enable_generated_teaser=args.enable_generated_teaser,
             background_palette=args.background_palette,
             poster_style_preset=args.poster_style,
             visual_density=args.visual_density,

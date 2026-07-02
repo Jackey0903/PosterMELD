@@ -19,6 +19,7 @@ class ImageTools:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
+        fallback_models: Optional[List[str]] = None,
         retry_attempts: Optional[int] = None,
         retry_delay: Optional[float] = None,
     ):
@@ -31,9 +32,32 @@ class ImageTools:
         self.api_key = api_key or os.getenv("IMAGE_API_KEY") or os.getenv("VLM_API_KEY")
         self.base_urls = self._resolve_base_urls(base_url)
         self.base_url = self.base_urls[0] if self.base_urls else ""
-        self.model = model or os.getenv("IMAGE_MODEL") or "gemini-2.5-flash-image"
+        self.models = self._resolve_models(model, fallback_models)
+        self.model = self.models[0] if self.models else "gemini-2.5-flash-image"
         self.retry_attempts = max(1, int(retry_attempts if retry_attempts is not None else os.getenv("IMAGE_RETRY_ATTEMPTS", "5")))
         self.retry_delay = max(0.0, float(retry_delay if retry_delay is not None else os.getenv("IMAGE_RETRY_DELAY_SECONDS", "6")))
+
+    def _resolve_models(self, model: Optional[str], fallback_models: Optional[List[str]]) -> List[str]:
+        if os.getenv("IMAGE_MODELS"):
+            values = self._split_base_urls(os.getenv("IMAGE_MODELS"))
+        else:
+            primary = model or os.getenv("IMAGE_MODEL") or "gemini-2.5-flash-image"
+            values = [primary]
+            configured_fallbacks = fallback_models
+            if configured_fallbacks is None:
+                configured_fallbacks = self._split_base_urls(os.getenv("IMAGE_FALLBACK_MODELS"))
+            values.extend(configured_fallbacks or [])
+            if primary == "gpt-image-2":
+                values.append("gemini-3.1-flash-image-preview")
+
+        models: List[str] = []
+        seen = set()
+        for value in values:
+            value = str(value or "").strip()
+            if value and value not in seen:
+                models.append(value)
+                seen.add(value)
+        return models
 
     def _resolve_base_urls(self, base_url: Optional[str]) -> List[str]:
         if base_url:
@@ -73,19 +97,36 @@ class ImageTools:
 
     def _request_with_failover(self, label: str, operation: Callable[[str], Any]) -> Any:
         errors = []
-        for base_url in self.base_urls:
-            for attempt in range(1, self.retry_attempts + 1):
-                try:
-                    return operation(base_url)
-                except Exception as exc:
-                    errors.append(f"{base_url} attempt {attempt}/{self.retry_attempts}: {exc}")
-                    if attempt < self.retry_attempts:
-                        print(f"{label} 调用失败，6s 后重试 ({attempt}/{self.retry_attempts})，base_url={base_url}: {exc}")
-                        time.sleep(self.retry_delay)
-                    else:
-                        print(f"{label} 在 base_url={base_url} 已失败 {self.retry_attempts} 次，切换下一个 URL")
+        for model in self.models:
+            self.model = model
+            for base_url in self.base_urls:
+                for attempt in range(1, self.retry_attempts + 1):
+                    try:
+                        return operation(base_url)
+                    except Exception as exc:
+                        errors.append(f"model={model} {base_url} attempt {attempt}/{self.retry_attempts}: {exc}")
+                        if self._is_non_retryable_model_error(exc):
+                            print(f"{label} 模型/渠道不可用，切换下一个 URL 或模型，model={model}, base_url={base_url}: {exc}")
+                            break
+                        if attempt < self.retry_attempts:
+                            print(f"{label} 调用失败，{self.retry_delay:g}s 后重试 ({attempt}/{self.retry_attempts})，model={model}, base_url={base_url}: {exc}")
+                            time.sleep(self.retry_delay)
+                        else:
+                            print(f"{label} 在 model={model}, base_url={base_url} 已失败 {self.retry_attempts} 次，切换下一个 URL")
         tail = "; ".join(errors[-5:])
         raise RuntimeError(f"{label} failed for all configured base URLs. Last errors: {tail}")
+
+    def _is_non_retryable_model_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        markers = [
+            "model_not_found",
+            "get_channel_failed",
+            "no available channel",
+            "no access to model",
+            "this token has no access",
+            "model not found",
+        ]
+        return any(marker in text for marker in markers)
 
     def _is_gpt_image_model(self) -> bool:
         return str(self.model or "").startswith("gpt-image")

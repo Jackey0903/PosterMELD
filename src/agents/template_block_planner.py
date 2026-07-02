@@ -128,6 +128,8 @@ class TemplatePriorPlanner:
                 "min_chars": section.get("min_chars"),
                 "max_chars": section.get("max_chars"),
                 "target_bullets": section.get("target_bullets"),
+                "generated_teaser_summary": section.get("generated_teaser_summary"),
+                "generated_teaser_original_text_count": section.get("generated_teaser_original_text_count"),
             })
         if any(item.get("keypoint_id") for item in normalized):
             normalized.sort(key=lambda item: self._keypoint_sort_value(item))
@@ -795,6 +797,15 @@ class TemplatePriorPlanner:
             if not budget:
                 refined.append(item)
                 continue
+            if self._is_generated_teaser_section(item):
+                item["capacity_budget"] = budget
+                item["target_chars"] = budget.get("target_chars")
+                item["min_chars"] = budget.get("min_chars")
+                item["max_chars"] = budget.get("max_chars")
+                item["target_bullets"] = budget.get("target_bullets")
+                item["capacity_warning"] = "generated_teaser_summary_preserved"
+                refined.append(item)
+                continue
             bullets, warning = self._fit_bullets_to_budget(
                 item.get("text_content") or [],
                 budget,
@@ -842,6 +853,15 @@ class TemplatePriorPlanner:
         if self._bullet_chars(fitted) < max(20, int(target_chars * 0.5)) and not allow_expand:
             warning = warning or "capacity_refinement_below_target"
         return fitted, warning
+
+    def _is_generated_teaser_section(self, section: Dict[str, Any]) -> bool:
+        if section.get("generated_teaser_summary"):
+            return True
+        return any(
+            str(visual.get("visual_id") or "").startswith("generated_teaser")
+            for visual in section.get("visual_assets") or []
+            if isinstance(visual, dict)
+        )
 
     def _trim_bullets_to_budget(self, bullets: List[str], max_chars: int, target_bullets: int) -> List[str]:
         if max_chars <= 0:
@@ -1056,6 +1076,9 @@ class TemplatePriorPlanner:
             refined = []
             for original, candidate in zip(sections, blocks):
                 item = deepcopy(original)
+                if self._is_generated_teaser_section(original):
+                    refined.append(item)
+                    continue
                 item["section_title"] = str(candidate.get("target_title") or original["section_title"]).strip()
                 item["text_content"] = self._clean_bullets(
                     candidate.get("text_content") or candidate.get("target_bullets") or original["text_content"]
@@ -1097,6 +1120,7 @@ class TemplatePriorPlanner:
                     "visual_policy": budget.get("visual_policy"),
                     "capacity_warning": budget.get("capacity_warning"),
                 },
+                "generated_teaser_summary": bool(section.get("generated_teaser_summary")),
                 "source_context": "\n".join(self._source_sentences_for_section(section, state))[:2400],
             })
         return f"""
@@ -1110,6 +1134,7 @@ Rules:
 - Do not go below min_chars unless source_context lacks enough facts; then set capacity_warning.
 - Never exceed max_chars.
 - For visual_policy="prioritize_visual_scale", keep text concise and do not compensate for small visuals with extra text.
+- For generated_teaser_summary=true, preserve the existing short text_content exactly.
 - Return clean, self-contained poster text items that can be rendered directly.
 - Do not include literal bullet symbols, nested bullets, ordered-list prefixes, empty strings, or multiline items.
 - Do not mention table or figure numbers such as "Table 2" or "Figure 3"; summarize the finding directly.
@@ -1168,6 +1193,8 @@ Blocks:
                 "max_chars": section.get("max_chars"),
                 "target_bullets": section.get("target_bullets"),
                 "capacity_warning": section.get("capacity_warning"),
+                "generated_teaser_summary": section.get("generated_teaser_summary"),
+                "generated_teaser_original_text_count": section.get("generated_teaser_original_text_count"),
             })
         rewritten.setdefault("spatial_content_plan", {})
         rewritten["spatial_content_plan"]["sections"] = sections

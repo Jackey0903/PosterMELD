@@ -57,6 +57,7 @@ class TimingMetrics:
     renderer_time: float = 0.0
     vlm_layout_reviewer_time: float = 0.0
     visual_legibility_reviewer_time: float = 0.0
+    generated_teaser_agent_time: float = 0.0
     adaptive_column_relayout_time: float = 0.0
     block_occupancy_analyzer_time: float = 0.0
     block_vlm_reviewer_time: float = 0.0
@@ -174,11 +175,13 @@ class PosterState(TypedDict):
     enable_block_vlm_review: bool
     enable_adaptive_column_width: bool
     enable_generated_background: bool
+    enable_generated_teaser: bool
     background_palette: Optional[str]
     poster_style_preset: Optional[str]
     visual_density: Optional[str]
     background_image_path: Optional[str]
     background_image_report: Optional[Dict[str, Any]]
+    generated_teaser_report: Optional[Dict[str, Any]]
     vlm_model: Optional[str]
     render_stage: str
     draft_status: str
@@ -223,6 +226,7 @@ def create_state(
     enable_block_vlm_review: bool = False,
     enable_adaptive_column_width: bool = False,
     enable_generated_background: bool = False,
+    enable_generated_teaser: bool = False,
     background_palette: Optional[str] = None,
     poster_style_preset: Optional[str] = None,
     visual_density: Optional[str] = None,
@@ -323,11 +327,13 @@ def create_state(
         enable_block_vlm_review=enable_block_vlm_review,
         enable_adaptive_column_width=enable_adaptive_column_width,
         enable_generated_background=enable_generated_background,
+        enable_generated_teaser=enable_generated_teaser,
         background_palette=background_palette,
         poster_style_preset=poster_style_preset,
         visual_density=visual_density,
         background_image_path=None,
         background_image_report=None,
+        generated_teaser_report=None,
         vlm_model=vlm_model,
         render_stage="draft" if needs_post_render_pass else "final",
         draft_status="pending",

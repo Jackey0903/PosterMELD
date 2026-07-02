@@ -1463,6 +1463,8 @@ class LayoutAgent:
         return final_width, final_height, scale_factor
 
     def _max_visual_height_fraction(self, visual_id: str, state) -> float:
+        if str(visual_id).startswith("generated_teaser"):
+            return float((self.config.get("generated_teaser") or {}).get("layout_max_height_fraction", 0.76))
         fast_visual_policy = state.get("fast_visual_policy") or (self.config.get("template_fast_mode") or {}).get("visual_policy") or {}
         if state.get("template_fast_mode"):
             if str(visual_id).startswith("table_"):
