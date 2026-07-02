@@ -1456,7 +1456,9 @@ def test_renderer_draws_explicit_section_container_fill_for_standard_templates()
         "width": 5,
         "height": 4,
         "fill_color": "#F0F6FF",
+        "fill_opacity": 0.84,
         "border_color": "#C9DDF5",
+        "border_opacity": 0.58,
         "border_width": 0.9,
         "border_style": "dashed",
         "shadow": {"enabled": True, "color": "#000000", "alpha": 0.16},
@@ -1466,7 +1468,9 @@ def test_renderer_draws_explicit_section_container_fill_for_standard_templates()
 
     assert calls
     assert calls[0][1]["fill_color"] == "#F0F6FF"
+    assert calls[0][1]["fill_opacity"] == 0.84
     assert calls[0][1]["border_color"] == "#C9DDF5"
+    assert calls[0][1]["border_opacity"] == 0.58
     assert calls[0][1]["border_style"] == "dashed"
     assert calls[0][1]["shadow"] == element["shadow"]
 
@@ -1487,6 +1491,27 @@ def test_pptx_director_add_shape_applies_outer_shadow_xml():
     xml = shape._element.xml
     assert "outerShdw" in xml
     assert 'alpha val="16000"' in xml
+
+
+def test_pptx_director_add_shape_applies_fill_and_border_opacity_xml():
+    director = PPTXDirector()
+
+    shape = director.add_shape(
+        MSO_SHAPE.RECTANGLE,
+        0.1,
+        0.1,
+        1.0,
+        1.0,
+        fill_color="#FFFFFF",
+        fill_opacity=0.84,
+        border_color="#D8DEE7",
+        border_opacity=0.58,
+        border_width=0.45,
+    )
+
+    xml = shape._element.xml
+    assert 'alpha val="84000"' in xml
+    assert 'alpha val="58000"' in xml
 
 
 def test_renderer_draws_background_image_before_layout(tmp_path):
@@ -1809,6 +1834,42 @@ def test_layout_agent_frames_normal_and_support_blocks():
     assert normal["border_style"] == "solid"
     assert support["border_color"] == "#D8DDE3"
     assert support["border_style"] == "dashed"
+
+
+def test_layout_agent_uses_translucent_panels_for_generated_background():
+    state = create_state("/tmp/paper.pdf", enable_generated_background=True)
+    agent = LayoutAgent()
+    container = {
+        "section_id": "method_details",
+        "template_prior": True,
+        "priority": 0.1,
+    }
+
+    agent._apply_visual_block_panel_style(container, state)
+
+    assert container["background_aware_panel"] is True
+    assert container["fill_color"] == "#FFFFFF"
+    assert container["fill_opacity"] == pytest.approx(0.84)
+    assert container["border_color"] == "#D8DEE7"
+    assert container["border_opacity"] == pytest.approx(0.58)
+    assert container["shadow"]["alpha"] == pytest.approx(0.045)
+
+
+def test_layout_agent_keeps_solid_panels_without_generated_background():
+    state = create_state("/tmp/paper.pdf")
+    agent = LayoutAgent()
+    container = {
+        "section_id": "method_details",
+        "template_prior": True,
+        "priority": 0.1,
+    }
+
+    agent._apply_visual_block_panel_style(container, state)
+
+    assert container["fill_color"] == "#F1F2F4"
+    assert "fill_opacity" not in container
+    assert "background_aware_panel" not in container
+    assert container["shadow"]["alpha"] == pytest.approx(0.16)
 
 
 def test_create_state_uses_draft_stage_when_post_render_pass_is_enabled():

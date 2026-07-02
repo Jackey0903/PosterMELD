@@ -105,7 +105,9 @@ class PPTXDirector:
         shape_type: int, # 取值参考 MSO_SHAPE 枚举
         x: float, y: float, w: float, h: float,
         fill_color: Optional[str] = None,
+        fill_opacity: Optional[float] = None,
         border_color: Optional[str] = None,
+        border_opacity: Optional[float] = None,
         border_width: float = 1.0,
         border_style: str = "solid",
         shadow: Optional[Dict[str, Any]] = None,
@@ -118,11 +120,13 @@ class PPTXDirector:
         if fill_color:
             shape.fill.solid()
             shape.fill.fore_color.rgb = self._hex_to_rgb(fill_color)
+            self._apply_color_alpha(shape.fill.fore_color._color, fill_opacity)
         else:
             shape.fill.background()
             
         if border_color:
             shape.line.color.rgb = self._hex_to_rgb(border_color)
+            self._apply_color_alpha(shape.line.color._color, border_opacity)
             shape.line.width = Pt(border_width)
             if str(border_style).lower() in {"dash", "dashed"}:
                 line = shape.line
@@ -136,6 +140,20 @@ class PPTXDirector:
             self._apply_outer_shadow(shape, shadow)
             
         return shape
+
+    def _apply_color_alpha(self, color_obj: Any, opacity: Optional[float]) -> None:
+        if opacity is None:
+            return
+        try:
+            opacity_value = max(0.0, min(float(opacity), 1.0))
+        except (TypeError, ValueError):
+            return
+        alpha = int(round(opacity_value * 100000))
+        srgb = color_obj._xClr
+        for child in list(srgb):
+            if child.tag == qn("a:alpha"):
+                srgb.remove(child)
+        srgb.append(parse_xml(f'<a:alpha xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" val="{alpha}"/>'))
 
     def _apply_outer_shadow(self, shape, shadow: Dict[str, Any]) -> None:
         """Apply a DrawingML outer shadow to a shape."""

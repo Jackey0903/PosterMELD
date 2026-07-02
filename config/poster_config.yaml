@@ -319,6 +319,21 @@ poster_visual_style:
       blur_pt: 5
       distance_pt: 2.4
       angle: 45
+    generated_background_overlay:
+      enabled: true
+      fill_color: "#FFFFFF"
+      fill_opacity: 0.84
+      border_color: "#D8DEE7"
+      border_opacity: 0.58
+      border_width: 0.45
+      border_style: "solid"
+      shadow:
+        enabled: true
+        color: "#000000"
+        alpha: 0.045
+        blur_pt: 2.2
+        distance_pt: 1.0
+        angle: 45
 
 selective_block_backgrounds:
   enabled: true

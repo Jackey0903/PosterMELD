@@ -436,7 +436,7 @@ class LayoutAgent:
                 }
                 self._apply_template_panel_style(section_container, base_layout)
                 self._apply_selective_block_frame_style(section_container, section, state, highlight_section_ids)
-                self._apply_visual_block_panel_style(section_container)
+                self._apply_visual_block_panel_style(section_container, state)
                 
                 # add debug border only if enabled
                 if self.show_debug_borders:
@@ -561,7 +561,7 @@ class LayoutAgent:
             section_container["border_style"] = highlight_config.get("normal_border_style", "solid")
         section_container["priority"] = min(float(section_container.get("priority", 0.1)), 0.09)
 
-    def _apply_visual_block_panel_style(self, section_container: Dict[str, Any]) -> None:
+    def _apply_visual_block_panel_style(self, section_container: Dict[str, Any], state: PosterState | None = None) -> None:
         panel_style = (self.visual_style_config.get("block_panel") or {})
         if not self.visual_style_config.get("enabled", False):
             return
@@ -569,6 +569,27 @@ class LayoutAgent:
             return
         if not section_container.get("template_prior"):
             return
+
+        if (state or {}).get("enable_generated_background", False):
+            overlay_style = panel_style.get("generated_background_overlay") or {}
+            if overlay_style.get("enabled", True):
+                section_container["fill_color"] = overlay_style.get("fill_color", "#FFFFFF")
+                section_container["fill_opacity"] = float(overlay_style.get("fill_opacity", 0.84))
+                border_color = str(overlay_style.get("border_color") or "").strip()
+                border_width = float(overlay_style.get("border_width", 0) or 0)
+                if border_color and border_width > 0:
+                    section_container["border_color"] = border_color
+                    section_container["border_opacity"] = float(overlay_style.get("border_opacity", 0.58))
+                    section_container["border_width"] = border_width
+                    section_container["border_style"] = overlay_style.get("border_style", "solid")
+                shadow = overlay_style.get("shadow")
+                if shadow and shadow.get("enabled", True):
+                    section_container["shadow"] = shadow
+                else:
+                    section_container.pop("shadow", None)
+                section_container["background_aware_panel"] = True
+                section_container["priority"] = min(float(section_container.get("priority", 0.1)), 0.07)
+                return
 
         section_container["fill_color"] = section_container.get("fill_color") or panel_style.get(
             "fill_color",
