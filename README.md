@@ -243,6 +243,14 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
 
 默认 `auto` 会为每次 poster 从合格路线中选择一种：左标题右 logo、居中标题、右对齐标题或左右分布 logo。短标题可以自动加入较小字号副标题；如果需要稳定复现实验效果，传入 `--header-seed`。
 
+可选小标题编号：
+
+```text
+--section-title-numbering off | small | inline
+```
+
+默认 `off`，小标题不显示编号；`small` 会在标题左侧显示较小编号；`inline` 保留旧版 `1. Title` 形式。
+
 可选 AI teaser 图：
 
 ```text

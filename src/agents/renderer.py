@@ -429,14 +429,51 @@ class Renderer:
         alignment = element.get("alignment", section_style.get("alignment", "left")).lower()
         wordart_style = element.get("wordart_style") or {}
         shadow = wordart_style.get("shadow") or section_style.get("shadow")
+        number_text = str(element.get("section_number") or "").strip()
+        numbering_mode = str(element.get("section_numbering_mode") or "off").strip().lower()
+        title_x, title_w = x, w
+        number_box = None
+        if numbering_mode == "small" and number_text:
+            number_width = max(float(element.get("section_number_width", 0.46) or 0.46), 0.18)
+            number_gap = max(float(element.get("section_number_gap", 0.12) or 0.12), 0.02)
+            number_width = min(number_width, max(w * 0.24, 0.18))
+            if w - number_width - number_gap >= 0.4:
+                title_x = x + number_width + number_gap
+                title_w = w - number_width - number_gap
+                number_box = {
+                    "x": x,
+                    "y": y,
+                    "w": number_width,
+                    "h": h,
+                    "font_size": max(22, int(font_size * float(element.get("section_number_font_scale", 0.62) or 0.62))),
+                }
+        font_size = self._fit_section_title_font_size(
+            section_title,
+            {**element, "width": title_w},
+            font_size,
+        )
 
         if shadow and shadow.get("enabled", True):
+            if number_box:
+                self._add_section_title_textbox(
+                    slide,
+                    number_text,
+                    number_box["x"] + float(shadow.get("offset_x_inches", 0.025)),
+                    number_box["y"] + float(shadow.get("offset_y_inches", 0.025)),
+                    number_box["w"],
+                    number_box["h"],
+                    font_family,
+                    number_box["font_size"],
+                    font_weight,
+                    shadow.get("color", "#AEB6D6"),
+                    "right",
+                )
             self._add_section_title_textbox(
                 slide,
                 section_title,
-                x + float(shadow.get("offset_x_inches", 0.025)),
+                title_x + float(shadow.get("offset_x_inches", 0.025)),
                 y + float(shadow.get("offset_y_inches", 0.025)),
-                w,
+                title_w,
                 h,
                 font_family,
                 font_size,
@@ -445,12 +482,26 @@ class Renderer:
                 alignment,
             )
 
+        if number_box:
+            self._add_section_title_textbox(
+                slide,
+                number_text,
+                number_box["x"],
+                number_box["y"],
+                number_box["w"],
+                number_box["h"],
+                font_family,
+                number_box["font_size"],
+                font_weight,
+                font_color,
+                "right",
+            )
         self._add_section_title_textbox(
             slide,
             section_title,
-            x,
+            title_x,
             y,
-            w,
+            title_w,
             h,
             font_family,
             font_size,

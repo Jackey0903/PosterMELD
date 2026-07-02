@@ -761,8 +761,16 @@ def main():
     default_vlm_model = os.getenv("PAPER2POSTER_VLM_MODEL") or os.getenv("VLM_MODEL")
     poster_style_choices = available_poster_styles(config)
     visual_density_choices = available_visual_densities(config)
+    section_title_numbering_choices = ["off", "small", "inline"]
     default_poster_style = normalize_poster_style(os.getenv("PAPER2POSTER_STYLE"), config)
     default_visual_density = normalize_visual_density(os.getenv("PAPER2POSTER_VISUAL_DENSITY"), config)
+    default_section_title_numbering = str(
+        os.getenv("PAPER2POSTER_SECTION_TITLE_NUMBERING")
+        or config.get("section_title_numbering")
+        or "off"
+    ).strip().lower()
+    if default_section_title_numbering not in section_title_numbering_choices:
+        default_section_title_numbering = "off"
     header_route_choices = ["auto", "classic_left", "centered", "right_title", "split_logos"]
     header_subtitle_choices = ["auto", "off", "always"]
     default_header_route = os.getenv("PAPER2POSTER_HEADER_ROUTE", "auto")
@@ -861,6 +869,12 @@ def main():
         choices=visual_density_choices,
         default=default_visual_density,
         help="How aggressively the planner should preserve figures and result tables.",
+    )
+    parser.add_argument(
+        "--section-title-numbering",
+        choices=section_title_numbering_choices,
+        default=default_section_title_numbering,
+        help="Section heading numbering style: off by default, small for compact numeric prefixes, inline for legacy '1. Title' labels.",
     )
     parser.add_argument(
         "--header-route",
@@ -994,6 +1008,7 @@ def main():
     print(f"📐 Adaptive Column Width: {'enabled' if args.enable_adaptive_column_width else 'disabled'}")
     print(f"🎭 Poster Style: {args.poster_style}")
     print(f"📊 Visual Density: {args.visual_density}")
+    print(f"🔢 Section Title Numbering: {args.section_title_numbering}")
     print(f"🧾 Header Route: {args.header_route}")
     print(f"🧾 Header Subtitle: {args.header_subtitle}")
     if args.header_seed is not None:
@@ -1020,6 +1035,7 @@ def main():
             background_palette=args.background_palette,
             poster_style_preset=args.poster_style,
             visual_density=args.visual_density,
+            section_title_numbering=args.section_title_numbering,
             header_route=args.header_route,
             header_subtitle_policy=args.header_subtitle,
             header_seed=args.header_seed,

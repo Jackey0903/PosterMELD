@@ -147,6 +147,7 @@ poster_style_presets:
         border_color: "#E8D7DB"
 
 default_visual_density: "balanced"
+section_title_numbering: "off"
 visual_density_presets:
   lean:
     label: "Lean"
@@ -297,6 +298,9 @@ poster_visual_style:
     bar_height_inches: 0.78
     horizontal_padding_inches: 0.28
     vertical_padding_inches: 0.04
+    small_number_font_scale: 0.62
+    small_number_width_inches: 0.46
+    small_number_gap_inches: 0.12
     shadow:
       enabled: true
       color: "#B4BDD8"

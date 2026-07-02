@@ -1225,7 +1225,8 @@ class LayoutAgent:
         min_bar_height = float(section_title_font_size) / 72 + (2 * vertical_padding)
         bar_height = max(float(section_style.get("bar_height_inches", min_bar_height)), min_bar_height)
         bar_color = accent_styling.get("color") or section_style.get("bar_fill_color", "#06134A")
-        display_title = self._section_title_label(section, section_title)
+        title_label = self._section_title_label(section, section_title, state)
+        display_title = title_label["title"]
 
         bar_element = {
             "type": "title_accent_block",
@@ -1256,6 +1257,11 @@ class LayoutAgent:
             "font_weight": title_styling.get("font_weight", section_style.get("font_weight", "bold")),
             "font_color": title_styling.get("color", section_style.get("font_color", "#FFFFFF")),
             "alignment": title_styling.get("alignment", section_style.get("alignment", "left")),
+            "section_number": title_label.get("number"),
+            "section_numbering_mode": title_label.get("numbering_mode"),
+            "section_number_font_scale": float(section_style.get("small_number_font_scale", 0.62)),
+            "section_number_width": float(section_style.get("small_number_width_inches", 0.46)),
+            "section_number_gap": float(section_style.get("small_number_gap_inches", 0.12)),
             "wordart_style": {
                 "name": "navy_band_serif"
                 if self.visual_style_config.get("selected_preset", "navy_serif") == "navy_serif"
@@ -1268,15 +1274,60 @@ class LayoutAgent:
         
         return elements
 
-    def _section_title_label(self, section: Dict[str, Any], title: str) -> str:
+    def _section_title_label(self, section: Dict[str, Any], title: str, state: PosterState) -> Dict[str, Any]:
         raw_title = str(title or "").strip()
-        if re.match(r"^\d+[\.)]\s+", raw_title):
-            return raw_title
+        explicit_number, clean_title = self._strip_section_number(raw_title)
+        mode = self._section_title_numbering_mode(state)
+        number = explicit_number or self._section_number_from_slot(section)
+
+        if mode == "inline" and number:
+            return {
+                "title": f"{number}. {clean_title}",
+                "number": number,
+                "numbering_mode": "inline",
+            }
+        if mode == "small" and number:
+            return {
+                "title": clean_title,
+                "number": number,
+                "numbering_mode": "small",
+            }
+        return {
+            "title": clean_title,
+            "number": None,
+            "numbering_mode": "off",
+        }
+
+    def _section_title_numbering_mode(self, state: PosterState) -> str:
+        raw_mode = str(state.get("section_title_numbering") or self.config.get("section_title_numbering", "off")).strip().lower()
+        aliases = {
+            "": "off",
+            "none": "off",
+            "false": "off",
+            "no": "off",
+            "0": "off",
+            "on": "small",
+            "true": "small",
+            "yes": "small",
+            "1": "small",
+        }
+        mode = aliases.get(raw_mode, raw_mode)
+        if mode not in {"off", "small", "inline"}:
+            return "off"
+        return mode
+
+    def _strip_section_number(self, raw_title: str) -> Tuple[str, str]:
+        match = re.match(r"^\s*(\d+)[\.)]\s*(.+?)\s*$", raw_title)
+        if match:
+            return match.group(1), match.group(2).strip()
+        return "", raw_title
+
+    def _section_number_from_slot(self, section: Dict[str, Any]) -> str:
         for key in ("slot_id", "column_assignment", "lane_id"):
             match = re.search(r"(\d+)", str(section.get(key, "")))
             if match:
-                return f"{int(match.group(1))}. {raw_title}"
-        return raw_title
+                return str(int(match.group(1)))
+        return ""
     
     def _validate_precise_layout(self, layout_data: List[Dict], poster_width: float, 
                                poster_height: float) -> Dict[str, Any]:

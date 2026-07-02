@@ -1188,10 +1188,65 @@ def test_layout_agent_section_title_uses_navy_band_wordart():
     assert bar["x"] == pytest.approx(1.0)
     assert bar["width"] == pytest.approx(6.0)
     assert bar["color"] == "#06134A"
-    assert title["section_title"] == "3. Method"
+    assert title["section_title"] == "Method"
+    assert title["section_number"] is None
+    assert title["section_numbering_mode"] == "off"
     assert title["font_family"] == "Georgia"
     assert title["font_color"] == "#FFFFFF"
     assert title["wordart_style"]["name"] == "navy_band_serif"
+
+
+def test_layout_agent_section_title_supports_small_optional_numbering():
+    agent = LayoutAgent()
+    state = create_state("/tmp/paper.pdf", section_title_numbering="small")
+    section = {
+        "section_id": "method",
+        "section_title": "Method",
+        "column_assignment": "slot_3",
+        "slot_id": "slot_3",
+    }
+
+    elements = agent._create_section_title_design(section, column_x=1.0, start_y=2.0, column_width=6.0, state=state)
+
+    title = next(element for element in elements if element["type"] == "section_title")
+    assert title["section_title"] == "Method"
+    assert title["section_number"] == "3"
+    assert title["section_numbering_mode"] == "small"
+    assert title["section_number_font_scale"] < 1.0
+
+
+def test_layout_agent_section_title_inline_numbering_keeps_legacy_label():
+    agent = LayoutAgent()
+    state = create_state("/tmp/paper.pdf", section_title_numbering="inline")
+    section = {
+        "section_id": "method",
+        "section_title": "Method",
+        "column_assignment": "slot_3",
+        "slot_id": "slot_3",
+    }
+
+    elements = agent._create_section_title_design(section, column_x=1.0, start_y=2.0, column_width=6.0, state=state)
+
+    title = next(element for element in elements if element["type"] == "section_title")
+    assert title["section_title"] == "3. Method"
+    assert title["section_numbering_mode"] == "inline"
+
+
+def test_layout_agent_section_title_default_strips_existing_number_prefix():
+    agent = LayoutAgent()
+    state = create_state("/tmp/paper.pdf")
+    section = {
+        "section_id": "method",
+        "section_title": "7. Method",
+        "column_assignment": "slot_3",
+        "slot_id": "slot_3",
+    }
+
+    elements = agent._create_section_title_design(section, column_x=1.0, start_y=2.0, column_width=6.0, state=state)
+
+    title = next(element for element in elements if element["type"] == "section_title")
+    assert title["section_title"] == "Method"
+    assert title["section_numbering_mode"] == "off"
 
 
 def test_section_title_designer_emits_navy_band_template():

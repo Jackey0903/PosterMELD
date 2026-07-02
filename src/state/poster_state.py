@@ -181,6 +181,7 @@ class PosterState(TypedDict):
     background_palette: Optional[str]
     poster_style_preset: Optional[str]
     visual_density: Optional[str]
+    section_title_numbering: Optional[str]
     header_route: Optional[str]
     header_subtitle_policy: Optional[str]
     header_seed: Optional[int]
@@ -235,6 +236,7 @@ def create_state(
     background_palette: Optional[str] = None,
     poster_style_preset: Optional[str] = None,
     visual_density: Optional[str] = None,
+    section_title_numbering: Optional[str] = None,
     header_route: Optional[str] = None,
     header_subtitle_policy: Optional[str] = None,
     header_seed: Optional[int] = None,
@@ -340,6 +342,7 @@ def create_state(
         background_palette=background_palette,
         poster_style_preset=poster_style_preset,
         visual_density=visual_density,
+        section_title_numbering=section_title_numbering,
         header_route=header_route,
         header_subtitle_policy=header_subtitle_policy,
         header_seed=header_seed,
