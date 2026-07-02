@@ -533,7 +533,9 @@ class TemplatePriorPlanner:
 
     def _limit_visuals_for_region(self, section: Dict[str, Any], region: Dict[str, Any]) -> List[Dict[str, Any]]:
         visuals = list(section.get("visual_assets") or [])
-        if not visuals or not region.get("can_host_visual", False):
+        if not visuals:
+            return []
+        if not region.get("can_host_visual", False):
             return []
         if region.get("text_density_limit") == "low":
             if self._allows_low_density_visual(section, region):
@@ -548,7 +550,16 @@ class TemplatePriorPlanner:
             preferred = [visual for visual in visuals if str(visual.get("visual_id", "")).startswith("figure_")]
             if preferred:
                 visuals = preferred + [visual for visual in visuals if visual not in preferred]
-        return visuals[:1]
+        return visuals[:self._visual_limit_for_region(section, region)]
+
+    def _visual_limit_for_region(self, section: Dict[str, Any], region: Dict[str, Any]) -> int:
+        if not section.get("capacity_budget"):
+            return 1
+        density = str(region.get("text_density_limit") or "medium")
+        area = float(region.get("area_ratio", 0.0) or 0.0)
+        if density == "high" or area >= 0.12:
+            return 2
+        return 1
 
     def _allows_low_density_visual(self, section: Dict[str, Any], region: Dict[str, Any]) -> bool:
         region_id = str(region.get("region_id") or "")
@@ -806,6 +817,8 @@ class TemplatePriorPlanner:
                 item["capacity_warning"] = "generated_teaser_summary_preserved"
                 refined.append(item)
                 continue
+            if len(item.get("visual_assets") or []) >= 2:
+                budget = self._multi_visual_text_budget(budget)
             bullets, warning = self._fit_bullets_to_budget(
                 item.get("text_content") or [],
                 budget,
@@ -822,6 +835,17 @@ class TemplatePriorPlanner:
             item["capacity_warning"] = warning or budget.get("capacity_warning")
             refined.append(item)
         return refined
+
+    def _multi_visual_text_budget(self, budget: Dict[str, Any]) -> Dict[str, Any]:
+        adjusted = dict(budget)
+        scale = float(self.block_config.get("multi_visual_text_budget_scale", 0.58))
+        for key in ("min_chars", "target_chars", "max_chars"):
+            if adjusted.get(key) is not None:
+                adjusted[key] = max(90, int(float(adjusted.get(key) or 0) * scale))
+        if adjusted.get("target_bullets") is not None:
+            adjusted["target_bullets"] = max(1, min(3, int(adjusted.get("target_bullets") or 1)))
+        adjusted["capacity_warning"] = adjusted.get("capacity_warning") or "multi_visual_text_budget_reduced"
+        return adjusted
 
     def _fit_bullets_to_budget(
         self,

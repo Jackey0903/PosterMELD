@@ -181,8 +181,14 @@ class TemplateCapacityPlanner:
         )
         figure_slots = [block["slot_id"] for block in blocks if "figure" in str(block.get("visual_policy") or "")]
         table_slots = [block["slot_id"] for block in blocks if "table" in str(block.get("visual_policy") or "")]
-        figure_slots = self._merge_slot_order(figure_slots, list(policy.get("figure_slots") or ["slot_2", "slot_3"]))
-        table_slots = self._merge_slot_order(table_slots, list(policy.get("table_slots") or ["slot_4"]))
+        figure_slots = self._sort_slots_by_area(
+            self._merge_slot_order(figure_slots, list(policy.get("figure_slots") or ["slot_2", "slot_3"])),
+            contract,
+        )
+        table_slots = self._sort_slots_by_area(
+            self._merge_slot_order(table_slots, list(policy.get("table_slots") or ["slot_4"])),
+            contract,
+        )
         return {
             "source": "fast_template_first_visual_policy",
             "template_id": template_name,
@@ -214,6 +220,16 @@ class TemplateCapacityPlanner:
             if slot_id and slot_id not in ordered:
                 ordered.append(slot_id)
         return ordered
+
+    def _sort_slots_by_area(self, slot_ids: List[str], contract: Dict[str, Any]) -> List[str]:
+        by_slot = contract.get("by_slot") or {}
+
+        def area(slot_id: str) -> float:
+            bbox = (by_slot.get(slot_id) or {}).get("slot_bbox") or {}
+            return float(bbox.get("w", 0.0) or 0.0) * float(bbox.get("h", 0.0) or 0.0)
+
+        original_index = {slot_id: index for index, slot_id in enumerate(slot_ids)}
+        return sorted(slot_ids, key=lambda slot_id: (-area(slot_id), original_index.get(slot_id, 999)))
 
     def _slot_specs_for_template(
         self,

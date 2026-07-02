@@ -1075,14 +1075,62 @@ class MicroLayoutRefiner:
                     self._min_body_font_size(template_layout),
                     int(round(item.get("font_size", 44) * compression_ratio)),
                 )
+                item["height"] = max(
+                    item.get("height", 0.0),
+                    self._measured_text_box_height(item, template_layout),
+                )
             elif item.get("type") == "section_title":
                 item["font_size"] = max(
                     self._min_section_title_font_size(template_layout),
                     int(round(item.get("font_size", 64) * compression_ratio)),
                 )
+                item["height"] = max(
+                    item.get("height", 0.0),
+                    (item["font_size"] / 72) + 0.05,
+                )
 
             compressed.append(item)
-        return compressed
+        return self._sync_container_bounds(compressed)
+
+    def _measured_text_box_height(self, item: Dict[str, Any], template_layout: Dict[str, Any]) -> float:
+        plain_text = self._strip_markup_for_measurement(str(item.get("content") or ""))
+        measured = self._measure_text_height_for_refinement(
+            text_content=plain_text,
+            width_inches=max(float(item.get("width", 0.0) or 0.0), 0.5),
+            font_name=item.get("font_family", self.typography_config["fonts"]["body_text"]),
+            font_size=int(item.get("font_size") or self.typography_config["sizes"]["body_text"]),
+            line_spacing=float(item.get("line_spacing", 1.0) or 1.0),
+            template_layout=template_layout,
+        )
+        return (
+            float(measured["optimal_height"]) * self.refine_config.get("text_height_safety_factor", 1.0)
+            + self.refine_config.get("text_height_safety_padding", 0.05)
+        )
+
+    def _sync_container_bounds(self, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        containers = {
+            str(element.get("section_id")): element
+            for element in elements
+            if element.get("type") == "section_container" and element.get("section_id")
+        }
+        if not containers:
+            return elements
+
+        for element in elements:
+            if element.get("type") == "section_container":
+                continue
+            section_id = str(element.get("section_id") or "")
+            parent = containers.get(section_id)
+            if not parent:
+                element_id = str(element.get("id") or element.get("slot_id") or "")
+                matches = [candidate for candidate in containers if element_id.startswith(f"{candidate}_")]
+                parent = containers.get(max(matches, key=len)) if matches else None
+            if not parent:
+                continue
+            child_bottom = float(element.get("y", 0.0) or 0.0) + float(element.get("height", 0.0) or 0.0)
+            required = child_bottom - float(parent.get("y", 0.0) or 0.0) + self.refine_config.get("container_bottom_padding", 0.0)
+            parent["height"] = max(float(parent.get("height", 0.0) or 0.0), required)
+        return elements
 
     def _validate_refined_layout(self, elements: List[Dict[str, Any]], lane_map: Dict[str, Dict[str, Any]], state: PosterState) -> Dict[str, Any]:
         issues = []
@@ -1125,7 +1173,34 @@ class MicroLayoutRefiner:
                     issues.append(f"lane overflow in {lane_id}: {section.get('section_id')}")
                 previous_bottom = max(previous_bottom, section["y"] + section["height"])
 
+        fixed_template = (state.get("layout_template_metadata") or {}).get("layout_mode") == "template_prior"
+        if fixed_template:
+            for index, left in enumerate(section_containers):
+                for right in section_containers[index + 1:]:
+                    if self._section_boxes_overlap(left, right):
+                        issues.append(
+                            "section container overlap: "
+                            f"{left.get('section_id')} and {right.get('section_id')}"
+                        )
+
         return {"issues": issues}
+
+    def _section_boxes_overlap(self, left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+        tolerance = 0.02
+        left_x = float(left.get("x", 0.0) or 0.0)
+        left_y = float(left.get("y", 0.0) or 0.0)
+        left_right = left_x + float(left.get("width", 0.0) or 0.0)
+        left_bottom = left_y + float(left.get("height", 0.0) or 0.0)
+        right_x = float(right.get("x", 0.0) or 0.0)
+        right_y = float(right.get("y", 0.0) or 0.0)
+        right_right = right_x + float(right.get("width", 0.0) or 0.0)
+        right_bottom = right_y + float(right.get("height", 0.0) or 0.0)
+        return not (
+            left_right <= right_x + tolerance
+            or right_right <= left_x + tolerance
+            or left_bottom <= right_y + tolerance
+            or right_bottom <= left_y + tolerance
+        )
 
     def _find_parent_container(self, element: Dict[str, Any], container_by_section: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         section_id = element.get("section_id")

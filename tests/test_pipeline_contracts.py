@@ -44,7 +44,7 @@ from src.tools.image_api import ImageTools
 from src.tools.layout_api import LayoutTemplates
 from src.tools.pptx_api import PPTXDirector
 from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_for_poster
-from src.workflow.pipeline import _run_final_quality_gate, resolve_poster_dimensions
+from src.workflow.pipeline import _run_final_quality_gate, _section_geometry_issues, resolve_poster_dimensions
 
 
 def test_parser_visual_assets_registry_matches_images_tables():
@@ -424,6 +424,23 @@ def test_template_capacity_planner_applies_rich_visual_density(tmp_path):
     assert result["fast_block_contract"]["by_slot"]["slot_2"]["visual_footprint"]["min_width"] > 0
 
 
+def test_template_capacity_planner_orders_visual_slots_by_area(tmp_path):
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_96_landscape",
+        width=54,
+        height=27,
+        visual_density="rich",
+    )
+    state["output_dir"] = str(tmp_path / "output_area_order")
+
+    result = TemplateCapacityPlanner()(state)
+
+    policy = result["fast_visual_policy"]
+    assert policy["figure_slots"][:3] == ["slot_2", "slot_1", "slot_3"]
+    assert policy["table_slots"][:2] == ["slot_5", "slot_6"]
+
+
 def test_standard_template_preselector_auto_selects_dense_landscape_template(tmp_path):
     state = create_state(str(tmp_path / "paper.pdf"), layout_template="auto", width=54, height=36)
     state["output_dir"] = str(tmp_path / "output")
@@ -551,6 +568,153 @@ def test_curator_groups_keypoints_for_standard_landscape_template(tmp_path):
     key_holder = next(section for section in sections if section.get("visual_assets") and section["visual_assets"][0]["visual_id"] == "figure_1")
     assert key_holder["column_assignment"] == "middle"
     assert key_holder["vertical_priority"] == "top"
+
+
+def test_curator_backfills_standard_template_visuals_by_large_blocks(tmp_path):
+    capacity_state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_96_landscape",
+        width=54,
+        height=27,
+        visual_density="rich",
+    )
+    capacity_state["output_dir"] = str(tmp_path / "output")
+    capacity_state = TemplateCapacityPlanner()(capacity_state)
+
+    curator = StoryBoardCurator()
+    state = create_state(str(tmp_path / "paper.pdf"))
+    state["paper_poster_keypoints"] = [
+        {"id": index, "key_point": f"Poster point {index} with method or result evidence.", "section": "Method" if index <= 6 else "Results"}
+        for index in range(1, 11)
+    ]
+    state["poster_reading_order"] = list(range(1, 11))
+    story_board = {"spatial_content_plan": {"sections": []}}
+    visual_context = {
+        "valid_visual_ids": ["figure_1", "figure_2", "table_1", "table_2"],
+        "keypoint_target_count": 10,
+        "keypoint_section_target_count": 6,
+        "keypoint_grouping_mode": True,
+        "requested_layout_template": "cluster_96_landscape",
+        "template_fast_mode": True,
+        "fast_block_contract": capacity_state["fast_block_contract"],
+        "fast_visual_policy": capacity_state["fast_visual_policy"],
+        "template_layout": capacity_state["layout_template_metadata"],
+        "visual_assets_heights": {
+            "figure_1": {"aspect_ratio": 2.52},
+            "figure_2": {"aspect_ratio": 2.84},
+            "table_1": {"aspect_ratio": 4.3},
+            "table_2": {"aspect_ratio": 4.2},
+        },
+    }
+    classified_visuals = {
+        "key_visual": "figure_2",
+        "method_workflow": ["figure_1"],
+        "main_results": ["table_1", "table_2"],
+        "comparative_results": [],
+        "supporting": [],
+    }
+
+    curator._align_sections_to_keypoints(story_board, state, visual_context, classified_visuals)
+
+    sections = story_board["spatial_content_plan"]["sections"]
+    by_slot = {section["preferred_slot_id"]: section for section in sections}
+    visual_ids = [
+        visual["visual_id"]
+        for section in sections
+        for visual in section.get("visual_assets", [])
+    ]
+    slot_2_visual_ids = [visual["visual_id"] for visual in by_slot["slot_2"]["visual_assets"]]
+    slot_3_visual_ids = [visual["visual_id"] for visual in by_slot["slot_3"]["visual_assets"]]
+    assert slot_2_visual_ids[0] == "figure_2"
+    assert any(visual_id.startswith("table_") for visual_id in slot_2_visual_ids)
+    assert not any(visual_id.startswith("table_") for visual_id in slot_3_visual_ids)
+    assert sum(visual_id.startswith("figure_") for visual_id in visual_ids) == 2
+    assert sum(visual_id.startswith("table_") for visual_id in visual_ids) == 2
+
+
+def test_template_block_planner_preserves_fast_assigned_two_figures_two_tables(tmp_path):
+    capacity_state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_96_landscape",
+        width=54,
+        height=27,
+        visual_density="rich",
+    )
+    capacity_state["output_dir"] = str(tmp_path / "output_capacity")
+    capacity_state = TemplateCapacityPlanner()(capacity_state)
+
+    curator = StoryBoardCurator()
+    state = create_state(str(tmp_path / "paper.pdf"), layout_template="cluster_96_landscape", width=54, height=27)
+    state["paper_poster_keypoints"] = [
+        {"id": index, "key_point": f"Poster point {index} with method or result evidence.", "section": "Method" if index <= 6 else "Results"}
+        for index in range(1, 11)
+    ]
+    state["poster_reading_order"] = list(range(1, 11))
+    state["visual_assets"] = {
+        "figure_1": {"asset_type": "figure", "aspect": 2.52},
+        "figure_2": {"asset_type": "figure", "aspect": 2.84},
+        "table_2": {"asset_type": "table", "aspect": 4.216867469879518},
+        "table_4": {"asset_type": "table", "aspect": 4.307377049180328},
+    }
+    visual_context = {
+        "valid_visual_ids": list(state["visual_assets"].keys()),
+        "keypoint_target_count": 10,
+        "keypoint_section_target_count": 6,
+        "keypoint_grouping_mode": True,
+        "requested_layout_template": "cluster_96_landscape",
+        "template_fast_mode": True,
+        "fast_block_contract": capacity_state["fast_block_contract"],
+        "fast_visual_policy": capacity_state["fast_visual_policy"],
+        "template_layout": capacity_state["layout_template_metadata"],
+        "visual_assets": state["visual_assets"],
+        "visual_assets_heights": {
+            visual_id: {"aspect_ratio": asset["aspect"]}
+            for visual_id, asset in state["visual_assets"].items()
+        },
+    }
+    classified_visuals = {
+        "key_visual": "figure_2",
+        "method_workflow": ["figure_1"],
+        "main_results": ["table_2", "table_4"],
+        "comparative_results": [],
+        "supporting": [],
+    }
+    story_board = {"spatial_content_plan": {"sections": []}}
+    curator._align_sections_to_keypoints(story_board, state, visual_context, classified_visuals)
+
+    planner_state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_96_landscape",
+        width=54,
+        height=27,
+        visual_density="rich",
+    )
+    planner_state["output_dir"] = str(tmp_path / "output_planner")
+    planner_state["template_fast_mode"] = True
+    planner_state["resolved_layout_template"] = "cluster_96_landscape"
+    planner_state["story_board"] = story_board
+    planner_state["visual_assets"] = state["visual_assets"]
+    planner_state["fast_block_contract"] = capacity_state["fast_block_contract"]
+    planner_state["fast_visual_policy"] = capacity_state["fast_visual_policy"]
+    planner_state["paper_poster_keypoints"] = state["paper_poster_keypoints"]
+    planner_state["poster_reading_order"] = state["poster_reading_order"]
+
+    result = TemplateBlockPlanner()(planner_state)
+
+    visual_ids = [
+        visual["visual_id"]
+        for section in (result["story_board"].get("spatial_content_plan") or {}).get("sections", [])
+        for visual in section.get("visual_assets", [])
+    ]
+    by_slot = {
+        section.get("preferred_slot_id"): section
+        for section in (result["story_board"].get("spatial_content_plan") or {}).get("sections", [])
+    }
+    slot_2_visual_ids = [visual["visual_id"] for visual in by_slot["slot_2"].get("visual_assets", [])]
+    assert sum(visual_id.startswith("figure_") for visual_id in visual_ids) == 2
+    assert sum(visual_id.startswith("table_") for visual_id in visual_ids) == 2
+    assert "figure_2" in slot_2_visual_ids
+    assert any(visual_id.startswith("table_") for visual_id in slot_2_visual_ids)
 
 
 def test_curator_block_template_key_visual_validation_uses_slot_mapping_not_middle_column():
@@ -3520,6 +3684,43 @@ def test_micro_layout_refiner_validation_rejects_child_outside_container():
     assert any("child vertical overflow" in issue for issue in validation["issues"])
 
 
+def test_micro_layout_refiner_validation_rejects_template_section_overlap():
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_96_landscape", width=54, height=27)
+    state["layout_template_metadata"] = {
+        "template_name": "cluster_test",
+        "layout_mode": "template_prior",
+        "lanes": [
+            {"id": "slot_1", "x": 1.0, "y": 4.0, "w": 12.0, "h": 5.0},
+            {"id": "slot_2", "x": 1.0, "y": 8.8, "w": 12.0, "h": 5.0},
+        ],
+    }
+    lane_map = {lane["id"]: lane for lane in state["layout_template_metadata"]["lanes"]}
+    layout = [
+        {
+            "type": "section_container",
+            "section_id": "first",
+            "lane_id": "slot_1",
+            "x": 1.0,
+            "y": 4.0,
+            "width": 12.0,
+            "height": 5.1,
+        },
+        {
+            "type": "section_container",
+            "section_id": "second",
+            "lane_id": "slot_2",
+            "x": 1.0,
+            "y": 8.8,
+            "width": 12.0,
+            "height": 5.0,
+        },
+    ]
+
+    validation = MicroLayoutRefiner()._validate_refined_layout(layout, lane_map, state)
+
+    assert any("section container overlap" in issue for issue in validation["issues"])
+
+
 def test_vlm_layout_reviewer_syncs_container_after_patch():
     state = create_state("/tmp/paper.pdf", layout_template="three_column_postergen", enable_vlm_layout_review=True)
     template = LayoutTemplates(54, 36, margin=1.0, col_gap=1.0).get_template(
@@ -3969,7 +4170,7 @@ def test_final_quality_gate_rejects_mean_below_98_percent(tmp_path):
 
 
 def test_final_quality_gate_rejects_excessive_bottom_whitespace(tmp_path):
-    state = _block_refinement_state(tmp_path, utilization=0.98)
+    state = _block_refinement_state(tmp_path, utilization=0.96)
     state["output_dir"] = str(tmp_path / "output")
     state["template_layout_mode"] = "template_prior"
     state["final_poster_accepted"] = True
@@ -4023,6 +4224,90 @@ def test_final_quality_gate_rejects_visual_below_footprint_contract(tmp_path):
     assert result["final_quality_gate"]["accepted"] is False
     assert any(
         failure["category"] == "visual_footprint"
+        for failure in result["final_quality_gate"]["failures"]
+    )
+
+
+def test_final_quality_gate_rejects_template_section_geometry_overlap(tmp_path):
+    state = create_state(str(tmp_path / "paper.pdf"), layout_template="cluster_96_landscape", width=54, height=27)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    state["layout_template_metadata"] = {
+        "template_name": "cluster_test",
+        "layout_mode": "template_prior",
+        "lanes": [
+            {"id": "slot_1", "x": 1.0, "y": 4.0, "w": 10.0, "h": 4.0},
+            {"id": "slot_2", "x": 1.0, "y": 7.8, "w": 10.0, "h": 4.0},
+        ],
+    }
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {"section_id": "first", "section_title": "First", "slot_id": "slot_1", "text_content": ["First block."]},
+                {"section_id": "second", "section_title": "Second", "slot_id": "slot_2", "text_content": ["Second block."]},
+            ]
+        }
+    }
+    state["styled_layout"] = [
+        {
+            "type": "section_container",
+            "section_id": "first",
+            "lane_id": "slot_1",
+            "slot_id": "slot_1",
+            "x": 1.0,
+            "y": 4.0,
+            "width": 10.0,
+            "height": 4.05,
+        },
+        {
+            "type": "text",
+            "id": "first_text",
+            "section_id": "first",
+            "lane_id": "slot_1",
+            "x": 1.2,
+            "y": 4.3,
+            "width": 9.6,
+            "height": 3.45,
+            "content": "First block.",
+            "font_size": 44,
+        },
+        {
+            "type": "section_container",
+            "section_id": "second",
+            "lane_id": "slot_2",
+            "slot_id": "slot_2",
+            "x": 1.0,
+            "y": 7.8,
+            "width": 10.0,
+            "height": 3.9,
+        },
+        {
+            "type": "text",
+            "id": "second_text",
+            "section_id": "second",
+            "lane_id": "slot_2",
+            "x": 1.2,
+            "y": 8.1,
+            "width": 9.6,
+            "height": 3.45,
+            "content": "Second block.",
+            "font_size": 44,
+        },
+    ]
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert any("overlap" in issue for issue in _section_geometry_issues(state))
+    assert result["final_poster_accepted"] is False
+    assert any(
+        failure["category"] == "section_geometry"
         for failure in result["final_quality_gate"]["failures"]
     )
 

@@ -201,9 +201,10 @@ def _evaluate_size(
     min_height = float(requirements.get("min_height") or 0.0)
     min_area = float(requirements.get("min_area") or 0.0)
     area = max(width, 0.0) * max(height, 0.0)
-    width_ok = width + 1e-6 >= min_width
-    height_ok = height + 1e-6 >= min_height
-    area_ok = area + 1e-6 >= min_area
+    tolerance = 0.01
+    width_ok = width + tolerance >= min_width
+    height_ok = height + tolerance >= min_height
+    area_ok = area + tolerance >= min_area
     ok = width_ok and height_ok and area_ok
     return {
         "visual_id": str(visual_id or ""),

@@ -225,6 +225,53 @@ def _load_content_json(state: PosterState, filename: str) -> Dict[str, Any]:
         return {}
 
 
+def _section_geometry_issues(state: PosterState) -> list[str]:
+    layout = state.get("styled_layout") or []
+    template = state.get("layout_template_metadata") or {}
+    lane_map = {str(lane.get("id")): lane for lane in template.get("lanes") or [] if lane.get("id")}
+    containers = [
+        element
+        for element in layout
+        if element.get("type") == "section_container" and element.get("section_id")
+    ]
+    issues: list[str] = []
+
+    for container in containers:
+        lane_id = str(container.get("lane_id") or container.get("slot_id") or "")
+        lane = lane_map.get(lane_id)
+        if not lane:
+            continue
+        tolerance = 0.03
+        bottom = float(container.get("y", 0.0) or 0.0) + float(container.get("height", 0.0) or 0.0)
+        lane_bottom = float(lane.get("y", 0.0) or 0.0) + float(lane.get("h", 0.0) or 0.0)
+        if bottom > lane_bottom + tolerance:
+            issues.append(f"section exceeds slot {lane_id}: {container.get('section_id')}")
+
+    for index, left in enumerate(containers):
+        for right in containers[index + 1:]:
+            if _boxes_overlap(left, right):
+                issues.append(f"section containers overlap: {left.get('section_id')} and {right.get('section_id')}")
+    return issues
+
+
+def _boxes_overlap(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    tolerance = 0.02
+    left_x = float(left.get("x", 0.0) or 0.0)
+    left_y = float(left.get("y", 0.0) or 0.0)
+    left_right = left_x + float(left.get("width", 0.0) or 0.0)
+    left_bottom = left_y + float(left.get("height", 0.0) or 0.0)
+    right_x = float(right.get("x", 0.0) or 0.0)
+    right_y = float(right.get("y", 0.0) or 0.0)
+    right_right = right_x + float(right.get("width", 0.0) or 0.0)
+    right_bottom = right_y + float(right.get("height", 0.0) or 0.0)
+    return not (
+        left_right <= right_x + tolerance
+        or right_right <= left_x + tolerance
+        or left_bottom <= right_y + tolerance
+        or right_bottom <= left_y + tolerance
+    )
+
+
 def _run_final_quality_gate(state: PosterState) -> PosterState:
     from src.agents.block_occupancy_analyzer import BlockOccupancyAnalyzer
     from src.utils.visual_footprint import evaluate_visual_footprints
@@ -340,6 +387,10 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
     micro_issues = ((micro_report.get("validation") or {}).get("issues") or [])
     if micro_issues:
         gate["failures"].append({"category": "micro_layout", "issues": micro_issues})
+
+    geometry_issues = _section_geometry_issues(state)
+    if geometry_issues:
+        gate["failures"].append({"category": "section_geometry", "issues": geometry_issues})
 
     vlm_review = state.get("vlm_layout_review") or {}
     high_issues = [

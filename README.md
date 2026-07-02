@@ -80,12 +80,12 @@ PDF 输入
 当前每个 block 的目标利用率：
 
 ```text
-target_utilization = 0.985
-acceptable_range = 0.97 - 0.992
+target_utilization = 0.965
+acceptable_range = 0.96 - 0.992
 hard_max = 0.995
-final_min = 0.97
-final_mean = 0.98
-final_bottom_whitespace <= min(0.18", 2% of block height)
+final_min = 0.96
+final_mean = 0.965
+final_bottom_whitespace <= min(0.6", 4% of block height)
 ```
 
 如果 block 偏空，系统只允许从论文事实中补充内容；如果 block 太挤或溢出，只允许压缩或删减。禁止为了填满而编造论文没有的实验结果。

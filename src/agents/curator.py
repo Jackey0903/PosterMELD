@@ -1381,15 +1381,24 @@ class StoryBoardCurator:
         figure_candidates = self._cluster_72_figure_candidates(classified_visuals or {}, valid_ids, visual_context)
         table_candidates = self._cluster_72_table_candidates(classified_visuals or {}, valid_ids, visual_context)
 
+        is_portrait = self._is_portrait_or_vertical_template(visual_context)
         figure_count = int(fast_visual_policy.get("figure_count") or 2)
         table_count = int(fast_visual_policy.get("table_count") or 1)
+        if not is_portrait:
+            figure_count = max(figure_count, min(2, len(figure_candidates)))
+            table_count = max(table_count, min(2, len(table_candidates)))
         max_visuals_total = int(fast_visual_policy.get("max_visuals_total") or (figure_count + table_count))
+        if not is_portrait:
+            max_visuals_total = max(max_visuals_total, min(figure_count, len(figure_candidates)) + min(table_count, len(table_candidates)))
         used_visuals: set[str] = set()
+        used_slots: set[str] = set()
 
-        def place_visual(slot_id: str, visual_id: str, purpose: str, *, importance: int) -> bool:
+        def place_visual(slot_id: str, visual_id: str, purpose: str, *, importance: int, append: bool = False) -> bool:
             if len(used_visuals) >= max_visuals_total:
                 return False
             if not visual_id or visual_id in used_visuals:
+                return False
+            if slot_id in used_slots and not append:
                 return False
             holder = slot_map.get(slot_id)
             if not holder:
@@ -1400,12 +1409,16 @@ class StoryBoardCurator:
                     f"skip {visual_id} in {slot_id}: below visual footprint feasibility",
                 )
                 return False
-            self._set_single_visual(holder, visual_id, purpose)
+            if append:
+                self._append_visual(holder, visual_id, purpose)
+            else:
+                self._set_single_visual(holder, visual_id, purpose)
             holder["importance_level"] = min(int(holder.get("importance_level") or importance), importance)
             used_visuals.add(visual_id)
+            used_slots.add(slot_id)
             return True
 
-        if self._is_portrait_or_vertical_template(visual_context):
+        if is_portrait:
             if figure_slots and figure_candidates:
                 place_visual(
                     figure_slots[0],
@@ -1424,14 +1437,101 @@ class StoryBoardCurator:
                 place_visual(slot_id, selected_table, "Supporting quantitative result table", importance=2)
             return
 
-        for slot_id, visual_id in zip(figure_slots[:figure_count], figure_candidates[:figure_count]):
-            place_visual(slot_id, visual_id, "Primary method or system figure for the standard template", importance=1)
+        figure_slot_order = self._standard_visual_slot_order(figure_slots, slot_map, visual_context)
+        table_slot_order = self._standard_visual_slot_order(table_slots, slot_map, visual_context)
+        placed_figures = 0
+        for visual_id in figure_candidates:
+            if placed_figures >= figure_count:
+                break
+            for slot_id in figure_slot_order:
+                if place_visual(slot_id, visual_id, "Primary method or system figure for the standard template", importance=1):
+                    placed_figures += 1
+                    break
 
-        selected_tables = [visual_id for visual_id in table_candidates if visual_id not in used_visuals][:table_count]
-        for slot_id, selected_table in zip(table_slots[:table_count], selected_tables):
-            place_visual(slot_id, selected_table, "Primary quantitative result table", importance=2)
+        placed_tables = 0
+        for selected_table in table_candidates:
+            if placed_tables >= table_count:
+                break
+            if selected_table in used_visuals:
+                continue
+            for slot_id in table_slot_order:
+                if place_visual(slot_id, selected_table, "Primary quantitative result table", importance=2):
+                    placed_tables += 1
+                    break
+
+        if placed_figures < min(figure_count, len(figure_candidates)):
+            multi_slot_order = self._standard_multi_visual_slot_order(slot_map, visual_context)
+            for visual_id in figure_candidates:
+                if placed_figures >= min(figure_count, len(figure_candidates)):
+                    break
+                if visual_id in used_visuals:
+                    continue
+                for slot_id in multi_slot_order:
+                    if place_visual(slot_id, visual_id, "Supporting method or system figure for the standard template", importance=2, append=True):
+                        placed_figures += 1
+                        break
+
+        if placed_tables < min(table_count, len(table_candidates)):
+            multi_slot_order = self._standard_multi_visual_slot_order(slot_map, visual_context)
+            for selected_table in table_candidates:
+                if placed_tables >= min(table_count, len(table_candidates)):
+                    break
+                if selected_table in used_visuals:
+                    continue
+                for slot_id in multi_slot_order:
+                    if place_visual(slot_id, selected_table, "Supporting quantitative result table for a large visual block", importance=2, append=True):
+                        placed_tables += 1
+                        break
+
+    def _standard_visual_slot_order(
+        self,
+        preferred_slot_ids: List[str],
+        slot_map: Dict[str, Dict[str, Any]],
+        visual_context: Dict[str, Any],
+    ) -> List[str]:
+        template_layout = (visual_context or {}).get("template_layout") or {}
+        lane_by_id = {str(lane.get("id") or ""): lane for lane in template_layout.get("lanes") or []}
+        region_by_id = {
+            str(region.get("region_id") or region.get("slot_id") or region.get("id") or ""): region
+            for region in template_layout.get("regions") or []
+        }
+        ordered = [
+            slot_id
+            for slot_id in self._unique_preserve_order([*preferred_slot_ids, *slot_map.keys()])
+            if self._slot_declares_visual_host(slot_id, visual_context)
+        ]
+
+        def area(slot_id: str) -> float:
+            geometry = lane_by_id.get(slot_id) or region_by_id.get(slot_id) or {}
+            return float(geometry.get("w", 0.0) or 0.0) * float(geometry.get("h", 0.0) or 0.0)
+
+        original_index = {slot_id: index for index, slot_id in enumerate(ordered)}
+        return sorted(ordered, key=lambda slot_id: (-area(slot_id), original_index.get(slot_id, 999)))
+
+    def _standard_multi_visual_slot_order(
+        self,
+        slot_map: Dict[str, Dict[str, Any]],
+        visual_context: Dict[str, Any],
+    ) -> List[str]:
+        slots_with_visuals = [
+            slot_id
+            for slot_id, section in slot_map.items()
+            if section.get("visual_assets") and self._slot_declares_visual_host(slot_id, visual_context)
+        ]
+        return self._standard_visual_slot_order(slots_with_visuals, slot_map, visual_context)
+
+    def _slot_declares_visual_host(self, slot_id: str, visual_context: Dict[str, Any]) -> bool:
+        template_layout = (visual_context or {}).get("template_layout") or {}
+        regions = template_layout.get("regions") or []
+        for region in regions:
+            region_id = str(region.get("region_id") or region.get("slot_id") or region.get("id") or "")
+            if region_id == str(slot_id):
+                return bool(region.get("can_host_visual", True))
+        return True
 
     def _slot_can_hold_visual(self, slot_id: str, visual_id: str, visual_context: Dict[str, Any]) -> bool:
+        if not self._slot_declares_visual_host(slot_id, visual_context):
+            return False
         template_layout = (visual_context or {}).get("template_layout") or {}
         lanes = template_layout.get("lanes") or []
         lane = next((lane for lane in lanes if str(lane.get("id") or "") == str(slot_id)), None)
@@ -1655,6 +1755,17 @@ class StoryBoardCurator:
             "visual_purpose": purpose,
             "placement_rationale": "Selected for grouped keypoint poster layout.",
         }]
+
+    def _append_visual(self, section: Dict[str, Any], visual_id: str, purpose: str) -> None:
+        visuals = list(section.get("visual_assets") or [])
+        if any(str(visual.get("visual_id") or "") == visual_id for visual in visuals):
+            return
+        visuals.append({
+            "visual_id": visual_id,
+            "visual_purpose": purpose,
+            "placement_rationale": "Backfilled into a large visual block to preserve the figure/table budget.",
+        })
+        section["visual_assets"] = visuals
 
     def _partition_keypoints(
         self,

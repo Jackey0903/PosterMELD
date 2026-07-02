@@ -505,11 +505,11 @@ template_fast_mode:
     - "cluster_25_portrait"
     - "cluster_27_portrait"
     - "cluster_29_portrait"
-  emergency_repair_max_iterations: 3
-  hard_min_utilization: 0.94
+  emergency_repair_max_iterations: 4
+  hard_min_utilization: 0.96
   emergency_underfill_threshold: 0.92
   allow_text_fill_repair: true
-  fast_text_fill_max_extra_chars: 420
+  fast_text_fill_max_extra_chars: 280
   visual_policy:
     figure_count: 2
     table_count: 2
@@ -694,13 +694,13 @@ vlm_layout_review:
 
 block_refinement:
   enabled: false
-  target_utilization: 0.985
-  acceptable_min: 0.97
+  target_utilization: 0.965
+  acceptable_min: 0.96
   acceptable_max: 0.992
-  final_min_utilization: 0.97
-  final_mean_utilization: 0.98
-  final_max_bottom_whitespace_inches: 0.18
-  final_max_bottom_whitespace_fraction: 0.02
+  final_min_utilization: 0.96
+  final_mean_utilization: 0.965
+  final_max_bottom_whitespace_inches: 0.6
+  final_max_bottom_whitespace_fraction: 0.04
   hard_max: 0.995
   safety_factor: 0.82
   capacity_min_factor: 0.88
@@ -773,7 +773,7 @@ micro_layout_refinement:
   visual_scale_step: 0.05
   section_gap_step: 0.15
   max_iterations: 16
-  target_lane_utilization: 0.985
+  target_lane_utilization: 0.965
   underflow_expand_threshold: 0.08
   max_underflow_iterations: 10
   max_body_font_boost: 10
