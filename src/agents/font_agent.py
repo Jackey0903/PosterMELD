@@ -183,8 +183,14 @@ class FontAgent:
         else:
             element["font_color"] = colors.get("text_on_theme", "#FFFFFF")
         sizes = typography.get("sizes", {})
-        element["font_size"] = sizes.get("title", 100)
-        element["author_font_size"] = sizes.get("authors", 72)
+        if not element.get("lock_header_typography"):
+            element["font_size"] = sizes.get("title", 100)
+            element["author_font_size"] = sizes.get("authors", 72)
+        else:
+            element["font_size"] = element.get("font_size", sizes.get("title", 100))
+            element["author_font_size"] = element.get("author_font_size", sizes.get("authors", 72))
+            element["subtitle_font_size"] = element.get("subtitle_font_size", max(int(element["font_size"] * 0.58), 24))
+            element["alignment"] = element.get("alignment", "left")
         element["font_weight"] = "bold"
 
     def _is_dark_color(self, color: str) -> bool:

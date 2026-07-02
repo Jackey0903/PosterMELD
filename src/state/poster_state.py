@@ -49,6 +49,7 @@ class TimingMetrics:
     template_block_planner_time: float = 0.0
     layout_optimizer_time: float = 0.0
     color_agent_time: float = 0.0
+    header_planner_time: float = 0.0
     font_agent_time: float = 0.0
     micro_layout_refiner_time: float = 0.0
     title_designer_time: float = 0.0
@@ -131,6 +132,7 @@ class PosterState(TypedDict):
     template_layout_mode: Optional[str]
     template_block_plan: Optional[Dict[str, Any]]
     layout_intent: Optional[Dict[str, Any]]
+    header_plan: Optional[Dict[str, Any]]
     template_prior_source_story_board: Optional[Dict[str, Any]]
     template_fast_mode: bool
     fast_block_contract: Optional[Dict[str, Any]]
@@ -179,6 +181,9 @@ class PosterState(TypedDict):
     background_palette: Optional[str]
     poster_style_preset: Optional[str]
     visual_density: Optional[str]
+    header_route: Optional[str]
+    header_subtitle_policy: Optional[str]
+    header_seed: Optional[int]
     background_image_path: Optional[str]
     background_image_report: Optional[Dict[str, Any]]
     generated_teaser_report: Optional[Dict[str, Any]]
@@ -230,6 +235,9 @@ def create_state(
     background_palette: Optional[str] = None,
     poster_style_preset: Optional[str] = None,
     visual_density: Optional[str] = None,
+    header_route: Optional[str] = None,
+    header_subtitle_policy: Optional[str] = None,
+    header_seed: Optional[int] = None,
     vlm_model: Optional[str] = None,
     conference_name: Optional[str] = None,
 ) -> PosterState:
@@ -286,6 +294,7 @@ def create_state(
         template_layout_mode=None,
         template_block_plan=None,
         layout_intent=None,
+        header_plan=None,
         template_prior_source_story_board=None,
         template_fast_mode=False,
         fast_block_contract=None,
@@ -331,6 +340,9 @@ def create_state(
         background_palette=background_palette,
         poster_style_preset=poster_style_preset,
         visual_density=visual_density,
+        header_route=header_route,
+        header_subtitle_policy=header_subtitle_policy,
+        header_seed=header_seed,
         background_image_path=None,
         background_image_report=None,
         generated_teaser_report=None,

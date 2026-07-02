@@ -89,6 +89,8 @@ def create_timing_wrapper(node_func: Callable, component_name: str) -> Callable:
             result["timing_metrics"].layout_optimizer_time = elapsed
         elif component_name == "color_agent":
             result["timing_metrics"].color_agent_time = elapsed
+        elif component_name == "header_planner":
+            result["timing_metrics"].header_planner_time = elapsed
         elif component_name == "font_agent":
             result["timing_metrics"].font_agent_time = elapsed
         elif component_name == "micro_layout_refiner":
@@ -393,6 +395,7 @@ def create_workflow_graph():
     from src.agents.curator import curator_node
     from src.agents.font_agent import font_agent_node
     from src.agents.generated_teaser_agent import generated_teaser_agent_node
+    from src.agents.header_planner import header_planner_node
     from src.agents.layout_with_balancer import layout_with_balancer_node as layout_optimizer_node
     from src.agents.micro_layout_refiner import micro_layout_refiner_node
     from src.agents.parser import parser_node
@@ -418,6 +421,7 @@ def create_workflow_graph():
     graph.add_node("generated_teaser_agent", create_timing_wrapper(generated_teaser_agent_node, "generated_teaser_agent"))
     graph.add_node("template_block_planner", create_timing_wrapper(template_block_planner_node, "template_block_planner"))
     graph.add_node("color_agent", create_timing_wrapper(color_agent_node, "color_agent"))
+    graph.add_node("header_planner", create_timing_wrapper(header_planner_node, "header_planner"))
     graph.add_node("section_title_designer", create_timing_wrapper(section_title_designer_node, "section_title_designer"))
     graph.add_node("layout_optimizer", create_timing_wrapper(layout_optimizer_node, "layout_optimizer"))
     graph.add_node("font_agent", create_timing_wrapper(font_agent_node, "font_agent"))
@@ -441,7 +445,8 @@ def create_workflow_graph():
     graph.add_edge("template_capacity_planner", "poster_keypoint_selector")
     graph.add_edge("poster_keypoint_selector", "curator")
     graph.add_edge("curator", "color_agent")
-    graph.add_edge("color_agent", "generated_teaser_agent")
+    graph.add_edge("color_agent", "header_planner")
+    graph.add_edge("header_planner", "generated_teaser_agent")
     graph.add_edge("generated_teaser_agent", "template_block_planner")
     graph.add_edge("template_block_planner", "section_title_designer")
     graph.add_edge("section_title_designer", "layout_optimizer")
@@ -596,6 +601,10 @@ def save_timing_log(state: PosterState):
                 "time_seconds": round(metrics.color_agent_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.color_agent_time)
             },
+            "header_planner": {
+                "time_seconds": round(metrics.header_planner_time, 2),
+                "percentage": metrics.get_component_percentage(metrics.header_planner_time)
+            },
             "font_agent": {
                 "time_seconds": round(metrics.font_agent_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.font_agent_time)
@@ -668,6 +677,12 @@ def save_timing_log(state: PosterState):
                 "block_refinement_count": state.get("block_refinement_count", 0),
                 "target_utilization": block_settings.get("target_utilization", 0.95),
             },
+            "header_plan": {
+                "route": (state.get("header_plan") or {}).get("route"),
+                "subtitle": bool(((state.get("header_plan") or {}).get("subtitle") or {}).get("text")),
+                "fallback": (state.get("header_plan") or {}).get("fallback", False),
+                "validation": (state.get("header_plan") or {}).get("validation"),
+            },
             "generated_teaser": {
                 "enabled": state.get("enable_generated_teaser", False),
                 "target_section_id": (state.get("generated_teaser_report") or {}).get("target_section_id"),
@@ -697,6 +712,19 @@ def main():
     visual_density_choices = available_visual_densities(config)
     default_poster_style = normalize_poster_style(os.getenv("PAPER2POSTER_STYLE"), config)
     default_visual_density = normalize_visual_density(os.getenv("PAPER2POSTER_VISUAL_DENSITY"), config)
+    header_route_choices = ["auto", "classic_left", "centered", "right_title", "split_logos"]
+    header_subtitle_choices = ["auto", "off", "always"]
+    default_header_route = os.getenv("PAPER2POSTER_HEADER_ROUTE", "auto")
+    if default_header_route not in header_route_choices:
+        default_header_route = "auto"
+    default_header_subtitle = os.getenv("PAPER2POSTER_HEADER_SUBTITLE", "auto")
+    if default_header_subtitle not in header_subtitle_choices:
+        default_header_subtitle = "auto"
+    header_seed_env = os.getenv("PAPER2POSTER_HEADER_SEED")
+    try:
+        default_header_seed = int(header_seed_env) if header_seed_env else None
+    except ValueError:
+        default_header_seed = None
 
     parser = argparse.ArgumentParser(description="Paper2Poster: Multi-agent Aesthetic-aware Paper-to-poster generation")
     parser.add_argument("paper_path_positional", nargs="?", help="Path to the PDF paper")
@@ -782,6 +810,24 @@ def main():
         choices=visual_density_choices,
         default=default_visual_density,
         help="How aggressively the planner should preserve figures and result tables.",
+    )
+    parser.add_argument(
+        "--header-route",
+        choices=header_route_choices,
+        default=default_header_route,
+        help="Header composition route for title, authors, and logos.",
+    )
+    parser.add_argument(
+        "--header-subtitle",
+        choices=header_subtitle_choices,
+        default=default_header_subtitle,
+        help="Whether to add a short generated subtitle when the paper title is short enough.",
+    )
+    parser.add_argument(
+        "--header-seed",
+        type=int,
+        default=default_header_seed,
+        help="Optional seed for reproducible auto header route and subtitle choices.",
     )
     parser.add_argument(
         "--vlm-model",
@@ -897,6 +943,10 @@ def main():
     print(f"📐 Adaptive Column Width: {'enabled' if args.enable_adaptive_column_width else 'disabled'}")
     print(f"🎭 Poster Style: {args.poster_style}")
     print(f"📊 Visual Density: {args.visual_density}")
+    print(f"🧾 Header Route: {args.header_route}")
+    print(f"🧾 Header Subtitle: {args.header_subtitle}")
+    if args.header_seed is not None:
+        print(f"🧾 Header Seed: {args.header_seed}")
     print(f"🖼️ Generated Teaser: {'enabled' if args.enable_generated_teaser else 'disabled'}")
     print(f"🎨 Generated Background: {'enabled' if args.enable_generated_background else 'disabled'}")
     if args.enable_generated_background:
@@ -919,6 +969,9 @@ def main():
             background_palette=args.background_palette,
             poster_style_preset=args.poster_style,
             visual_density=args.visual_density,
+            header_route=args.header_route,
+            header_subtitle_policy=args.header_subtitle,
+            header_seed=args.header_seed,
             vlm_model=args.vlm_model,
             conference_name=conference_name,
         )

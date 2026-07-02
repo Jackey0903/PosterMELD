@@ -209,6 +209,87 @@ class Renderer:
         author_color = self._parse_color(title_style.get("author_font_color", "#333333"))
         title_shadow_cfg = title_style.get("shadow") or {}
         title_shadow = title_shadow_cfg if title_shadow_cfg.get("enabled", False) else None
+        alignment = element.get("alignment", "left")
+
+        if element.get("title_text") or element.get("subtitle_text"):
+            title_text = str(element.get("title_text") or title_text).strip()
+            subtitle_text = str(element.get("subtitle_text") or "").strip()
+            authors_text = str(element.get("authors_text") or authors_text).strip()
+            subtitle_font_size = float(element.get("subtitle_font_size", max(float(title_font_size) * 0.58, 24)))
+            subtitle_color = self._parse_color(element.get("subtitle_font_color", title_style.get("subtitle_font_color", "#374151")))
+
+            author_box_height = float(element.get("author_box_height") or max((float(author_font_size) / 72) * 1.15, 0.55))
+            author_box_height = min(author_box_height, max(h.inches * 0.32, 0.55))
+            subtitle_box_height = float(element.get("subtitle_box_height") or (max((subtitle_font_size / 72) * 1.12, 0.36) if subtitle_text else 0.0))
+            subtitle_gap_inches = float(element.get("title_to_subtitle_gap_inches", 0.08 if subtitle_text else 0.0))
+            author_gap_inches = float(
+                element.get(
+                    "author_top_gap_inches",
+                    self.typography_config.get("title_author_gap_points", 16) / 72,
+                )
+            )
+            title_box_height = float(
+                element.get("title_box_height")
+                or max(h.inches - subtitle_box_height - subtitle_gap_inches - author_gap_inches - author_box_height, h.inches * 0.45)
+            )
+            if title_box_height + subtitle_gap_inches + subtitle_box_height + author_gap_inches + author_box_height > h.inches:
+                title_box_height = max(h.inches - subtitle_gap_inches - subtitle_box_height - author_gap_inches - author_box_height, h.inches * 0.38)
+
+            cursor_y = y.inches
+            self._add_title_textbox(
+                slide,
+                title_text,
+                element,
+                x.inches,
+                cursor_y,
+                w.inches,
+                title_box_height,
+                font_size=title_font_size,
+                font_family=title_font_family,
+                bold=True,
+                color=title_color,
+                line_spacing=self.typography_config["line_spacing"],
+                alignment=alignment,
+                shadow=title_shadow,
+            )
+            cursor_y += title_box_height
+            if subtitle_text:
+                cursor_y += subtitle_gap_inches
+                self._add_title_textbox(
+                    slide,
+                    subtitle_text,
+                    element,
+                    x.inches,
+                    cursor_y,
+                    w.inches,
+                    subtitle_box_height,
+                    font_size=subtitle_font_size,
+                    font_family=element.get("subtitle_font_family", author_font_family),
+                    bold=False,
+                    color=subtitle_color,
+                    line_spacing=self.typography_config["line_spacing"],
+                    alignment=alignment,
+                )
+                cursor_y += subtitle_box_height
+
+            if authors_text:
+                cursor_y += author_gap_inches
+                self._add_title_textbox(
+                    slide,
+                    authors_text,
+                    element,
+                    x.inches,
+                    cursor_y,
+                    w.inches,
+                    min(author_box_height, max(y.inches + h.inches - cursor_y, 0.35)),
+                    font_size=author_font_size,
+                    font_family=author_font_family,
+                    bold=False,
+                    color=author_color,
+                    line_spacing=self.typography_config["line_spacing"] + 0.1,
+                    alignment=alignment,
+                )
+            return
 
         if authors_text:
             author_gap_inches = float(
@@ -237,6 +318,7 @@ class Renderer:
                 bold=True,
                 color=title_color,
                 line_spacing=self.typography_config["line_spacing"],
+                alignment=alignment,
                 shadow=title_shadow,
             )
             self._add_title_textbox(
@@ -252,6 +334,7 @@ class Renderer:
                 bold=False,
                 color=author_color,
                 line_spacing=self.typography_config["line_spacing"] + 0.1,
+                alignment=alignment,
             )
             return
 
@@ -268,6 +351,7 @@ class Renderer:
             bold=True,
             color=title_color,
             line_spacing=self.typography_config["line_spacing"],
+            alignment=alignment,
             shadow=title_shadow,
         )
 

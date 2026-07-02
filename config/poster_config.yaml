@@ -39,6 +39,32 @@ typography:
   paragraph_spacing: 0.0
   title_author_gap_points: 16
 
+header_planner:
+  enabled: true
+  default_route: "auto"
+  allowed_routes: ["classic_left", "centered", "right_title", "split_logos"]
+  subtitle_policy: "auto"
+  subtitle_probability: 0.5
+  short_title_max_chars: 82
+  short_title_max_words: 11
+  subtitle_max_chars: 86
+  title_logo_gap_inches: 0.46
+  min_title_logo_gap_inches: 0.20
+  min_title_width_fraction: 0.42
+  max_logo_header_fraction: 0.78
+  max_logo_zone_width_fraction: 0.38
+  conservative_logo_scale: 0.82
+  subtitle_title_scale: 0.94
+  subtitle_font_scale: 0.58
+  title_subtitle_gap_inches: 0.08
+  landscape_title_font_size: 100
+  landscape_author_font_size: 72
+  large_landscape_title_font_size: 108
+  large_landscape_author_font_size: 50
+  portrait_title_font_size: 58
+  portrait_author_font_size: 34
+  stable_random_by_default: false
+
 default_poster_style: "navy_serif"
 poster_style_presets:
   navy_serif:

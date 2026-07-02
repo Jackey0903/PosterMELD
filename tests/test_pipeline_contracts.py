@@ -16,6 +16,7 @@ from src.agents.block_vlm_reviewer import BlockVLMReviewer
 from src.agents.curator import StoryBoardCurator
 from src.agents.font_agent import FontAgent
 from src.agents.generated_teaser_agent import GeneratedTeaserAgent
+from src.agents.header_planner import HeaderPlanner
 from src.agents.layout_agent import LayoutAgent
 from src.agents.micro_layout_refiner import MicroLayoutRefiner
 from src.agents.parser import Parser
@@ -875,6 +876,135 @@ def test_layout_agent_new_landscape_header_keeps_title_and_logo_zone(tmp_path):
     assert title_box["x"] + title_box["w"] <= logo_box["x"]
     assert title["font_size"] >= 96
     assert title["author_font_size"] <= 72
+
+
+def test_header_planner_generates_centered_subtitle_for_short_title(tmp_path):
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        header_route="centered",
+        header_subtitle_policy="always",
+        header_seed=7,
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Fast Spatial Search",
+            "authors": "A. Researcher and B. Scientist",
+        }
+    }
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Motivation",
+                    "content_role": "overview",
+                    "text_content": ["Prioritizes high-impact outreach cases while reducing unnecessary search effort."],
+                }
+            ]
+        }
+    }
+
+    result = HeaderPlanner()(state)
+    plan = result["header_plan"]
+
+    assert plan["route"] == "centered"
+    assert plan["title"]["alignment"] == "center"
+    assert plan["subtitle"]["text"]
+    assert plan["validation"]["passed"]
+
+
+def test_layout_agent_uses_header_plan_for_title_and_logo_elements(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    aff_path = tmp_path / "affiliation.png"
+    Image.new("RGBA", (900, 420), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (700, 240), (160, 40, 60, 255)).save(aff_path)
+
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        logo_path=str(conf_path),
+        aff_logo_path=str(aff_path),
+        header_route="right_title",
+        header_subtitle_policy="off",
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Header Planning for Posters",
+            "authors": "A. Researcher",
+        }
+    }
+
+    state = HeaderPlanner()(state)
+    agent = LayoutAgent()
+    template = agent._resolve_template_layout(state)
+    title = agent._create_title_element(state, state["poster_width"], template["header"]["h"], template)
+    logos = agent._create_logo_elements(state, state["poster_width"], template)
+
+    assert title["alignment"] == "right"
+    assert title["lock_header_typography"] is True
+    assert {logo["type"] for logo in logos} >= {"conf_logo", "institution_logo"}
+    assert all(logo["x"] + logo["width"] <= title["x"] for logo in logos if logo["type"] != "logo_divider")
+
+
+def test_header_planner_centered_route_splits_affiliation_and_conference_logos(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    aff_path = tmp_path / "affiliation.png"
+    Image.new("RGBA", (900, 420), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (700, 240), (160, 40, 60, 255)).save(aff_path)
+
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        logo_path=str(conf_path),
+        aff_logo_path=str(aff_path),
+        header_route="centered",
+        header_subtitle_policy="off",
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Centered Header Planning",
+            "authors": "A. Researcher",
+        }
+    }
+
+    plan = HeaderPlanner()(state)["header_plan"]
+    title_box = plan["title_box"]
+    aff_logo = next(element for element in plan["logo_elements"] if element["type"] == "institution_logo")
+    conf_logo = next(element for element in plan["logo_elements"] if element["type"] == "conf_logo")
+
+    assert plan["route"] == "centered"
+    assert plan["title"]["alignment"] == "center"
+    assert aff_logo["x"] + aff_logo["width"] < title_box["x"]
+    assert conf_logo["x"] > title_box["x"] + title_box["w"]
+    assert plan["validation"]["passed"]
+
+
+def test_font_agent_preserves_header_plan_typography():
+    agent = FontAgent()
+    state = create_state("/tmp/paper.pdf", poster_style_preset="teal_modern")
+    element = {
+        "type": "title",
+        "content": "Short Title\nAuthors",
+        "font_size": 88,
+        "author_font_size": 42,
+        "subtitle_font_size": 35,
+        "alignment": "center",
+        "lock_header_typography": True,
+    }
+
+    agent._apply_title_styling(element, {"text_on_theme": "#000000"}, state)
+
+    assert element["font_size"] == 88
+    assert element["author_font_size"] == 42
+    assert element["subtitle_font_size"] == 35
+    assert element["alignment"] == "center"
 
 
 def test_layout_agent_section_title_uses_navy_band_wordart():

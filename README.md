@@ -233,6 +233,16 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
 
 `balanced` 是默认值。论文图表较多、表格比较可读时建议用 `rich`，会优先保留方法图、系统图和关键结果表；空间紧张或竖版实验时可用 `lean`。
 
+可选 header 样式：
+
+```text
+--header-route auto | classic_left | centered | right_title | split_logos
+--header-subtitle auto | off | always
+--header-seed 42
+```
+
+默认 `auto` 会为每次 poster 从合格路线中选择一种：左标题右 logo、居中标题、右对齐标题或左右分布 logo。短标题可以自动加入较小字号副标题；如果需要稳定复现实验效果，传入 `--header-seed`。
+
 可选 AI teaser 图：
 
 ```text

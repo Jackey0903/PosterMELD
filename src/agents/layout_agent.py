@@ -4,6 +4,7 @@ precise layout generation using css box model
 
 import json
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
@@ -685,6 +686,47 @@ class LayoutAgent:
     
     def _create_title_element(self, state: PosterState, poster_width: float, title_height: float, template_layout: Dict[str, Any]) -> Dict:
         """create title element with exact positioning"""
+        header_plan = state.get("header_plan") or {}
+        if header_plan.get("validation", {}).get("passed") and header_plan.get("title_box"):
+            title_box = header_plan["title_box"]
+            title = header_plan.get("title") or {}
+            subtitle = header_plan.get("subtitle") or {}
+            authors = header_plan.get("authors") or {}
+            title_text = normalize_title_for_poster(title.get("text", "")) or "Title"
+            subtitle_text = normalize_text_for_poster(subtitle.get("text", "")) if subtitle.get("text") else ""
+            authors_text = normalize_text_for_poster(authors.get("text", "")) or "Authors"
+            content_lines = [title_text]
+            if subtitle_text:
+                content_lines.append(subtitle_text)
+            content_lines.append(authors_text)
+            return {
+                "type": "title",
+                "x": title_box["x"],
+                "y": title_box["y"],
+                "width": title_box["w"],
+                "height": title_box["h"],
+                "content": "\n".join(content_lines),
+                "title_text": title_text,
+                "subtitle_text": subtitle_text,
+                "authors_text": authors_text,
+                "alignment": title.get("alignment", "left"),
+                "font_family": title.get("font_family", self.title_font_family),
+                "font_size": title.get("font_size", 100),
+                "subtitle_font_size": subtitle.get("font_size", 54),
+                "subtitle_box_height": subtitle.get("box_height", 0.0),
+                "title_box_height": title.get("box_height"),
+                "title_to_subtitle_gap_inches": subtitle.get("top_gap_inches", 0.0),
+                "author_font_size": authors.get("font_size", 72),
+                "author_box_height": authors.get("box_height"),
+                "author_top_gap_inches": authors.get(
+                    "top_gap_inches",
+                    self.config["typography"].get("title_author_gap_points", 16) / 72,
+                ),
+                "lock_header_typography": True,
+                "header_route": header_plan.get("route"),
+                "priority": 1.0,
+            }
+
         title_box, _ = self._header_title_logo_boxes(state, template_layout)
         
         # extract title and authors from narrative content
@@ -730,6 +772,21 @@ class LayoutAgent:
           conf + aff (1-2)   →  [aff row | divider | conf] left-to-right
           conf + aff (3-4)   →  [aff 2×2 | divider | conf] left-to-right
         """
+        header_plan = state.get("header_plan") or {}
+        if header_plan.get("validation", {}).get("passed") and header_plan.get("logo_elements") is not None:
+            elements = []
+            for element in header_plan.get("logo_elements") or []:
+                element_copy = deepcopy(element)
+                if element_copy.get("type") == "institution_logo":
+                    logo_path = element_copy.get("image_path")
+                    if not logo_path or not Path(str(logo_path)).exists():
+                        continue
+                elif element_copy.get("type") == "conf_logo":
+                    if not (state.get("logo_path") and Path(str(state["logo_path"])).exists()):
+                        continue
+                elements.append(element_copy)
+            return elements
+
         aff_logos = [
             logo for logo in (state.get("affiliation_logos") or [])
             if logo.get("logo_path") and Path(logo["logo_path"]).exists()
