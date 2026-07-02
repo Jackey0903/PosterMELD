@@ -33,8 +33,9 @@ class BackgroundImageAgent:
         if not state.get("enable_generated_background", False):
             return state
 
-        palette_name = self._palette_name(state)
-        log_agent_info(self.name, f"generating light academic background layer ({palette_name})")
+        style_decision = self._background_style_decision(state)
+        palette_name = self._palette_name(state, style_decision)
+        log_agent_info(self.name, f"generating light academic background layer ({style_decision['resolved_style']}, {palette_name})")
         try:
             output_dir = Path(state["output_dir"])
             asset_dir = output_dir / "assets"
@@ -43,13 +44,13 @@ class BackgroundImageAgent:
             filename = self.background_config.get("output_filename", "generated_background.png")
             raw_path = asset_dir / f"raw_{filename}"
             final_path = asset_dir / filename
-            prompt = self._build_prompt(state)
+            prompt = self._build_prompt(state, style_decision, palette_name)
             reference_path = self._reference_poster_path(state)
 
             width, height = self._background_dimensions(state)
             procedural_only = bool(self.background_config.get("procedural_only", False))
             if procedural_only:
-                self._save_procedural_fallback(final_path, width, height, state)
+                self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                 used_fallback = True
                 generation_mode = "procedural_only"
                 raw_path_value = ""
@@ -61,17 +62,17 @@ class BackgroundImageAgent:
                     if Path(generated_path).exists() and Path(generated_path) != raw_path and Path(generated_path) != reference_path:
                         shutil.copyfile(generated_path, raw_path)
                     if raw_path.exists():
-                        used_fallback = self._postprocess_background(raw_path, final_path, width, height, state)
+                        used_fallback = self._postprocess_background(raw_path, final_path, width, height, state, style_decision, palette_name)
                         generation_mode = "poster_conditioned_image_api_with_procedural_fallback"
                         raw_path_value = str(raw_path)
                     else:
-                        self._save_procedural_fallback(final_path, width, height, state)
+                        self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                         used_fallback = True
                         generation_mode = "poster_conditioned_image_api_failed_procedural_fallback"
                         raw_path_value = ""
                 except Exception as e:
                     log_agent_error(self.name, f"image API failed; using procedural background: {e}")
-                    self._save_procedural_fallback(final_path, width, height, state)
+                    self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                     used_fallback = True
                     generation_mode = "poster_conditioned_image_api_failed_procedural_fallback"
                     raw_path_value = ""
@@ -81,17 +82,17 @@ class BackgroundImageAgent:
                         lambda: ImageTools().generate_image(prompt, width=width, height=height, output_path=str(raw_path))
                     )
                     if raw_path.exists():
-                        used_fallback = self._postprocess_background(raw_path, final_path, width, height, state)
+                        used_fallback = self._postprocess_background(raw_path, final_path, width, height, state, style_decision, palette_name)
                         generation_mode = "image_api_with_procedural_fallback"
                         raw_path_value = str(raw_path)
                     else:
-                        self._save_procedural_fallback(final_path, width, height, state)
+                        self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                         used_fallback = True
                         generation_mode = "image_api_failed_procedural_fallback"
                         raw_path_value = ""
                 except Exception as e:
                     log_agent_error(self.name, f"image API failed; using procedural background: {e}")
-                    self._save_procedural_fallback(final_path, width, height, state)
+                    self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                     used_fallback = True
                     generation_mode = "image_api_failed_procedural_fallback"
                     raw_path_value = ""
@@ -106,7 +107,12 @@ class BackgroundImageAgent:
                 "background_image_path": str(final_path),
                 "width_px": width,
                 "height_px": height,
+                "requested_style": style_decision["requested_style"],
+                "resolved_style": style_decision["resolved_style"],
+                "auto_reason": style_decision["reason"],
+                "requested_palette": self._requested_palette_name(state),
                 "palette": palette_name,
+                "resolved_palette": palette_name,
                 "used_procedural_fallback": used_fallback,
                 "safety": {
                     "background_only": True,
@@ -153,15 +159,23 @@ class BackgroundImageAgent:
         except (TypeError, ValueError):
             return 75.0
 
-    def _build_prompt(self, state: PosterState) -> str:
+    def _build_prompt(
+        self,
+        state: PosterState,
+        style_decision: Dict[str, Any] | None = None,
+        palette_name: str | None = None,
+    ) -> str:
+        style_decision = style_decision or self._background_style_decision(state)
+        palette_name = palette_name or self._palette_name(state, style_decision)
         title = self._poster_title(state)
         sections = self._section_summaries(state)
         colors = state.get("color_scheme") or {}
         theme = colors.get("theme", self.config["colors"].get("fallback_theme", "#1E3A8A"))
         mono = colors.get("mono_light", "#E6EAEF")
-        style = self.background_config.get("prompt_style", "light academic, understated, low contrast")
-        palette_name = self._palette_name(state)
-        palette = self._palette_spec(state)
+        base_style = self.background_config.get("prompt_style", "premium academic background")
+        style_spec = style_decision.get("spec") or {}
+        style_prompt = style_spec.get("prompt") or base_style
+        palette = self._palette_spec(state, palette_name)
         palette_label = palette.get("label", "pale blue-gray")
         poster_width = float(state.get("poster_width") or 0.0)
         poster_height = float(state.get("poster_height") or 0.0)
@@ -174,13 +188,14 @@ class BackgroundImageAgent:
             "Use the provided poster image only as a spatial and stylistic reference: infer where content blocks, "
             "title, figures, logos, and white spaces are, then create a clean background underneath them. "
             "Do not copy or redraw any visible poster text, logo, figure, table, chart, or number from the reference. "
-            f"Use a refined top-tier AI conference poster palette based on {palette_label}: pale blue, blue-gray, "
-            "soft cyan, light indigo, and clean technical neutrals. "
-            "Keep text-heavy content regions calm with translucent paper-like panels, but add visible broad diagonal bands, "
-            "soft geometric washes, faint grid lines, map-like contours, and abstract data/network motifs near edges and unused whitespace. "
+            f"Use a refined top-tier AI conference poster palette based on {palette_label}. "
+            "Keep text-heavy content regions calm, flat, and almost textureless. "
+            "Do not create block frames, title bars, panel fills, headers, footers, or rectangular containers that compete with the real layout. "
+            "Concentrate visible decoration in page margins, gutters, corners, and unused whitespace; keep central content apertures clean. "
             "Use paper-specific abstract hints inferred from the title and section context, but keep them non-readable and decorative. "
             "Do not create AI faces, brains, robots, glowing orbs, or decorative blobs. "
-            f"Style: {style}. Selected background palette: {palette_name}. "
+            f"Base finish: {base_style}. Resolved background style: {style_decision['resolved_style']} ({style_spec.get('label', 'custom')}). "
+            f"Style visual language: {style_prompt}. Selected background palette: {palette_name}. "
             f"Primary accent color reference: {theme}; pale neutral reference: {mono}. "
             f"Paper title context: {title}. "
             f"Section context: {', '.join(sections[:6])}."
@@ -225,30 +240,157 @@ class BackgroundImageAgent:
                 summaries.append(title)
         return summaries
 
-    def _postprocess_background(self, raw_path: Path, final_path: Path, width: int, height: int, state: PosterState) -> bool:
+    def _background_style_decision(self, state: PosterState) -> Dict[str, Any]:
+        styles = self.background_config.get("styles") or {}
+        requested = self._requested_style_name(state)
+        if requested != "auto":
+            spec = dict(styles.get(requested) or {})
+            return {
+                "requested_style": requested,
+                "resolved_style": requested,
+                "reason": "explicit background style requested",
+                "spec": spec,
+            }
+
+        scores = {name: 0 for name in styles.keys()}
+        context = self._paper_context_text(state)
+        keyword_scores = {
+            "cartographic": [
+                "geospatial", "spatial", "map", "mapping", "parcel", "region", "urban",
+                "tenant", "eviction", "outreach", "search", "route", "city", "property",
+            ],
+            "tech_grid": [
+                "llm", "neural", "multimodal", "agent", "model", "detection", "classifier",
+                "network", "security", "phishing", "vision", "embedding", "learning",
+            ],
+            "blueprint": [
+                "theorem", "proof", "optimization", "algorithm", "mechanism", "robustness",
+                "certified", "architecture", "system", "pipeline", "framework", "bound",
+            ],
+            "flat_cartoon": [
+                "policy", "social", "outreach", "education", "healthcare", "intervention",
+                "field", "community", "human", "decision", "public",
+            ],
+        }
+        for style_name, keywords in keyword_scores.items():
+            for keyword in keywords:
+                if keyword in context:
+                    scores[style_name] = scores.get(style_name, 0) + 18
+
+        section_count = len(((state.get("story_board") or {}).get("spatial_content_plan") or {}).get("sections") or [])
+        visual_density = str(state.get("visual_density") or "").lower()
+        poster_width = float(state.get("poster_width") or 0.0)
+        poster_height = float(state.get("poster_height") or 0.0)
+        if visual_density == "rich" or section_count >= 6:
+            scores["academic_paper"] = scores.get("academic_paper", 0) + 16
+            scores["minimal_solid"] = scores.get("minimal_solid", 0) + 8
+        if poster_width and poster_height and poster_width < poster_height:
+            scores["minimal_solid"] = scores.get("minimal_solid", 0) + 10
+            scores["geometric_soft"] = scores.get("geometric_soft", 0) + 6
+        if state.get("enable_generated_teaser"):
+            scores["academic_paper"] = scores.get("academic_paper", 0) + 8
+            scores["geometric_soft"] = scores.get("geometric_soft", 0) + 6
+
+        if all(value <= 0 for value in scores.values()):
+            resolved = "academic_paper" if "academic_paper" in styles else next(iter(styles), "academic_paper")
+            reason = "auto default: no strong domain keywords detected"
+        else:
+            resolved = max(scores.items(), key=lambda item: (item[1], item[0]))[0]
+            if scores[resolved] < 20 and "academic_paper" in styles:
+                resolved = "academic_paper"
+                reason = "auto default: weak domain signal"
+            else:
+                reason = f"auto selected from paper/layout context; scores={scores}"
+
+        return {
+            "requested_style": "auto",
+            "resolved_style": resolved,
+            "reason": reason,
+            "spec": dict(styles.get(resolved) or {}),
+        }
+
+    def _requested_style_name(self, state: PosterState) -> str:
+        styles = self.background_config.get("styles") or {}
+        requested = str(state.get("background_style") or self.background_config.get("style") or "auto").strip()
+        if requested == "auto":
+            return "auto"
+        if requested in styles:
+            return requested
+        return "auto"
+
+    def _paper_context_text(self, state: PosterState) -> str:
+        parts = [self._poster_title(state)]
+        parts.extend(self._section_summaries(state))
+        for item in state.get("paper_poster_keypoints") or []:
+            if isinstance(item, dict):
+                parts.append(str(item.get("key_point") or item.get("keypoint") or item.get("summary") or item.get("text") or ""))
+            elif item:
+                parts.append(str(item))
+        story_board = state.get("story_board") or {}
+        sections = (story_board.get("spatial_content_plan") or {}).get("sections") or []
+        for section in sections:
+            parts.extend(str(value) for value in section.get("text_content") or [])
+        return " ".join(parts).lower()
+
+    def _postprocess_background(
+        self,
+        raw_path: Path,
+        final_path: Path,
+        width: int,
+        height: int,
+        state: PosterState,
+        style_decision: Dict[str, Any],
+        palette_name: str,
+    ) -> bool:
         with Image.open(raw_path) as img:
             img = img.convert("RGB")
             used_fallback = self._is_placeholder_image(img)
             if used_fallback:
-                img = self._procedural_academic_background(width, height, state)
-            self._save_light_background(img, final_path, width, height, state)
+                img = self._procedural_academic_background(width, height, state, style_decision, palette_name)
+            self._save_light_background(img, final_path, width, height, state, style_decision)
             return used_fallback
 
-    def _save_procedural_fallback(self, final_path: Path, width: int, height: int, state: PosterState) -> None:
-        img = self._procedural_academic_background(width, height, state)
-        self._save_light_background(img, final_path, width, height, state)
+    def _save_procedural_fallback(
+        self,
+        final_path: Path,
+        width: int,
+        height: int,
+        state: PosterState,
+        style_decision: Dict[str, Any],
+        palette_name: str,
+    ) -> None:
+        img = self._procedural_academic_background(width, height, state, style_decision, palette_name)
+        self._save_light_background(img, final_path, width, height, state, style_decision)
 
-    def _save_light_background(self, img: Image.Image, final_path: Path, width: int, height: int, state: PosterState) -> None:
+    def _save_light_background(
+        self,
+        img: Image.Image,
+        final_path: Path,
+        width: int,
+        height: int,
+        state: PosterState,
+        style_decision: Dict[str, Any],
+    ) -> None:
+        postprocess = self._style_postprocess(style_decision)
         img = img.convert("RGB")
         img = self._cover_resize(img, width, height)
-        img = ImageEnhance.Color(img).enhance(float(self.background_config.get("max_saturation", 0.28)))
-        img = img.filter(ImageFilter.GaussianBlur(float(self.background_config.get("blur_radius", 1.2))))
+        img = ImageEnhance.Color(img).enhance(float(postprocess.get("max_saturation", 0.28)))
+        img = img.filter(ImageFilter.GaussianBlur(float(postprocess.get("blur_radius", 1.2))))
 
-        alpha = float(self.background_config.get("white_overlay_alpha", 0.76))
+        alpha = float(postprocess.get("white_overlay_alpha", 0.76))
         overlay = Image.new("RGB", img.size, "white")
         img = Image.blend(img, overlay, min(max(alpha, 0.0), 1.0))
         img = self._add_layout_hierarchy_to_background(img, state)
         img.save(final_path)
+
+    def _style_postprocess(self, style_decision: Dict[str, Any]) -> Dict[str, Any]:
+        values = {
+            "white_overlay_alpha": self.background_config.get("white_overlay_alpha", 0.76),
+            "blur_radius": self.background_config.get("blur_radius", 1.2),
+            "max_saturation": self.background_config.get("max_saturation", 0.28),
+        }
+        values.update((style_decision.get("spec") or {}).get("postprocess") or {})
+        return values
 
     def _background_dimensions(self, state: PosterState) -> tuple[int, int]:
         base_width = max(1, int(self.background_config.get("width_px", 1440)))
@@ -264,7 +406,7 @@ class BackgroundImageAgent:
         return max(1, int(round(long_side * poster_width / poster_height))), long_side
 
     def _add_layout_hierarchy_to_background(self, img: Image.Image, state: PosterState) -> Image.Image:
-        """Bake subtle layout grouping into the bitmap background, not PPT shapes."""
+        """Bake only soft layout-aware washes into the bitmap background."""
         poster_width = float(state.get("poster_width") or 0.0)
         poster_height = float(state.get("poster_height") or 0.0)
         layout = state.get("styled_layout") or []
@@ -286,10 +428,19 @@ class BackgroundImageAgent:
         title = next((item for item in layout if item.get("type") == "title"), None)
         if title:
             x = float(title.get("x", 0.0))
-            y = float(title.get("y", 0.0)) + float(title.get("height", 0.0)) + 0.15
-            width = min(poster_width - x - 1.5, max(float(title.get("width", 0.0)) * 1.55, poster_width * 0.40))
+            y = float(title.get("y", 0.0))
+            width = min(poster_width - x, max(float(title.get("width", 0.0)) * 1.35, poster_width * 0.35))
+            height = max(float(title.get("height", 0.0)), poster_height * 0.06)
             if width > 1.0:
-                draw.rectangle([sx(x), sy(y), sx(x + width), sy(y + 0.055)], fill=(*theme, 42))
+                draw.polygon(
+                    [
+                        (sx(max(0.0, x - 0.8)), sy(max(0.0, y - 0.4))),
+                        (sx(min(poster_width, x + width)), sy(max(0.0, y - 0.2))),
+                        (sx(min(poster_width, x + width - 1.2)), sy(min(poster_height, y + height + 0.5))),
+                        (sx(max(0.0, x - 1.8)), sy(min(poster_height, y + height + 0.25))),
+                    ],
+                    fill=(*theme, 14),
+                )
 
         containers = [
             item
@@ -303,16 +454,17 @@ class BackgroundImageAgent:
             top = min(float(item.get("y", 0.0) or 0.0) for item in containers) - 0.30
             right = max(float(item.get("x", 0.0) or 0.0) + float(item.get("width", 0.0) or 0.0) for item in containers) + 0.25
             bottom = max(float(item.get("y", 0.0) or 0.0) + float(item.get("height", 0.0) or 0.0) for item in containers) + 0.25
-            draw.rectangle(
+            draw.ellipse(
                 [
                     sx(max(0.0, left)),
                     sy(max(0.0, top)),
                     sx(min(poster_width, right)),
                     sy(min(poster_height, bottom)),
                 ],
-                fill=(*edge, 92),
+                fill=(*edge, 38),
             )
 
+        overlay = overlay.filter(ImageFilter.GaussianBlur(max(8, min(img.size) // 90)))
         return Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
 
     def _is_placeholder_image(self, img: Image.Image) -> bool:
@@ -321,8 +473,18 @@ class BackgroundImageAgent:
         variance = sum(stat.var) / 3
         return variance < 18 and 175 <= mean <= 230
 
-    def _procedural_academic_background(self, width: int, height: int, state: PosterState) -> Image.Image:
-        palette = self._palette_spec(state)
+    def _procedural_academic_background(
+        self,
+        width: int,
+        height: int,
+        state: PosterState,
+        style_decision: Dict[str, Any] | None = None,
+        palette_name: str | None = None,
+    ) -> Image.Image:
+        style_decision = style_decision or self._background_style_decision(state)
+        style_name = str(style_decision.get("resolved_style") or "academic_paper")
+        palette_name = palette_name or self._palette_name(state, style_decision)
+        palette = self._palette_spec(state, palette_name)
         base_color = self._rgb_tuple(palette.get("base"), (250, 252, 255))
         edge_color = self._rgb_tuple(palette.get("edge"), (225, 236, 247))
         line_color = self._rgba_tuple(palette.get("line"), (0, 87, 184, 24))
@@ -345,6 +507,38 @@ class BackgroundImageAgent:
                     for channel in range(3)
                 )
                 pixels[x, y] = pixel
+
+        if style_name == "minimal_solid":
+            draw.polygon(
+                [
+                    (int(width * 0.72), 0),
+                    (width, 0),
+                    (width, int(height * 0.22)),
+                    (int(width * 0.83), int(height * 0.14)),
+                ],
+                fill=(*edge_color, 22),
+            )
+            draw.arc(
+                (int(width * -0.08), int(height * 0.78), int(width * 0.22), int(height * 1.10)),
+                210,
+                350,
+                fill=neutral_color,
+                width=max(1, width // 900),
+            )
+            return img
+
+        if style_name == "flat_cartoon":
+            for cx, cy, rx, ry, color in [
+                (0.08, 0.18, 0.13, 0.10, edge_color),
+                (0.92, 0.82, 0.18, 0.13, self._rgb_tuple(palette.get("node"), edge_color)),
+                (0.78, 0.10, 0.14, 0.08, self._rgb_tuple(palette.get("neutral"), edge_color)),
+            ]:
+                x = int(width * cx)
+                y = int(height * cy)
+                draw.ellipse(
+                    [x - int(width * rx), y - int(height * ry), x + int(width * rx), y + int(height * ry)],
+                    fill=(*color[:3], 48),
+                )
 
         # Broad conference-poster washes; postprocessing keeps them behind text.
         band_alpha = max(24, min(62, int(line_color[3] * 1.55)))
@@ -377,6 +571,30 @@ class BackgroundImageAgent:
             ],
             fill=indigo_wash,
         )
+
+        if style_name == "cartographic":
+            for idx in range(14):
+                y0 = int(height * (0.08 + idx * 0.065))
+                points = []
+                for step in range(9):
+                    x = int(width * (step / 8))
+                    y = y0 + int(height * 0.015 * rng.uniform(-1.0, 1.0)) + int(16 * rng.uniform(-1.0, 1.0))
+                    points.append((x, y))
+                draw.line(points, fill=line_color, width=max(1, width // 900))
+            for idx in range(18):
+                x = int(width * rng.uniform(0.02, 0.98))
+                y = int(height * rng.uniform(0.02, 0.98))
+                box_w = int(width * rng.uniform(0.035, 0.08))
+                box_h = int(height * rng.uniform(0.025, 0.06))
+                draw.rectangle([x, y, x + box_w, y + box_h], outline=neutral_color, width=1)
+            return img
+
+        if style_name == "blueprint":
+            step = max(44, min(width, height) // 12)
+            for x in range(0, width, step):
+                draw.line([(x, 0), (x, height)], fill=neutral_color, width=1)
+            for y in range(0, height, step):
+                draw.line([(0, y), (width, y)], fill=neutral_color, width=1)
 
         def point_near_edge() -> tuple[int, int]:
             side = rng.choice(["left", "right", "top", "bottom"])
@@ -411,16 +629,27 @@ class BackgroundImageAgent:
 
         return img
 
-    def _palette_name(self, state: PosterState) -> str:
+    def _requested_palette_name(self, state: PosterState) -> str:
+        requested = str(state.get("background_palette") or self.background_config.get("palette") or "auto").strip()
+        return requested or "auto"
+
+    def _palette_name(self, state: PosterState, style_decision: Dict[str, Any] | None = None) -> str:
         palettes = self.background_config.get("palettes") or {}
-        requested = str(state.get("background_palette") or self.background_config.get("palette") or "light_blue").strip()
+        requested = self._requested_palette_name(state)
+        if requested == "auto":
+            style_decision = style_decision or self._background_style_decision(state)
+            style_spec = style_decision.get("spec") or {}
+            style_palette = str(style_spec.get("default_palette") or "").strip()
+            if style_palette in palettes:
+                return style_palette
+            return "light_blue" if "light_blue" in palettes else next(iter(palettes), "light_blue")
         if requested in palettes:
             return requested
         return "light_blue" if "light_blue" in palettes else next(iter(palettes), "light_blue")
 
-    def _palette_spec(self, state: PosterState) -> Dict[str, Any]:
+    def _palette_spec(self, state: PosterState, palette_name: str | None = None) -> Dict[str, Any]:
         palettes = self.background_config.get("palettes") or {}
-        return dict(palettes.get(self._palette_name(state)) or {})
+        return dict(palettes.get(palette_name or self._palette_name(state)) or {})
 
     def _rgb_tuple(self, value: Any, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
         if isinstance(value, str):

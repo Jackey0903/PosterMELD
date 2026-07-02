@@ -2023,6 +2023,62 @@ def test_background_image_agent_switches_palette_prompt():
     assert "Selected background palette: light_gray" in prompt
 
 
+def test_background_image_agent_explicit_style_prompt_preserves_safety():
+    state = create_state("/tmp/paper.pdf", background_style="tech_grid", background_palette="light_blue")
+    state["color_scheme"] = {"theme": "#0057B8", "mono_light": "#E6EAEF"}
+
+    agent = BackgroundImageAgent()
+    decision = agent._background_style_decision(state)
+    prompt = agent._build_prompt(state, decision, "light_blue")
+
+    assert decision["requested_style"] == "tech_grid"
+    assert decision["resolved_style"] == "tech_grid"
+    assert "Resolved background style: tech_grid" in prompt
+    assert "thin technical grid lines" in prompt
+    assert "BACKGROUND ONLY" in prompt
+    assert "no text" in prompt
+    assert "Do not create block frames" in prompt
+
+
+def test_background_image_agent_auto_selects_cartographic_for_geospatial_paper():
+    state = create_state("/tmp/paper.pdf", background_style="auto", background_palette="auto")
+    state["narrative_content"] = {
+        "title": "Active Geospatial Search for Efficient Tenant Eviction Outreach",
+    }
+    state["visual_density"] = "rich"
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Urban Parcel Search",
+                    "content_role": "foundation",
+                    "text_content": ["Outreach teams map rental properties and select city regions under limited search budgets."],
+                }
+            ]
+        }
+    }
+
+    agent = BackgroundImageAgent()
+    decision = agent._background_style_decision(state)
+    palette = agent._palette_name(state, decision)
+    prompt = agent._build_prompt(state, decision, palette)
+
+    assert decision["requested_style"] == "auto"
+    assert decision["resolved_style"] == "cartographic"
+    assert palette == "mint"
+    assert "cartographic contour lines" in prompt
+    assert "Selected background palette: mint" in prompt
+
+
+def test_background_image_agent_auto_palette_uses_style_default():
+    state = create_state("/tmp/paper.pdf", background_style="flat_cartoon", background_palette="auto")
+    agent = BackgroundImageAgent()
+    decision = agent._background_style_decision(state)
+
+    assert agent._palette_name(state, decision) == "warm_ivory"
+
+
 def test_background_image_agent_placeholder_fallback_keeps_pipeline_success(tmp_path, monkeypatch):
     def fake_generate_image(self, prompt, width, height, output_path):
         Image.new("RGB", (width, height), color=(200, 200, 200)).save(output_path)
@@ -2041,6 +2097,9 @@ def test_background_image_agent_placeholder_fallback_keeps_pipeline_success(tmp_
     assert result["errors"] == []
     assert Path(result["background_image_path"]).exists()
     assert result["background_image_report"]["palette"] == "light_blue"
+    assert result["background_image_report"]["resolved_palette"] == "light_blue"
+    assert result["background_image_report"]["requested_style"] == "auto"
+    assert result["background_image_report"]["resolved_style"]
     assert result["background_image_report"]["used_procedural_fallback"] is True
 
 
@@ -2110,7 +2169,12 @@ def test_background_image_agent_procedural_only_skips_image_api(tmp_path, monkey
         raise AssertionError("image generation API should not be called")
 
     monkeypatch.setattr("src.agents.background_image_agent.ImageTools.generate_image", fail_generate_image)
-    state = create_state(str(tmp_path / "paper.pdf"), enable_generated_background=True, background_palette="light_blue")
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        enable_generated_background=True,
+        background_palette="auto",
+        background_style="minimal_solid",
+    )
     state["output_dir"] = str(tmp_path / "output")
     agent = BackgroundImageAgent()
     agent.background_config["procedural_only"] = True
@@ -2122,6 +2186,8 @@ def test_background_image_agent_procedural_only_skips_image_api(tmp_path, monkey
     assert result["errors"] == []
     assert Path(result["background_image_path"]).exists()
     assert result["background_image_report"]["generation_mode"] == "procedural_only"
+    assert result["background_image_report"]["resolved_style"] == "minimal_solid"
+    assert result["background_image_report"]["palette"] == "light_gray"
     assert result["background_image_report"]["raw_path"] == ""
 
 

@@ -18,8 +18,12 @@ from src.tools.layout_api import LayoutTemplates
 from src.template_extraction.block_template_registry import get_block_template_info, is_block_template_id
 from src.config.poster_config import load_config
 from src.utils.style_options import (
+    available_background_palettes,
+    available_background_styles,
     available_poster_styles,
     available_visual_densities,
+    normalize_background_palette,
+    normalize_background_style,
     normalize_poster_style,
     normalize_visual_density,
 )
@@ -739,6 +743,13 @@ def save_timing_log(state: PosterState):
                 "target_section_id": (state.get("generated_teaser_report") or {}).get("target_section_id"),
                 "asset_id": (state.get("generated_teaser_report") or {}).get("asset_id"),
             },
+            "generated_background": {
+                "enabled": state.get("enable_generated_background", False),
+                "requested_style": state.get("background_style"),
+                "resolved_style": (state.get("background_image_report") or {}).get("resolved_style"),
+                "requested_palette": state.get("background_palette"),
+                "resolved_palette": (state.get("background_image_report") or {}).get("resolved_palette"),
+            },
         }
     }
 
@@ -761,9 +772,13 @@ def main():
     default_vlm_model = os.getenv("PAPER2POSTER_VLM_MODEL") or os.getenv("VLM_MODEL")
     poster_style_choices = available_poster_styles(config)
     visual_density_choices = available_visual_densities(config)
+    background_style_choices = available_background_styles(config)
+    background_palette_choices = available_background_palettes(config)
     section_title_numbering_choices = ["off", "small", "inline"]
     default_poster_style = normalize_poster_style(os.getenv("PAPER2POSTER_STYLE"), config)
     default_visual_density = normalize_visual_density(os.getenv("PAPER2POSTER_VISUAL_DENSITY"), config)
+    default_background_style = normalize_background_style(os.getenv("PAPER2POSTER_BACKGROUND_STYLE"), config)
+    default_background_palette = normalize_background_palette(os.getenv("PAPER2POSTER_BACKGROUND_PALETTE"), config)
     default_section_title_numbering = str(
         os.getenv("PAPER2POSTER_SECTION_TITLE_NUMBERING")
         or config.get("section_title_numbering")
@@ -854,9 +869,15 @@ def main():
     )
     parser.add_argument(
         "--background-palette",
-        choices=["light_blue", "light_gray"],
-        default=None,
+        choices=background_palette_choices,
+        default=default_background_palette,
         help="Palette for the generated poster background when --enable-generated-background is set.",
+    )
+    parser.add_argument(
+        "--background-style",
+        choices=background_style_choices,
+        default=default_background_style,
+        help="Visual style for the generated poster background; auto chooses from paper and layout context.",
     )
     parser.add_argument(
         "--poster-style",
@@ -1016,7 +1037,8 @@ def main():
     print(f"🖼️ Generated Teaser: {'enabled' if args.enable_generated_teaser else 'disabled'}")
     print(f"🎨 Generated Background: {'enabled' if args.enable_generated_background else 'disabled'}")
     if args.enable_generated_background:
-        print(f"🎨 Background Palette: {args.background_palette or 'config default'}")
+        print(f"🎨 Background Style: {args.background_style}")
+        print(f"🎨 Background Palette: {args.background_palette}")
     
     try:
         state = create_state(
@@ -1033,6 +1055,7 @@ def main():
             enable_generated_background=args.enable_generated_background,
             enable_generated_teaser=args.enable_generated_teaser,
             background_palette=args.background_palette,
+            background_style=args.background_style,
             poster_style_preset=args.poster_style,
             visual_density=args.visual_density,
             section_title_numbering=args.section_title_numbering,

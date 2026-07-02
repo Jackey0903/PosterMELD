@@ -359,13 +359,71 @@ generated_background:
   procedural_only: false
   width_px: 1440
   height_px: 2035
-  palette: "light_blue"
+  style: "auto"
+  palette: "auto"
   white_overlay_alpha: 0.40
   blur_radius: 0.75
   max_saturation: 0.58
   api_timeout_seconds: 75
-  prompt_style: "premium top-tier AI conference poster background, visible pale blue/cyan geometry, polished and readable"
+  prompt_style: "premium top-tier AI conference poster background, polished and readable"
   output_filename: "generated_background.png"
+  styles:
+    minimal_solid:
+      label: "Minimal Solid"
+      default_palette: "light_gray"
+      prompt: "very subtle solid-color academic paper texture, barely visible edge washes, quiet premium whitespace, no decorative motifs in content regions"
+      postprocess:
+        white_overlay_alpha: 0.62
+        blur_radius: 0.35
+        max_saturation: 0.36
+    tech_grid:
+      label: "Technology Grid"
+      default_palette: "light_blue"
+      prompt: "thin technical grid lines, faint circuit-like paths, translucent data-network traces, soft cyan and blue-gray geometry concentrated near margins and gutters"
+      postprocess:
+        white_overlay_alpha: 0.46
+        blur_radius: 0.55
+        max_saturation: 0.52
+    academic_paper:
+      label: "Academic Paper"
+      default_palette: "light_blue"
+      prompt: "refined academic conference-paper texture, pale geometric washes, subtle diagonal bands, restrained editorial layout atmosphere, no fake panels"
+      postprocess:
+        white_overlay_alpha: 0.50
+        blur_radius: 0.65
+        max_saturation: 0.48
+    cartographic:
+      label: "Cartographic"
+      default_palette: "mint"
+      prompt: "faint cartographic contour lines, parcel-like region boundaries, route fields, map-grid texture, soft spatial search motifs kept abstract and non-readable"
+      postprocess:
+        white_overlay_alpha: 0.48
+        blur_radius: 0.45
+        max_saturation: 0.50
+    flat_cartoon:
+      label: "Flat Editorial"
+      default_palette: "warm_ivory"
+      prompt: "soft flat editorial illustration style, rounded abstract shapes, friendly but professional color fields, no characters, no faces, no icons, no childish elements"
+      postprocess:
+        white_overlay_alpha: 0.58
+        blur_radius: 0.80
+        max_saturation: 0.44
+    blueprint:
+      label: "Blueprint"
+      default_palette: "light_blue"
+      prompt: "pale blueprint-like construction lines, algorithmic flow traces, faint schematic geometry, theorem/proof atmosphere, no labels and no axis-like diagrams"
+      postprocess:
+        white_overlay_alpha: 0.52
+        blur_radius: 0.48
+        max_saturation: 0.46
+    geometric_soft:
+      label: "Soft Geometry"
+      default_palette: "lavender"
+      prompt: "soft translucent geometric planes, gentle oblique color fields, low-contrast conference-poster composition, restrained modern academic backdrop"
+      postprocess:
+        white_overlay_alpha: 0.54
+        blur_radius: 0.70
+        max_saturation: 0.46
   palettes:
     light_blue:
       label: "pale blue-gray"
@@ -381,6 +439,41 @@ generated_background:
       line: [118, 128, 140, 22]
       node: [95, 105, 118, 26]
       neutral: [138, 146, 156, 22]
+    warm_ivory:
+      label: "warm ivory"
+      base: [253, 250, 244]
+      edge: [241, 232, 217]
+      line: [178, 121, 76, 24]
+      node: [150, 96, 66, 28]
+      neutral: [132, 122, 108, 22]
+    mint:
+      label: "pale mint and blue-gray"
+      base: [248, 253, 251]
+      edge: [221, 240, 234]
+      line: [20, 121, 111, 30]
+      node: [15, 118, 110, 34]
+      neutral: [93, 120, 132, 24]
+    lavender:
+      label: "pale lavender-gray"
+      base: [251, 250, 255]
+      edge: [233, 229, 247]
+      line: [93, 76, 166, 28]
+      node: [93, 76, 166, 32]
+      neutral: [124, 116, 146, 22]
+    rose:
+      label: "pale rose-gray"
+      base: [255, 250, 251]
+      edge: [246, 229, 233]
+      line: [170, 56, 86, 24]
+      node: [150, 48, 78, 28]
+      neutral: [135, 112, 120, 22]
+    amber:
+      label: "pale amber-gray"
+      base: [255, 252, 246]
+      edge: [246, 236, 212]
+      line: [174, 116, 30, 24]
+      node: [154, 103, 24, 28]
+      neutral: [132, 122, 100, 22]
 
 standard_template_policy:
   enabled: true

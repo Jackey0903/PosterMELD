@@ -179,6 +179,7 @@ class PosterState(TypedDict):
     enable_generated_background: bool
     enable_generated_teaser: bool
     background_palette: Optional[str]
+    background_style: Optional[str]
     poster_style_preset: Optional[str]
     visual_density: Optional[str]
     section_title_numbering: Optional[str]
@@ -234,6 +235,7 @@ def create_state(
     enable_generated_background: bool = False,
     enable_generated_teaser: bool = False,
     background_palette: Optional[str] = None,
+    background_style: Optional[str] = None,
     poster_style_preset: Optional[str] = None,
     visual_density: Optional[str] = None,
     section_title_numbering: Optional[str] = None,
@@ -340,6 +342,7 @@ def create_state(
         enable_generated_background=enable_generated_background,
         enable_generated_teaser=enable_generated_teaser,
         background_palette=background_palette,
+        background_style=background_style,
         poster_style_preset=poster_style_preset,
         visual_density=visual_density,
         section_title_numbering=section_title_numbering,

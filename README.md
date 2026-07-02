@@ -216,6 +216,7 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
   --poster-style navy_serif \
   --visual-density rich \
   --enable-generated-background \
+  --background-style auto \
   --background-palette light_blue
 ```
 
@@ -232,6 +233,15 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
 ```
 
 `balanced` 是默认值。论文图表较多、表格比较可读时建议用 `rich`，会优先保留方法图、系统图和关键结果表；空间紧张或竖版实验时可用 `lean`。
+
+可选背景图风格：
+
+```text
+--background-style auto | minimal_solid | tech_grid | academic_paper | cartographic | flat_cartoon | blueprint | geometric_soft
+--background-palette auto | light_blue | light_gray | warm_ivory | mint | lavender | rose | amber
+```
+
+背景图默认 `auto`：pipeline 会根据论文标题、section、keypoints、模板密度和图表密度选择合适风格。比如 geospatial/search/urban 类论文倾向 `cartographic`，AI/agent/security/model 类论文倾向 `tech_grid`，proof/algorithm/framework 类论文倾向 `blueprint`。`minimal_solid` 适合需要最稳可读性的版本；所有背景都会强制遵守 no text/no logo/no chart 的安全约束，并在后处理中压低对比度。
 
 可选 header 样式：
 
@@ -271,7 +281,8 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
   --visual-density rich \
   --enable-generated-teaser \
   --enable-generated-background \
-  --background-palette light_blue
+  --background-style auto \
+  --background-palette auto
 ```
 
 固定使用当前效果较好的横版模板：

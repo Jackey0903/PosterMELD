@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 
 DEFAULT_POSTER_STYLE = "navy_serif"
 DEFAULT_VISUAL_DENSITY = "balanced"
+DEFAULT_BACKGROUND_STYLE = "auto"
+DEFAULT_BACKGROUND_PALETTE = "auto"
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -94,3 +96,47 @@ def resolve_visual_density_settings(state: Dict[str, Any] | None, config: Dict[s
     settings = deepcopy(visual_density_presets(config).get(density) or {})
     settings["name"] = density
     return settings
+
+
+def background_style_presets(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return dict((config.get("generated_background") or {}).get("styles") or {})
+
+
+def available_background_styles(config: Dict[str, Any]) -> List[str]:
+    presets = background_style_presets(config)
+    values = [DEFAULT_BACKGROUND_STYLE]
+    values.extend(name for name in presets.keys() if name != DEFAULT_BACKGROUND_STYLE)
+    return values
+
+
+def normalize_background_style(value: Any, config: Dict[str, Any]) -> str:
+    presets = background_style_presets(config)
+    default = str((config.get("generated_background") or {}).get("style") or DEFAULT_BACKGROUND_STYLE).strip()
+    requested = str(value or default or DEFAULT_BACKGROUND_STYLE).strip()
+    if requested == DEFAULT_BACKGROUND_STYLE:
+        return DEFAULT_BACKGROUND_STYLE
+    if requested in presets:
+        return requested
+    return DEFAULT_BACKGROUND_STYLE
+
+
+def background_palette_presets(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return dict((config.get("generated_background") or {}).get("palettes") or {})
+
+
+def available_background_palettes(config: Dict[str, Any]) -> List[str]:
+    presets = background_palette_presets(config)
+    values = [DEFAULT_BACKGROUND_PALETTE]
+    values.extend(name for name in presets.keys() if name != DEFAULT_BACKGROUND_PALETTE)
+    return values
+
+
+def normalize_background_palette(value: Any, config: Dict[str, Any]) -> str:
+    presets = background_palette_presets(config)
+    default = str((config.get("generated_background") or {}).get("palette") or DEFAULT_BACKGROUND_PALETTE).strip()
+    requested = str(value or default or DEFAULT_BACKGROUND_PALETTE).strip()
+    if requested == DEFAULT_BACKGROUND_PALETTE:
+        return DEFAULT_BACKGROUND_PALETTE
+    if requested in presets:
+        return requested
+    return DEFAULT_BACKGROUND_PALETTE
