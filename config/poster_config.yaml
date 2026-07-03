@@ -52,7 +52,11 @@ header_planner:
   min_title_logo_gap_inches: 0.20
   min_title_width_fraction: 0.42
   max_logo_header_fraction: 0.78
+  hard_max_logo_header_fraction: 0.88
   max_logo_zone_width_fraction: 0.38
+  logo_resize_check_enabled: true
+  preferred_affiliation_logo_scale: 1.16
+  preferred_conference_logo_scale: 1.0
   conservative_logo_scale: 0.82
   subtitle_title_scale: 0.94
   subtitle_font_scale: 0.58

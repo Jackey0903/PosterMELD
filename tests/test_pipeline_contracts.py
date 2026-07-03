@@ -1150,6 +1150,80 @@ def test_header_planner_centered_route_splits_affiliation_and_conference_logos(t
     assert plan["validation"]["passed"]
 
 
+def test_header_planner_boosts_affiliation_logo_when_safe(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    aff_path = tmp_path / "affiliation.png"
+    Image.new("RGBA", (900, 420), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (700, 700), (160, 40, 60, 255)).save(aff_path)
+
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        logo_path=str(conf_path),
+        aff_logo_path=str(aff_path),
+        header_route="classic_left",
+        header_subtitle_policy="off",
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Header Logo Sizing",
+            "authors": "A. Researcher",
+        }
+    }
+
+    plan = HeaderPlanner()(state)["header_plan"]
+    institution_logo = next(element for element in plan["logo_elements"] if element["type"] == "institution_logo")
+
+    assert plan["validation"]["passed"]
+    assert plan["logo_resize_decision"] == "boosted_affiliation_logo"
+    assert plan["affiliation_logo_scale"] > 1.0
+    assert institution_logo["height"] > 2.0
+    assert institution_logo["width"] == pytest.approx(institution_logo["height"], rel=0.05)
+    assert [attempt["label"] for attempt in plan["logo_resize_attempts"]] == [
+        "base",
+        "boosted_affiliation_logo",
+    ]
+
+
+def test_header_planner_reverts_to_base_logo_when_boost_is_too_large(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    aff_path = tmp_path / "affiliation.png"
+    Image.new("RGBA", (900, 420), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (700, 700), (160, 40, 60, 255)).save(aff_path)
+
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        logo_path=str(conf_path),
+        aff_logo_path=str(aff_path),
+        header_route="classic_left",
+        header_subtitle_policy="off",
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Header Logo Sizing",
+            "authors": "A. Researcher",
+        }
+    }
+    agent = HeaderPlanner()
+    agent.header_config["preferred_affiliation_logo_scale"] = 9.0
+    agent.header_config["hard_max_logo_header_fraction"] = 0.70
+
+    plan = agent(state)["header_plan"]
+    institution_logo = next(element for element in plan["logo_elements"] if element["type"] == "institution_logo")
+    boosted_attempt = plan["logo_resize_attempts"][1]
+
+    assert plan["validation"]["passed"]
+    assert plan["logo_resize_decision"] == "base_after_boost_rejected"
+    assert plan["affiliation_logo_scale"] == 1.0
+    assert institution_logo["height"] == pytest.approx(1.95)
+    assert boosted_attempt["passed"] is False
+
+
 def test_font_agent_preserves_header_plan_typography():
     agent = FontAgent()
     state = create_state("/tmp/paper.pdf", poster_style_preset="teal_modern")

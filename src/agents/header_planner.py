@@ -44,7 +44,7 @@ class HeaderPlanner:
             rng = self._rng(state, title)
             route = self._select_route(state, template_layout, has_conf, aff_logos, rng)
             subtitle_text = self._select_subtitle(state, title, rng)
-            plan = self._build_plan(
+            base_plan = self._build_plan(
                 state=state,
                 template_layout=template_layout,
                 route=route,
@@ -53,13 +53,25 @@ class HeaderPlanner:
                 subtitle_text=subtitle_text,
                 aff_logos=aff_logos,
                 has_conf=has_conf,
-                logo_scale=1.0,
+                affiliation_logo_scale=1.0,
+                conference_logo_scale=1.0,
                 fallback=False,
+            )
+            plan = self._choose_checked_logo_plan(
+                state=state,
+                template_layout=template_layout,
+                route=route,
+                title=title,
+                authors=authors,
+                subtitle_text=subtitle_text,
+                aff_logos=aff_logos,
+                has_conf=has_conf,
+                base_plan=base_plan,
             )
 
             if not plan["validation"]["passed"]:
                 log_agent_warning(self.name, f"header route '{route}' failed validation: {plan['validation']['reason']}")
-                plan = self._build_plan(
+                fallback_plan = self._build_plan(
                     state=state,
                     template_layout=template_layout,
                     route="classic_left",
@@ -68,9 +80,16 @@ class HeaderPlanner:
                     subtitle_text=subtitle_text,
                     aff_logos=aff_logos,
                     has_conf=has_conf,
-                    logo_scale=float(self.header_config.get("conservative_logo_scale", 0.82)),
+                    affiliation_logo_scale=float(self.header_config.get("conservative_logo_scale", 0.82)),
+                    conference_logo_scale=float(self.header_config.get("conservative_logo_scale", 0.82)),
                     fallback=True,
                 )
+                fallback_plan["logo_resize_decision"] = "fallback_conservative"
+                fallback_plan["logo_resize_attempts"] = [
+                    self._logo_attempt_summary(plan, "requested_route"),
+                    self._logo_attempt_summary(fallback_plan, "fallback_conservative"),
+                ]
+                plan = fallback_plan
 
             state["header_plan"] = plan
             state["current_agent"] = self.name
@@ -297,7 +316,8 @@ class HeaderPlanner:
         subtitle_text: str,
         aff_logos: List[Dict[str, Any]],
         has_conf: bool,
-        logo_scale: float,
+        affiliation_logo_scale: float,
+        conference_logo_scale: float,
         fallback: bool,
     ) -> Dict[str, Any]:
         header = template_layout["header"]
@@ -310,14 +330,17 @@ class HeaderPlanner:
             layout_mode=layout_mode,
             has_conf=has_conf,
             aff_logos=aff_logos,
-            logo_scale=logo_scale,
+            affiliation_logo_scale=affiliation_logo_scale,
+            conference_logo_scale=conference_logo_scale,
         )
         title_metrics = self._title_metrics(title_box["h"], title_font_size, subtitle_font_size, author_font_size, bool(subtitle_text))
         plan = {
             "selected_template": template_layout.get("template_name"),
             "route": route,
             "fallback": fallback,
-            "logo_scale": logo_scale,
+            "logo_scale": max(affiliation_logo_scale, conference_logo_scale),
+            "affiliation_logo_scale": affiliation_logo_scale,
+            "conference_logo_scale": conference_logo_scale,
             "title_box": title_box,
             "title": {
                 "text": title,
@@ -344,6 +367,78 @@ class HeaderPlanner:
         }
         plan["validation"] = self._validate_plan(plan, header)
         return plan
+
+    def _choose_checked_logo_plan(
+        self,
+        *,
+        state: PosterState,
+        template_layout: Dict[str, Any],
+        route: str,
+        title: str,
+        authors: str,
+        subtitle_text: str,
+        aff_logos: List[Dict[str, Any]],
+        has_conf: bool,
+        base_plan: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Try one affiliation-logo enlargement, then keep the checked safe plan."""
+        base_plan["logo_resize_decision"] = "base"
+        base_plan["logo_resize_attempts"] = [self._logo_attempt_summary(base_plan, "base")]
+        if not base_plan["validation"]["passed"]:
+            base_plan["logo_resize_decision"] = "base_failed"
+            return base_plan
+        if not aff_logos or not self.header_config.get("logo_resize_check_enabled", True):
+            return base_plan
+
+        preferred_aff_scale = float(self.header_config.get("preferred_affiliation_logo_scale", 1.16))
+        preferred_conf_scale = float(self.header_config.get("preferred_conference_logo_scale", 1.0))
+        if preferred_aff_scale <= 1.0 and preferred_conf_scale <= 1.0:
+            return base_plan
+
+        boosted_plan = self._build_plan(
+            state=state,
+            template_layout=template_layout,
+            route=route,
+            title=title,
+            authors=authors,
+            subtitle_text=subtitle_text,
+            aff_logos=aff_logos,
+            has_conf=has_conf,
+            affiliation_logo_scale=preferred_aff_scale,
+            conference_logo_scale=preferred_conf_scale,
+            fallback=False,
+        )
+        attempts = [
+            self._logo_attempt_summary(base_plan, "base"),
+            self._logo_attempt_summary(boosted_plan, "boosted_affiliation_logo"),
+        ]
+        if boosted_plan["validation"]["passed"]:
+            boosted_plan["logo_resize_decision"] = "boosted_affiliation_logo"
+            boosted_plan["logo_resize_attempts"] = attempts
+            return boosted_plan
+
+        base_plan["logo_resize_decision"] = "base_after_boost_rejected"
+        base_plan["logo_resize_attempts"] = attempts
+        return base_plan
+
+    def _logo_attempt_summary(self, plan: Dict[str, Any], label: str) -> Dict[str, Any]:
+        logo_boxes = []
+        for element in plan.get("logo_elements") or []:
+            if element.get("type") == "logo_divider":
+                continue
+            logo_boxes.append({
+                "type": element.get("type"),
+                "width": round(float(element.get("width", 0.0)), 3),
+                "height": round(float(element.get("height", 0.0)), 3),
+            })
+        return {
+            "label": label,
+            "affiliation_logo_scale": plan.get("affiliation_logo_scale", plan.get("logo_scale")),
+            "conference_logo_scale": plan.get("conference_logo_scale", plan.get("logo_scale")),
+            "passed": bool((plan.get("validation") or {}).get("passed")),
+            "reason": (plan.get("validation") or {}).get("reason"),
+            "logo_boxes": logo_boxes,
+        }
 
     def _font_sizes(self, template_layout: Dict[str, Any], has_subtitle: bool) -> Tuple[int, int, int]:
         orientation = template_layout.get("orientation")
@@ -455,25 +550,26 @@ class HeaderPlanner:
         layout_mode: str,
         has_conf: bool,
         aff_logos: List[Dict[str, Any]],
-        logo_scale: float,
+        affiliation_logo_scale: float,
+        conference_logo_scale: float,
     ) -> List[Dict[str, Any]]:
         if not logo_regions:
             return []
         if layout_mode == "split":
             elements: List[Dict[str, Any]] = []
-            elements.extend(self._layout_aff_grid(aff_logos, logo_regions["aff"], logo_scale))
+            elements.extend(self._layout_aff_grid(aff_logos, logo_regions["aff"], affiliation_logo_scale))
             if has_conf:
-                elements.extend(self._layout_conf_only(str(state["logo_path"]), logo_regions["conf"], logo_scale))
+                elements.extend(self._layout_conf_only(str(state["logo_path"]), logo_regions["conf"], conference_logo_scale))
             return elements
 
         region = logo_regions.get("combined")
         if not region:
             return []
         if has_conf and aff_logos:
-            return self._layout_combined(str(state["logo_path"]), aff_logos, region, logo_scale)
+            return self._layout_combined(str(state["logo_path"]), aff_logos, region, affiliation_logo_scale, conference_logo_scale)
         if has_conf:
-            return self._layout_conf_only(str(state["logo_path"]), region, logo_scale)
-        return self._layout_aff_grid(aff_logos, region, logo_scale)
+            return self._layout_conf_only(str(state["logo_path"]), region, conference_logo_scale)
+        return self._layout_aff_grid(aff_logos, region, affiliation_logo_scale)
 
     def _layout_conf_only(self, conf_path: str, region: Dict[str, float], scale: float) -> List[Dict[str, Any]]:
         aspect = self._get_image_aspect_ratio(conf_path)
@@ -495,7 +591,8 @@ class HeaderPlanner:
         conf_path: str,
         aff_logos: List[Dict[str, Any]],
         region: Dict[str, float],
-        scale: float,
+        aff_scale: float,
+        conf_scale: float,
     ) -> List[Dict[str, Any]]:
         conf_cfg = self.config.get("conference_logos", {})
         divider_w = float(conf_cfg.get("divider_width", 0.04))
@@ -510,7 +607,7 @@ class HeaderPlanner:
             "w": conf_zone_w,
             "h": region["h"],
         }
-        elements = self._layout_aff_grid(aff_logos, aff_region, scale)
+        elements = self._layout_aff_grid(aff_logos, aff_region, aff_scale)
         elements.append({
             "type": "logo_divider",
             "x": region["x"] + aff_zone_w + gap,
@@ -520,7 +617,7 @@ class HeaderPlanner:
             "priority": 0.85,
             "header_planned": True,
         })
-        elements.extend(self._layout_conf_only(conf_path, conf_region, scale))
+        elements.extend(self._layout_conf_only(conf_path, conf_region, conf_scale))
         return elements
 
     def _layout_aff_grid(
@@ -560,17 +657,23 @@ class HeaderPlanner:
         elements: List[Dict[str, Any]] = []
         for index, logo in enumerate(aff_logos):
             row, col = divmod(index, cols)
+            aspect = float(logo.get("aspect", self._get_image_aspect_ratio(logo.get("logo_path"))) or 1.0)
+            aspect = max(aspect, 0.1)
+            logo_h = min(cell_h, cell_w / aspect)
+            logo_w = logo_h * aspect
+            cell_x = start_x + col * (cell_w + gap)
+            cell_y = start_y + row * (cell_h + gap)
             elements.append({
                 "type": "institution_logo",
-                "x": start_x + col * (cell_w + gap),
-                "y": start_y + row * (cell_h + gap),
-                "width": cell_w,
-                "height": cell_h,
+                "x": cell_x + (cell_w - logo_w) / 2,
+                "y": cell_y + (cell_h - logo_h) / 2,
+                "width": logo_w,
+                "height": logo_h,
                 "image_path": logo["logo_path"],
                 "institution": logo.get("institution", ""),
                 "domain": logo.get("domain"),
                 "source": logo.get("source"),
-                "aspect": logo.get("aspect", self._get_image_aspect_ratio(logo.get("logo_path"))),
+                "aspect": aspect,
                 "priority": 0.9,
                 "header_planned": True,
             })
@@ -612,7 +715,7 @@ class HeaderPlanner:
             return {"passed": False, "reason": "title_box_too_narrow"}
 
         padded_title = (title_box[0] - min_gap, title_box[1] - 0.02, title_box[2] + min_gap, title_box[3] + 0.02)
-        max_logo_h = float(header["h"]) * float(self.header_config.get("max_logo_header_fraction", 0.78)) * 1.05
+        max_logo_h = float(header["h"]) * float(self.header_config.get("hard_max_logo_header_fraction", 0.88))
         for element in plan.get("logo_elements") or []:
             if element.get("type") == "logo_divider":
                 continue

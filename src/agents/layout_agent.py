@@ -973,17 +973,23 @@ class LayoutAgent:
         elements: List[Dict] = []
         for idx, logo in enumerate(aff_logos):
             row, col = divmod(idx, cols)
+            aspect = float(logo.get("aspect", self._get_image_aspect_ratio(logo.get("logo_path"))) or 1.0)
+            aspect = max(aspect, 0.1)
+            logo_h = min(cell_h, cell_w / aspect)
+            logo_w = logo_h * aspect
+            cell_x = start_x + col * (cell_w + gap)
+            cell_y = start_y + row * (cell_h + gap)
             elements.append({
                 "type": "institution_logo",
-                "x": start_x + col * (cell_w + gap),
-                "y": start_y + row * (cell_h + gap),
-                "width": cell_w,
-                "height": cell_h,
+                "x": cell_x + (cell_w - logo_w) / 2,
+                "y": cell_y + (cell_h - logo_h) / 2,
+                "width": logo_w,
+                "height": logo_h,
                 "image_path": logo["logo_path"],
                 "institution": logo.get("institution", ""),
                 "domain": logo.get("domain"),
                 "source": logo.get("source"),
-                "aspect": logo.get("aspect", self.layout_constants["default_logo_aspect_ratio"]),
+                "aspect": aspect,
                 "priority": 0.9,
             })
         return elements
