@@ -322,17 +322,17 @@ poster_visual_style:
     generated_background_overlay:
       enabled: true
       fill_color: "#FFFFFF"
-      fill_opacity: 0.84
+      fill_opacity: 0.64
       border_color: "#D8DEE7"
-      border_opacity: 0.58
+      border_opacity: 0.44
       border_width: 0.45
       border_style: "solid"
       shadow:
         enabled: true
         color: "#000000"
-        alpha: 0.045
-        blur_pt: 2.2
-        distance_pt: 1.0
+        alpha: 0.03
+        blur_pt: 1.6
+        distance_pt: 0.7
         angle: 45
 
 selective_block_backgrounds:
@@ -376,9 +376,14 @@ generated_background:
   height_px: 2035
   style: "auto"
   palette: "auto"
-  white_overlay_alpha: 0.40
+  white_overlay_alpha: 0.28
   blur_radius: 0.75
-  max_saturation: 0.58
+  max_saturation: 0.66
+  visibility_floor:
+    enabled: true
+    min_average_distance_from_white: 15.0
+    min_channel_stddev: 8.0
+    max_boost_factor: 5.0
   api_timeout_seconds: 75
   prompt_style: "premium top-tier AI conference poster background, polished and readable"
   output_filename: "generated_background.png"
@@ -388,57 +393,60 @@ generated_background:
       default_palette: "light_gray"
       prompt: "very subtle solid-color academic paper texture, barely visible edge washes, quiet premium whitespace, no decorative motifs in content regions"
       postprocess:
-        white_overlay_alpha: 0.62
+        white_overlay_alpha: 0.48
         blur_radius: 0.35
-        max_saturation: 0.36
+        max_saturation: 0.44
+        min_average_distance_from_white: 9.0
+        min_channel_stddev: 4.0
+        max_boost_factor: 2.2
     tech_grid:
       label: "Technology Grid"
       default_palette: "light_blue"
       prompt: "thin technical grid lines, faint circuit-like paths, translucent data-network traces, soft cyan and blue-gray geometry concentrated near margins and gutters"
       postprocess:
-        white_overlay_alpha: 0.46
+        white_overlay_alpha: 0.24
         blur_radius: 0.55
-        max_saturation: 0.52
+        max_saturation: 0.68
     academic_paper:
       label: "Academic Paper"
       default_palette: "light_blue"
       prompt: "refined academic conference-paper texture, pale geometric washes, subtle diagonal bands, restrained editorial layout atmosphere, no fake panels"
       postprocess:
-        white_overlay_alpha: 0.50
+        white_overlay_alpha: 0.28
         blur_radius: 0.65
-        max_saturation: 0.48
+        max_saturation: 0.62
     cartographic:
       label: "Cartographic"
       default_palette: "mint"
       prompt: "faint cartographic contour lines, parcel-like region boundaries, route fields, map-grid texture, soft spatial search motifs kept abstract and non-readable"
       postprocess:
-        white_overlay_alpha: 0.48
+        white_overlay_alpha: 0.24
         blur_radius: 0.45
-        max_saturation: 0.50
+        max_saturation: 0.66
     flat_cartoon:
       label: "Flat Editorial"
       default_palette: "warm_ivory"
       prompt: "soft flat editorial illustration style, rounded abstract shapes, friendly but professional color fields, no characters, no faces, no icons, no childish elements"
       postprocess:
-        white_overlay_alpha: 0.58
+        white_overlay_alpha: 0.34
         blur_radius: 0.80
-        max_saturation: 0.44
+        max_saturation: 0.60
     blueprint:
       label: "Blueprint"
       default_palette: "light_blue"
       prompt: "pale blueprint-like construction lines, algorithmic flow traces, faint schematic geometry, theorem/proof atmosphere, no labels and no axis-like diagrams"
       postprocess:
-        white_overlay_alpha: 0.52
+        white_overlay_alpha: 0.30
         blur_radius: 0.48
-        max_saturation: 0.46
+        max_saturation: 0.62
     geometric_soft:
       label: "Soft Geometry"
       default_palette: "lavender"
       prompt: "soft translucent geometric planes, gentle oblique color fields, low-contrast conference-poster composition, restrained modern academic backdrop"
       postprocess:
-        white_overlay_alpha: 0.54
+        white_overlay_alpha: 0.32
         blur_radius: 0.70
-        max_saturation: 0.46
+        max_saturation: 0.62
   palettes:
     light_blue:
       label: "pale blue-gray"

@@ -1849,10 +1849,10 @@ def test_layout_agent_uses_translucent_panels_for_generated_background():
 
     assert container["background_aware_panel"] is True
     assert container["fill_color"] == "#FFFFFF"
-    assert container["fill_opacity"] == pytest.approx(0.84)
+    assert container["fill_opacity"] == pytest.approx(0.64)
     assert container["border_color"] == "#D8DEE7"
-    assert container["border_opacity"] == pytest.approx(0.58)
-    assert container["shadow"]["alpha"] == pytest.approx(0.045)
+    assert container["border_opacity"] == pytest.approx(0.44)
+    assert container["shadow"]["alpha"] == pytest.approx(0.03)
 
 
 def test_layout_agent_keeps_solid_panels_without_generated_background():
@@ -2138,6 +2138,29 @@ def test_background_image_agent_auto_palette_uses_style_default():
     decision = agent._background_style_decision(state)
 
     assert agent._palette_name(state, decision) == "warm_ivory"
+
+
+def test_background_image_agent_enforces_visibility_floor_for_pale_background():
+    agent = BackgroundImageAgent()
+    img = Image.new("RGB", (120, 80), (252, 253, 254))
+    for x in range(0, 120, 8):
+        for y in range(80):
+            img.putpixel((x, y), (244, 249, 253))
+
+    before = agent._background_visibility_metrics(img)
+    boosted = agent._enforce_background_visibility(
+        img,
+        {
+            "min_average_distance_from_white": 12.0,
+            "min_channel_stddev": 4.0,
+            "max_boost_factor": 5.0,
+        },
+    )
+    after = agent._background_visibility_metrics(boosted)
+
+    assert after["average_distance_from_white"] > before["average_distance_from_white"] * 2
+    assert after["channel_stddev"] > before["channel_stddev"] * 2
+    assert after["average_distance_from_white"] >= 10.0
 
 
 def test_background_image_agent_placeholder_fallback_keeps_pipeline_success(tmp_path, monkeypatch):

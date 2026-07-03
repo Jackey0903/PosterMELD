@@ -381,6 +381,7 @@ class BackgroundImageAgent:
         overlay = Image.new("RGB", img.size, "white")
         img = Image.blend(img, overlay, min(max(alpha, 0.0), 1.0))
         img = self._add_layout_hierarchy_to_background(img, state)
+        img = self._enforce_background_visibility(img, postprocess)
         img.save(final_path)
 
     def _style_postprocess(self, style_decision: Dict[str, Any]) -> Dict[str, Any]:
@@ -391,6 +392,68 @@ class BackgroundImageAgent:
         }
         values.update((style_decision.get("spec") or {}).get("postprocess") or {})
         return values
+
+    def _enforce_background_visibility(self, img: Image.Image, postprocess: Dict[str, Any]) -> Image.Image:
+        visibility = self.background_config.get("visibility_floor") or {}
+        enabled = postprocess.get("visibility_floor_enabled", visibility.get("enabled", True))
+        if not enabled:
+            return img
+
+        try:
+            min_distance = float(
+                postprocess.get(
+                    "min_average_distance_from_white",
+                    visibility.get("min_average_distance_from_white", 0),
+                )
+            )
+            min_stddev = float(
+                postprocess.get(
+                    "min_channel_stddev",
+                    visibility.get("min_channel_stddev", 0),
+                )
+            )
+            max_boost = max(
+                1.0,
+                float(postprocess.get("max_boost_factor", visibility.get("max_boost_factor", 1.0))),
+            )
+        except (TypeError, ValueError):
+            return img
+
+        if min_distance <= 0 and min_stddev <= 0:
+            return img
+
+        metrics = self._background_visibility_metrics(img)
+        distance = max(metrics["average_distance_from_white"], 0.01)
+        stddev = max(metrics["channel_stddev"], 0.01)
+        required_boost = 1.0
+        if min_distance > 0 and distance < min_distance:
+            required_boost = max(required_boost, min_distance / distance)
+        if min_stddev > 0 and stddev < min_stddev:
+            required_boost = max(required_boost, min_stddev / stddev)
+
+        boost = min(max_boost, required_boost)
+        if boost <= 1.02:
+            return img
+
+        return img.point(
+            lambda value: max(0, min(255, int(round(255 - (255 - value) * boost))))
+        )
+
+    def _background_visibility_metrics(self, img: Image.Image) -> Dict[str, float]:
+        sample = img.convert("RGB")
+        if max(sample.size) > 256:
+            scale = 256 / max(sample.size)
+            sample = sample.resize(
+                (max(1, int(sample.width * scale)), max(1, int(sample.height * scale))),
+                Image.Resampling.BILINEAR,
+            )
+        stat = ImageStat.Stat(sample)
+        mean = sum(stat.mean) / 3
+        stddev = sum(stat.stddev) / 3
+        return {
+            "average_distance_from_white": 255 - mean,
+            "channel_stddev": stddev,
+        }
 
     def _background_dimensions(self, state: PosterState) -> tuple[int, int]:
         base_width = max(1, int(self.background_config.get("width_px", 1440)))

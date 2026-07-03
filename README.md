@@ -241,7 +241,7 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
 --background-palette auto | light_blue | light_gray | warm_ivory | mint | lavender | rose | amber
 ```
 
-背景图默认 `auto`：pipeline 会根据论文标题、section、keypoints、模板密度和图表密度选择合适风格。比如 geospatial/search/urban 类论文倾向 `cartographic`，AI/agent/security/model 类论文倾向 `tech_grid`，proof/algorithm/framework 类论文倾向 `blueprint`。`minimal_solid` 适合需要最稳可读性的版本；所有背景都会强制遵守 no text/no logo/no chart 的安全约束，并在后处理中压低对比度。
+背景图默认 `auto`：pipeline 会根据论文标题、section、keypoints、模板密度和图表密度选择合适风格。比如 geospatial/search/urban 类论文倾向 `cartographic`，AI/agent/security/model 类论文倾向 `tech_grid`，proof/algorithm/framework 类论文倾向 `blueprint`。`minimal_solid` 适合需要最稳可读性的版本；所有背景都会强制遵守 no text/no logo/no chart 的安全约束，并在后处理中控制上限、同时保留可见度下限，避免背景被洗成纯白。
 
 可选 header 样式：
 
