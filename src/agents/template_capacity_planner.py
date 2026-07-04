@@ -189,6 +189,26 @@ class TemplateCapacityPlanner:
             self._merge_slot_order(table_slots, list(policy.get("table_slots") or ["slot_4"])),
             contract,
         )
+        rejected_visual_slots: Dict[str, List[Dict[str, Any]]] = {"figure": [], "table": []}
+        if is_portrait:
+            figure_slots, rejected_visual_slots["figure"] = self._filter_portrait_visual_slots(
+                figure_slots,
+                contract,
+                "figure",
+            )
+            table_slots, rejected_visual_slots["table"] = self._filter_portrait_visual_slots(
+                table_slots,
+                contract,
+                "table",
+            )
+            self._retarget_rejected_portrait_visual_slots(
+                contract,
+                rejected_visual_slots,
+                {*figure_slots, *table_slots},
+            )
+            figure_count = min(figure_count, len(figure_slots))
+            table_count = min(table_count, len(table_slots))
+            max_visuals_total = min(max_visuals_total, figure_count + table_count)
         return {
             "source": "fast_template_first_visual_policy",
             "template_id": template_name,
@@ -203,6 +223,7 @@ class TemplateCapacityPlanner:
             "default_max_height_fraction": policy.get("default_max_height_fraction", 0.42),
             "table_unreadable_strategy": policy.get("table_unreadable_strategy") or "summarize_as_text",
             "visual_footprint": visual_footprint_config(self.config),
+            "rejected_visual_slots": rejected_visual_slots,
         }
 
     def _visual_footprint_for_policy(self, visual_policy: str, region: Dict[str, Any]) -> Dict[str, Any]:
@@ -230,6 +251,91 @@ class TemplateCapacityPlanner:
 
         original_index = {slot_id: index for index, slot_id in enumerate(slot_ids)}
         return sorted(slot_ids, key=lambda slot_id: (-area(slot_id), original_index.get(slot_id, 999)))
+
+    def _filter_portrait_visual_slots(
+        self,
+        slot_ids: List[str],
+        contract: Dict[str, Any],
+        visual_kind: str,
+    ) -> tuple[List[str], List[Dict[str, Any]]]:
+        """Keep portrait visuals out of narrow slots so figures land in larger blocks."""
+        cfg = visual_footprint_config(self.config)
+        by_slot = contract.get("by_slot") or {}
+        prefix = f"portrait_{visual_kind}"
+        min_width = float(cfg.get(f"{prefix}_min_slot_width_inches", 0.0) or 0.0)
+        min_height = float(cfg.get(f"{prefix}_min_slot_height_inches", 0.0) or 0.0)
+        min_area = float(cfg.get(f"{prefix}_min_slot_area_inches", 0.0) or 0.0)
+
+        kept: List[str] = []
+        rejected: List[Dict[str, Any]] = []
+        for slot_id in slot_ids:
+            if slot_id not in by_slot:
+                continue
+            bbox = ((by_slot.get(slot_id) or {}).get("slot_bbox") or {})
+            width = float(bbox.get("w", 0.0) or 0.0)
+            height = float(bbox.get("h", 0.0) or 0.0)
+            area = width * height
+            failed = []
+            if min_width and width < min_width:
+                failed.append("width")
+            if min_height and height < min_height:
+                failed.append("height")
+            if min_area and area < min_area:
+                failed.append("area")
+            if failed:
+                rejected.append({
+                    "slot_id": slot_id,
+                    "visual_type": visual_kind,
+                    "width": round(width, 4),
+                    "height": round(height, 4),
+                    "area": round(area, 4),
+                    "failed": failed,
+                })
+                continue
+            kept.append(slot_id)
+
+        return kept, rejected
+
+    def _retarget_rejected_portrait_visual_slots(
+        self,
+        contract: Dict[str, Any],
+        rejected_visual_slots: Dict[str, List[Dict[str, Any]]],
+        selected_visual_slots: set[str],
+    ) -> None:
+        rejected_slot_ids = {
+            str(item.get("slot_id") or "")
+            for items in rejected_visual_slots.values()
+            for item in items
+        }
+        rejected_slot_ids = {slot_id for slot_id in rejected_slot_ids if slot_id and slot_id not in selected_visual_slots}
+        if not rejected_slot_ids:
+            return
+
+        for block in contract.get("blocks") or []:
+            slot_id = str(block.get("slot_id") or "")
+            if slot_id not in rejected_slot_ids:
+                continue
+            bbox = block.get("slot_bbox") or {}
+            region = {
+                "x": bbox.get("x", 0.0),
+                "y": bbox.get("y", 0.0),
+                "w": bbox.get("w", 0.0),
+                "h": bbox.get("h", 0.0),
+                "poster_orientation": "portrait",
+            }
+            capacity = self._estimate_capacity(region, "text_summary")
+            block.update({
+                "visual_policy": "text_summary",
+                "visual_footprint": {
+                    "enabled": bool(visual_footprint_config(self.config).get("enabled", True)),
+                    "visual_type": "none",
+                },
+                "capacity_warning": "visual_slot_too_narrow_text_fallback",
+                "target_chars": capacity["target_chars"],
+                "min_chars": capacity["min_chars"],
+                "max_chars": capacity["max_chars"],
+                "target_bullets": capacity["target_bullets"],
+            })
 
     def _slot_specs_for_template(
         self,
@@ -352,7 +458,7 @@ class TemplateCapacityPlanner:
             footprint = visual_requirements("table_contract", {"asset_type": "table"}, region, self.config)
             visual_reserved = max(height * 0.50, float(footprint.get("min_height") or 0.0))
         line_height = max((float((typography.get("sizes") or {}).get("body_text", 44)) / 72.0) * 1.05, 0.32)
-        chars_per_inch = float(block_cfg.get("ppt_chars_per_inch_at_44pt", 4.2))
+        chars_per_inch = self._chars_per_inch(region)
         chars_per_line = max(20, int(max(width - padding * 2, 0.5) * chars_per_inch))
         text_height_budget = max(target_used_height - title_height - gap - padding - visual_reserved, line_height)
         target_lines = max(1, int(math.floor(text_height_budget / line_height)))
@@ -368,6 +474,24 @@ class TemplateCapacityPlanner:
             "max_chars": max_chars,
             "target_bullets": max(1, min(6, round(target_chars / int(block_cfg.get("chars_per_bullet", 120))))),
         }
+
+    def _chars_per_inch(self, region: Dict[str, Any]) -> float:
+        block_cfg = self.config.get("block_refinement", {})
+        micro_cfg = self.config.get("micro_layout_refinement", {})
+        default = float(block_cfg.get("ppt_chars_per_inch_at_44pt", micro_cfg.get("ppt_chars_per_inch_at_44pt", 4.2)))
+        orientation = str(region.get("poster_orientation") or "").lower()
+        if not orientation:
+            width = float(region.get("w", 0.0) or 0.0)
+            height = float(region.get("h", 0.0) or 0.0)
+            orientation = "portrait" if height > width else "landscape"
+        if orientation == "portrait":
+            return float(
+                block_cfg.get(
+                    "portrait_ppt_chars_per_inch_at_44pt",
+                    micro_cfg.get("portrait_ppt_chars_per_inch_at_44pt", default),
+                )
+            )
+        return default
 
     def _default_slot_specs(self) -> Dict[str, Dict[str, Any]]:
         return {

@@ -637,7 +637,7 @@ class TemplatePriorPlanner:
         )
         line_height = self._line_height(int(settings["body_font_size"]), float(settings["line_spacing"]))
         target_lines = max(int(math.floor(available_text_height / max(line_height, 0.01))), 0)
-        chars_per_line = self._chars_per_line(usable_text_width, int(settings["body_font_size"]))
+        chars_per_line = self._chars_per_line(usable_text_width, int(settings["body_font_size"]), state)
         raw_target_chars = int(target_lines * chars_per_line * float(settings["safety_factor"]))
         min_floor = int(settings["visual_min_text_chars"] if visual_count else settings["min_capacity_chars"])
         target_chars = max(min(raw_target_chars, int(settings["max_capacity_chars"])), min_floor)
@@ -726,6 +726,18 @@ class TemplatePriorPlanner:
                     micro_config.get("ppt_chars_per_inch_at_44pt", 4.2),
                 )
             ),
+            "portrait_ppt_chars_per_inch_at_44pt": float(
+                self.block_config.get(
+                    "portrait_ppt_chars_per_inch_at_44pt",
+                    micro_config.get(
+                        "portrait_ppt_chars_per_inch_at_44pt",
+                        self.block_config.get(
+                            "ppt_chars_per_inch_at_44pt",
+                            micro_config.get("ppt_chars_per_inch_at_44pt", 4.2),
+                        ),
+                    ),
+                )
+            ),
         }
 
     def _fast_budget_for_slot(self, state: PosterState, slot_id: Any) -> Dict[str, Any]:
@@ -783,14 +795,26 @@ class TemplatePriorPlanner:
     def _line_height(self, font_size: int, line_spacing: float) -> float:
         return (font_size / 72) * max(line_spacing, 0.9) * 1.15
 
-    def _chars_per_line(self, width_inches: float, font_size: int) -> int:
-        chars_per_inch = float(
+    def _chars_per_line(self, width_inches: float, font_size: int, state: Optional[PosterState] = None) -> int:
+        chars_per_inch = self._chars_per_inch(state)
+        return max(int(width_inches * chars_per_inch * (44 / max(font_size, 1))), 18)
+
+    def _chars_per_inch(self, state: Optional[PosterState] = None) -> float:
+        micro_config = self.config.get("micro_layout_refinement", {})
+        default = float(
             self.block_config.get(
                 "ppt_chars_per_inch_at_44pt",
-                self.config.get("micro_layout_refinement", {}).get("ppt_chars_per_inch_at_44pt", 4.2),
+                micro_config.get("ppt_chars_per_inch_at_44pt", 4.2),
             )
         )
-        return max(int(width_inches * chars_per_inch * (44 / max(font_size, 1))), 18)
+        if state and float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0):
+            return float(
+                self.block_config.get(
+                    "portrait_ppt_chars_per_inch_at_44pt",
+                    micro_config.get("portrait_ppt_chars_per_inch_at_44pt", default),
+                )
+            )
+        return default
 
     def _apply_capacity_contract(
         self,

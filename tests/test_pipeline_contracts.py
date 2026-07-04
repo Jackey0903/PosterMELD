@@ -441,6 +441,45 @@ def test_template_capacity_planner_orders_visual_slots_by_area(tmp_path):
     assert policy["table_slots"][:2] == ["slot_5", "slot_6"]
 
 
+def test_template_capacity_planner_excludes_narrow_portrait_figure_slots(tmp_path):
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_22_portrait",
+        width=36,
+        height=50.88,
+        visual_density="rich",
+    )
+    state["output_dir"] = str(tmp_path / "output_portrait_slots")
+
+    result = TemplateCapacityPlanner()(state)
+
+    policy = result["fast_visual_policy"]
+    assert "slot_3" in policy["figure_slots"]
+    assert "slot_2" not in policy["figure_slots"]
+    assert policy["figure_count"] == len(policy["figure_slots"])
+    rejected = policy["rejected_visual_slots"]["figure"]
+    assert any(item["slot_id"] == "slot_2" and "width" in item["failed"] for item in rejected)
+    rejected_slot_ids = {
+        item["slot_id"]
+        for items in policy["rejected_visual_slots"].values()
+        for item in items
+    }
+    assert rejected_slot_ids <= set(result["fast_block_contract"]["by_slot"])
+    slot_2_contract = result["fast_block_contract"]["by_slot"]["slot_2"]
+    assert slot_2_contract["visual_policy"] == "text_summary"
+    assert 350 <= slot_2_contract["target_chars"] <= 450
+    assert slot_2_contract["capacity_warning"] == "visual_slot_too_narrow_text_fallback"
+
+
+def test_template_capacity_planner_uses_conservative_portrait_text_capacity():
+    planner = TemplateCapacityPlanner()
+    landscape = planner._estimate_capacity({"w": 12.41, "h": 11.6256, "poster_orientation": "landscape"}, "text_summary")
+    portrait = planner._estimate_capacity({"w": 12.41, "h": 11.6256, "poster_orientation": "portrait"}, "text_summary")
+
+    assert portrait["target_chars"] < landscape["target_chars"]
+    assert portrait["target_chars"] == 424
+
+
 def test_standard_template_preselector_auto_selects_dense_landscape_template(tmp_path):
     state = create_state(str(tmp_path / "paper.pdf"), layout_template="auto", width=54, height=36)
     state["output_dir"] = str(tmp_path / "output")
@@ -3890,6 +3929,124 @@ def test_micro_layout_refiner_enlarges_visual_to_footprint_contract():
     visual = next(element for element in elements if element.get("type") == "visual")
     assert visual["width"] >= 10.5
     assert visual["visual_footprint"]["ok"] is True
+
+
+def test_micro_layout_refiner_uses_portrait_split_for_wide_shallow_figure_block():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_8_portrait", width=36, height=50.88)
+    state["template_fast_mode"] = True
+    state["visual_assets"] = {"figure_1": {"asset_type": "figure", "aspect": 2.52}}
+    lane = {"id": "slot_2", "x": 1.0, "y": 15.32, "w": 34.0, "h": 5.68}
+    group = {
+        "section_id": "sec_core_hags",
+        "container": {
+            "type": "section_container",
+            "section_id": "sec_core_hags",
+            "lane_id": "slot_2",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": lane["h"],
+            "importance_level": 1,
+        },
+        "children": [
+            {
+                "type": "title_accent_block",
+                "section_id": "sec_core_hags",
+                "lane_id": "slot_2",
+                "x": lane["x"],
+                "y": lane["y"],
+                "width": lane["w"],
+                "height": 0.78,
+            },
+            {
+                "type": "section_title",
+                "section_id": "sec_core_hags",
+                "lane_id": "slot_2",
+                "x": lane["x"] + 0.28,
+                "y": lane["y"] + 0.04,
+                "width": lane["w"] - 0.56,
+                "height": 0.7,
+                "font_size": 48,
+            },
+            {
+                "type": "visual",
+                "id": "sec_core_hags_figure_1",
+                "visual_id": "figure_1",
+                "section_id": "sec_core_hags",
+                "lane_id": "slot_2",
+                "x": lane["x"] + 12.75,
+                "y": lane["y"] + 1.1,
+                "width": 8.5,
+                "height": 3.37,
+            },
+            {
+                "type": "text",
+                "id": "sec_core_hags_text",
+                "section_id": "sec_core_hags",
+                "lane_id": "slot_2",
+                "x": lane["x"] + 0.24,
+                "y": lane["y"] + 4.7,
+                "width": lane["w"] - 0.48,
+                "height": 0.8,
+                "font_size": 44,
+                "content": "AGS updates beliefs online as new eviction labels are discovered.",
+            },
+        ],
+    }
+    params = {
+        "section_gap": 0.5,
+        "title_to_content_gap": 0.25,
+        "visual_gap": 0.18,
+        "text_padding": 0.24,
+        "body_font_reduction": 0,
+        "title_font_reduction": 0,
+        "body_font_boost": 0,
+        "title_font_boost": 0,
+        "visual_scale": 0.95,
+    }
+
+    elements, _ = refiner._layout_section(
+        group,
+        lane,
+        lane["y"],
+        state,
+        params,
+        {"template_name": "cluster_8_portrait", "orientation": "portrait"},
+    )
+
+    visual = next(element for element in elements if element.get("type") == "visual")
+    text = next(element for element in elements if element.get("type") == "text")
+    assert visual["portrait_split_layout"] == "image_left_text_right"
+    assert visual["width"] > 10.5
+    assert visual["height"] > 4.0
+    assert text["x"] > visual["x"] + visual["width"]
+    assert visual["visual_footprint"]["ok"] is True
+
+
+def test_micro_layout_refiner_uses_conservative_portrait_text_measurement():
+    refiner = MicroLayoutRefiner()
+    text = (
+        "AGS uses prediction-and-search decomposition to select parcel queries under budget.\n"
+        "The policy adapts online as new labels are discovered and balances exploration with exploitation."
+    )
+
+    landscape_height = refiner._estimate_text_height_fast(
+        text,
+        width_inches=12.0,
+        font_size=44,
+        line_spacing=1.0,
+        template_layout={"template_name": "cluster_104_landscape", "orientation": "landscape"},
+    )
+    portrait_height = refiner._estimate_text_height_fast(
+        text,
+        width_inches=12.0,
+        font_size=44,
+        line_spacing=1.0,
+        template_layout={"template_name": "cluster_22_portrait", "orientation": "portrait"},
+    )
+
+    assert portrait_height > landscape_height
 
 
 def test_micro_layout_force_fit_preserves_visual_footprint_contract():

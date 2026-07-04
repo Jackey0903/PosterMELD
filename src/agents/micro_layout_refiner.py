@@ -742,40 +742,46 @@ class MicroLayoutRefiner:
             visual_elements = []
             text_elements = []
         else:
-            visual_available_width = self._get_visual_width_for_lane(lane, state, template_layout, params)
-            for visual in visual_elements:
-                lane_for_footprint = dict(lane)
-                lane_for_footprint.setdefault(
-                    "poster_orientation",
-                    template_layout.get("orientation")
-                    or (
-                        "portrait"
-                        if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0)
-                        else "landscape"
-                    ),
-                )
-                aspect_ratio = visual.get("width", 1.0) / max(visual.get("height", 0.01), 0.01)
-                scaled_width = min(visual_available_width, visual.get("width", visual_available_width) * params["visual_scale"])
-                scaled_height = scaled_width / max(aspect_ratio, 0.01)
-                scaled_width, scaled_height, footprint_report = enforce_visual_footprint(
-                    visual.get("visual_id") or visual.get("id"),
-                    scaled_width,
-                    scaled_height,
-                    visual_available_width,
-                    lane_for_footprint,
-                    state,
-                    self.config,
-                )
+            split_tail = self._layout_portrait_split_visual_text(
+                visual_elements,
+                text_elements,
+                lane,
+                current_y,
+                state,
+                params,
+                template_layout,
+            )
+            if split_tail:
+                tail_elements, current_y, content_bottom = split_tail
+                rebuilt_children.extend(tail_elements)
+                visual_elements = []
+                text_elements = []
+            else:
+                visual_available_width = self._get_visual_width_for_lane(lane, state, template_layout, params)
+                for visual in visual_elements:
+                    lane_for_footprint = self._lane_with_poster_orientation(lane, state, template_layout)
+                    aspect_ratio = visual.get("width", 1.0) / max(visual.get("height", 0.01), 0.01)
+                    scaled_width = min(visual_available_width, visual.get("width", visual_available_width) * params["visual_scale"])
+                    scaled_height = scaled_width / max(aspect_ratio, 0.01)
+                    scaled_width, scaled_height, footprint_report = enforce_visual_footprint(
+                        visual.get("visual_id") or visual.get("id"),
+                        scaled_width,
+                        scaled_height,
+                        visual_available_width,
+                        lane_for_footprint,
+                        state,
+                        self.config,
+                    )
 
-                visual["width"] = scaled_width
-                visual["height"] = scaled_height
-                visual["x"] = lane["x"] + (lane["w"] - scaled_width) / 2
-                visual["y"] = current_y
-                visual["visual_footprint"] = footprint_report
+                    visual["width"] = scaled_width
+                    visual["height"] = scaled_height
+                    visual["x"] = lane["x"] + (lane["w"] - scaled_width) / 2
+                    visual["y"] = current_y
+                    visual["visual_footprint"] = footprint_report
 
-                rebuilt_children.append(visual)
-                current_y = visual["y"] + visual["height"] + params["visual_gap"]
-                content_bottom = max(content_bottom, visual["y"] + visual["height"])
+                    rebuilt_children.append(visual)
+                    current_y = visual["y"] + visual["height"] + params["visual_gap"]
+                    content_bottom = max(content_bottom, visual["y"] + visual["height"])
 
         for text_element in text_elements:
             original_font_size = int(text_element.get("font_size", self.typography_config["sizes"]["body_text"]))
@@ -823,6 +829,193 @@ class MicroLayoutRefiner:
         )
 
         return [container] + rebuilt_children, container["y"] + container["height"]
+
+    def _layout_portrait_split_visual_text(
+        self,
+        visual_elements: List[Dict[str, Any]],
+        text_elements: List[Dict[str, Any]],
+        lane: Dict[str, Any],
+        current_y: float,
+        state: PosterState,
+        params: Dict[str, Any],
+        template_layout: Dict[str, Any],
+    ) -> Optional[tuple[List[Dict[str, Any]], float, float]]:
+        if not self._should_use_portrait_split_layout(visual_elements, text_elements, lane, state, template_layout):
+            return None
+
+        cfg = visual_footprint_config(self.config)
+        padding = max(float(params.get("text_padding", 0.24)), 0.18)
+        gap = float(cfg.get("portrait_split_gap_inches", 0.45) or 0.45)
+        bottom_padding = float(cfg.get("portrait_split_bottom_padding_inches", 0.10) or 0.10)
+        lane_bottom = float(lane["y"]) + float(lane["h"])
+        available_height = max(lane_bottom - current_y - bottom_padding, 0.0)
+        if available_height < float(cfg.get("portrait_split_min_height_inches", 4.8) or 4.8):
+            return None
+
+        usable_width = max(float(lane["w"]) - 2 * padding, 0.1)
+        max_visual_width = min(
+            usable_width * float(cfg.get("portrait_split_visual_width_fraction", 0.48) or 0.48),
+            usable_width - gap - float(cfg.get("portrait_split_min_text_width_inches", 8.0) or 8.0),
+        )
+        if max_visual_width <= 0:
+            return None
+
+        visual = deepcopy(visual_elements[0])
+        aspect_ratio = max(float(visual.get("width", 1.0)) / max(float(visual.get("height", 0.01)), 0.01), 0.2)
+        target_width = min(max_visual_width, available_height * aspect_ratio)
+        target_height = target_width / aspect_ratio
+        lane_for_footprint = self._lane_with_poster_orientation(lane, state, template_layout)
+        scaled_width, scaled_height, footprint_report = enforce_visual_footprint(
+            visual.get("visual_id") or visual.get("id"),
+            target_width,
+            target_height,
+            max_visual_width,
+            lane_for_footprint,
+            state,
+            self.config,
+        )
+        if not footprint_report.get("ok"):
+            return None
+
+        text_width = usable_width - scaled_width - gap
+        if text_width < float(cfg.get("portrait_split_min_text_width_inches", 8.0) or 8.0):
+            return None
+
+        laid_out_text = self._measure_split_text_elements(
+            text_elements,
+            text_width,
+            available_height,
+            params,
+            template_layout,
+        )
+        if laid_out_text is None:
+            return None
+
+        measured_text, total_text_height = laid_out_text
+        visual_on_left = self._split_visual_on_left(visual, lane)
+        content_left = float(lane["x"]) + padding
+        if visual_on_left:
+            visual_x = content_left
+            text_x = visual_x + scaled_width + gap
+        else:
+            text_x = content_left
+            visual_x = text_x + text_width + gap
+
+        visual["x"] = visual_x
+        visual["y"] = current_y + max((available_height - scaled_height) / 2, 0.0)
+        visual["width"] = scaled_width
+        visual["height"] = scaled_height
+        visual["visual_footprint"] = footprint_report
+        visual["portrait_split_layout"] = "image_left_text_right" if visual_on_left else "text_left_image_right"
+
+        y = current_y + max((available_height - total_text_height) / 2, 0.0)
+        tail: List[Dict[str, Any]] = [visual]
+        content_bottom = visual["y"] + visual["height"]
+        for text_element, text_height, font_size in measured_text:
+            item = deepcopy(text_element)
+            item["x"] = text_x
+            item["y"] = y
+            item["width"] = text_width
+            item["height"] = text_height
+            item["font_size"] = font_size
+            item["portrait_split_layout"] = visual["portrait_split_layout"]
+            tail.append(item)
+            y += text_height
+            content_bottom = max(content_bottom, item["y"] + item["height"])
+
+        current_y = max(content_bottom, lane_bottom - bottom_padding)
+        return tail, current_y, max(content_bottom, current_y)
+
+    def _should_use_portrait_split_layout(
+        self,
+        visual_elements: List[Dict[str, Any]],
+        text_elements: List[Dict[str, Any]],
+        lane: Dict[str, Any],
+        state: PosterState,
+        template_layout: Dict[str, Any],
+    ) -> bool:
+        if not visual_elements or not text_elements or len(visual_elements) != 1:
+            return False
+        if self._poster_orientation(state, template_layout) != "portrait":
+            return False
+        visual_id = str(visual_elements[0].get("visual_id") or visual_elements[0].get("id") or "")
+        if visual_id.startswith("table_"):
+            return False
+
+        cfg = visual_footprint_config(self.config)
+        width = float(lane.get("w", 0.0) or 0.0)
+        height = float(lane.get("h", 0.0) or 0.0)
+        if width < float(cfg.get("portrait_split_min_width_inches", 18.0) or 18.0):
+            return False
+        if height < float(cfg.get("portrait_split_min_height_inches", 4.8) or 4.8):
+            return False
+        return width / max(height, 0.01) >= float(cfg.get("portrait_split_min_aspect", 2.35) or 2.35)
+
+    def _measure_split_text_elements(
+        self,
+        text_elements: List[Dict[str, Any]],
+        text_width: float,
+        available_height: float,
+        params: Dict[str, Any],
+        template_layout: Dict[str, Any],
+    ) -> Optional[tuple[List[tuple[Dict[str, Any], float, int]], float]]:
+        base_size = int(text_elements[0].get("font_size", self.typography_config["sizes"]["body_text"]))
+        preferred = max(
+            self._min_body_font_size(template_layout),
+            base_size - int(params.get("body_font_reduction", 0)) + int(params.get("body_font_boost", 0)),
+        )
+        min_size = self._min_body_font_size(template_layout)
+
+        for font_size in range(preferred, min_size - 1, -2):
+            measured: List[tuple[Dict[str, Any], float, int]] = []
+            total_height = 0.0
+            for text_element in text_elements:
+                plain_text = self._strip_markup_for_measurement(text_element.get("content", ""))
+                result = self._measure_text_height_for_refinement(
+                    text_content=plain_text,
+                    width_inches=text_width,
+                    font_name=text_element.get("font_family", self.typography_config["fonts"]["body_text"]),
+                    font_size=font_size,
+                    line_spacing=text_element.get("line_spacing", 1.0),
+                    template_layout=template_layout,
+                )
+                text_height = (
+                    result["optimal_height"] * self.refine_config.get("text_height_safety_factor", 1.0)
+                    + self.refine_config.get("text_height_safety_padding", 0.05)
+                )
+                measured.append((text_element, text_height, font_size))
+                total_height += text_height
+            if total_height <= available_height + 0.05:
+                return measured, total_height
+
+        return None
+
+    def _split_visual_on_left(self, visual: Dict[str, Any], lane: Dict[str, Any]) -> bool:
+        visual_center = float(visual.get("x", lane.get("x", 0.0))) + float(visual.get("width", 0.0)) / 2
+        lane_center = float(lane.get("x", 0.0)) + float(lane.get("w", 0.0)) / 2
+        if abs(visual_center - lane_center) < 0.2:
+            return True
+        return visual_center <= lane_center
+
+    def _lane_with_poster_orientation(
+        self,
+        lane: Dict[str, Any],
+        state: PosterState,
+        template_layout: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        lane_for_footprint = dict(lane)
+        lane_for_footprint.setdefault("poster_orientation", self._poster_orientation(state, template_layout))
+        return lane_for_footprint
+
+    def _poster_orientation(self, state: PosterState, template_layout: Dict[str, Any]) -> str:
+        orientation = str(template_layout.get("orientation") or "").lower()
+        if orientation:
+            return orientation
+        return (
+            "portrait"
+            if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0)
+            else "landscape"
+        )
 
     def _layout_cluster_72_visual_priority_tail(
         self,
@@ -932,7 +1125,13 @@ class MicroLayoutRefiner:
     ) -> Dict[str, float]:
         if template_layout.get("extracted_template") or template_layout.get("orientation") == "portrait":
             return {
-                "optimal_height": self._estimate_text_height_fast(text_content, width_inches, font_size, line_spacing)
+                "optimal_height": self._estimate_text_height_fast(
+                    text_content,
+                    width_inches,
+                    font_size,
+                    line_spacing,
+                    template_layout,
+                )
             }
         return measure_text_height(
             text_content=text_content,
@@ -942,8 +1141,15 @@ class MicroLayoutRefiner:
             line_spacing=line_spacing,
         )
 
-    def _estimate_text_height_fast(self, text_content: str, width_inches: float, font_size: int, line_spacing: float) -> float:
-        chars_per_inch = float(self.refine_config.get("ppt_chars_per_inch_at_44pt", 4.2))
+    def _estimate_text_height_fast(
+        self,
+        text_content: str,
+        width_inches: float,
+        font_size: int,
+        line_spacing: float,
+        template_layout: Optional[Dict[str, Any]] = None,
+    ) -> float:
+        chars_per_inch = self._chars_per_inch_for_template(template_layout)
         chars_per_line = max(int(width_inches * chars_per_inch * (44 / max(font_size, 1))), 18)
         line_count = 0
         for raw_line in text_content.splitlines():
@@ -955,6 +1161,12 @@ class MicroLayoutRefiner:
             return 0.2
         line_height = (font_size / 72) * max(line_spacing, 0.9) * 1.15
         return line_count * line_height + max(line_count - 1, 0) * 0.04
+
+    def _chars_per_inch_for_template(self, template_layout: Optional[Dict[str, Any]] = None) -> float:
+        default = float(self.refine_config.get("ppt_chars_per_inch_at_44pt", 4.2))
+        if template_layout and str(template_layout.get("orientation") or "").lower() == "portrait":
+            return float(self.refine_config.get("portrait_ppt_chars_per_inch_at_44pt", default))
+        return default
 
     def _get_visual_width_for_lane(self, lane: Dict[str, Any], state: PosterState, template_layout: Dict[str, Any], params: Dict[str, Any]) -> float:
         visual_width = lane["w"] - 2 * params["text_padding"]

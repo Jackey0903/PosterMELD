@@ -788,16 +788,29 @@ visual_footprint:
   table_min_area_inches: 34.0
   table_min_slot_width_fraction: 0.60
   table_min_slot_height_fraction: 0.16
-  portrait_figure_min_width_inches: 8.5
+  portrait_figure_min_width_inches: 10.5
   portrait_figure_min_height_inches: 3.0
-  portrait_figure_min_area_inches: 25.0
-  portrait_figure_min_slot_width_fraction: 0.25
-  portrait_figure_min_slot_height_fraction: 0.08
+  portrait_figure_min_area_inches: 45.0
+  portrait_figure_min_slot_width_fraction: 0.32
+  portrait_figure_min_slot_height_fraction: 0.10
+  portrait_figure_min_slot_width_inches: 16.0
+  portrait_figure_min_slot_height_inches: 4.8
+  portrait_figure_min_slot_area_inches: 150.0
   portrait_table_min_width_inches: 10.5
   portrait_table_min_height_inches: 3.0
   portrait_table_min_area_inches: 30.0
   portrait_table_min_slot_width_fraction: 0.30
   portrait_table_min_slot_height_fraction: 0.08
+  portrait_table_min_slot_width_inches: 20.0
+  portrait_table_min_slot_height_inches: 5.0
+  portrait_table_min_slot_area_inches: 180.0
+  portrait_split_min_aspect: 2.35
+  portrait_split_min_width_inches: 18.0
+  portrait_split_min_height_inches: 4.0
+  portrait_split_visual_width_fraction: 0.48
+  portrait_split_gap_inches: 0.45
+  portrait_split_min_text_width_inches: 8.0
+  portrait_split_bottom_padding_inches: 0.10
   feasibility_max_slot_height_fraction: 0.95
   min_visual_scale_in_visual_blocks: 0.95
   key_visual_min_scale: 1.0
@@ -847,6 +860,7 @@ block_refinement:
   second_round_expand_scale: 0.75
   second_round_max_extra_chars: 260
   source_context_chars: 7000
+  portrait_ppt_chars_per_inch_at_44pt: 3.25
   temperature: 0.1
   max_tokens: 1800
   timeout_seconds: 120
@@ -906,6 +920,7 @@ micro_layout_refinement:
   title_font_boost_step: 1
   section_gap_expand_step: 0.12
   ppt_chars_per_inch_at_44pt: 4.2
+  portrait_ppt_chars_per_inch_at_44pt: 3.25
   text_height_safety_factor: 1.12
   text_height_safety_padding: 0.12
   container_bottom_padding: 0.08
