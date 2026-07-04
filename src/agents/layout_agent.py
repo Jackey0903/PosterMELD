@@ -713,7 +713,12 @@ class LayoutAgent:
             title = header_plan.get("title") or {}
             subtitle = header_plan.get("subtitle") or {}
             authors = header_plan.get("authors") or {}
-            title_text = normalize_title_for_poster(title.get("text", "")) or "Title"
+            title_source_text = str(title.get("display_text") or title.get("text") or "")
+            title_text = "\n".join(
+                normalize_title_for_poster(line) or line.strip()
+                for line in title_source_text.splitlines()
+                if line.strip()
+            ) or normalize_title_for_poster(title.get("text", "")) or "Title"
             subtitle_text = normalize_text_for_poster(subtitle.get("text", "")) if subtitle.get("text") else ""
             authors_text = normalize_text_for_poster(authors.get("text", "")) or "Authors"
             content_lines = [title_text]
@@ -728,12 +733,14 @@ class LayoutAgent:
                 "height": title_box["h"],
                 "content": "\n".join(content_lines),
                 "title_text": title_text,
+                "title_original_text": title.get("text", ""),
                 "subtitle_text": subtitle_text,
                 "authors_text": authors_text,
                 "alignment": title.get("alignment", "left"),
                 "font_family": title.get("font_family", self.title_font_family),
                 "font_size": title.get("font_size", 100),
                 "title_single_line": title.get("single_line", True),
+                "title_wrap_policy": title.get("wrap_policy", "single_line"),
                 "subtitle_font_size": subtitle.get("font_size", 54),
                 "subtitle_single_line": subtitle.get("single_line", True),
                 "subtitle_box_height": subtitle.get("box_height", 0.0),

@@ -185,6 +185,7 @@ class PosterState(TypedDict):
     section_title_numbering: Optional[str]
     header_route: Optional[str]
     header_subtitle_policy: Optional[str]
+    header_title_wrap_policy: Optional[str]
     header_seed: Optional[int]
     background_image_path: Optional[str]
     background_image_report: Optional[Dict[str, Any]]
@@ -241,6 +242,7 @@ def create_state(
     section_title_numbering: Optional[str] = None,
     header_route: Optional[str] = None,
     header_subtitle_policy: Optional[str] = None,
+    header_title_wrap_policy: Optional[str] = None,
     header_seed: Optional[int] = None,
     vlm_model: Optional[str] = None,
     conference_name: Optional[str] = None,
@@ -348,6 +350,7 @@ def create_state(
         section_title_numbering=section_title_numbering,
         header_route=header_route,
         header_subtitle_policy=header_subtitle_policy,
+        header_title_wrap_policy=header_title_wrap_policy,
         header_seed=header_seed,
         background_image_path=None,
         background_image_report=None,

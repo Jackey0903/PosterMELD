@@ -21,6 +21,7 @@ class HeaderPlanner:
 
     VALID_ROUTES = {"auto", "classic_left", "centered", "right_title", "split_logos"}
     VALID_SUBTITLE_POLICIES = {"auto", "off", "always"}
+    VALID_TITLE_WRAP_POLICIES = {"auto", "single_line", "two_line"}
 
     def __init__(self):
         self.name = "header_planner"
@@ -157,6 +158,9 @@ class HeaderPlanner:
             if logo.get("logo_path") and Path(str(logo["logo_path"])).exists()
         ]
         manual_logo = self._manual_affiliation_logo_entry(state)
+        if manual_logo and self.header_config.get("manual_affiliation_logo_overrides_auto", True):
+            max_logos = int(self.config.get("affiliation_logos", {}).get("max_logos", 4))
+            return [manual_logo][:max_logos]
         if manual_logo and not any(
             Path(str(logo["logo_path"])).resolve() == Path(str(manual_logo["logo_path"])).resolve()
             for logo in logos
@@ -220,7 +224,11 @@ class HeaderPlanner:
                 continue
             eligible.append(route)
 
-        if template_layout.get("orientation") == "portrait" and "split_logos" in eligible:
+        if (
+            template_layout.get("orientation") == "portrait"
+            and "split_logos" in eligible
+            and not self.header_config.get("portrait_allow_split_logos", True)
+        ):
             eligible.remove("split_logos")
         if not eligible:
             eligible = ["classic_left"]
@@ -341,12 +349,22 @@ class HeaderPlanner:
             affiliation_logo_scale=affiliation_logo_scale,
             conference_logo_scale=conference_logo_scale,
         )
-        title_font_size = self._fit_single_line_font_size(
-            title,
-            title_box["w"],
-            title_font_size,
-            template_layout,
-        )
+        title_wrap_policy = self._resolve_title_wrap_policy(state, template_layout, route, physical_route)
+        display_title = self._display_title_text(title, title_wrap_policy)
+        if title_wrap_policy == "single_line":
+            title_font_size = self._fit_single_line_font_size(
+                title,
+                title_box["w"],
+                title_font_size,
+                template_layout,
+            )
+        else:
+            title_font_size = self._fit_wrapped_title_font_size(
+                display_title,
+                title_box["w"],
+                title_font_size,
+                template_layout,
+            )
         if subtitle_text:
             subtitle_font_size = self._fit_single_line_font_size(
                 subtitle_text,
@@ -367,11 +385,13 @@ class HeaderPlanner:
             "title_box": title_box,
             "title": {
                 "text": title,
+                "display_text": display_title,
                 "alignment": alignment,
                 "font_size": title_font_size,
                 "font_family": self.config["typography"]["fonts"].get("title", "Georgia"),
                 "box_height": title_metrics["title_box_height"],
-                "single_line": bool(self.header_config.get("force_single_line_title", True)),
+                "single_line": title_wrap_policy == "single_line",
+                "wrap_policy": title_wrap_policy,
             },
             "subtitle": {
                 "text": subtitle_text,
@@ -420,6 +440,84 @@ class HeaderPlanner:
             )
         else:
             min_size = int(self.header_config.get(min_key, 50))
+        return max(min_size, min(int(desired_size), estimated_size))
+
+    def _resolve_title_wrap_policy(
+        self,
+        state: PosterState,
+        template_layout: Dict[str, Any],
+        route: str,
+        physical_route: str,
+    ) -> str:
+        requested = str(
+            state.get("header_title_wrap_policy")
+            or self.header_config.get("title_wrap_policy")
+            or "auto"
+        ).strip()
+        if requested not in self.VALID_TITLE_WRAP_POLICIES:
+            requested = "auto"
+        if requested == "single_line":
+            return "single_line"
+        if requested == "two_line":
+            return "two_line"
+        if (
+            template_layout.get("orientation") == "portrait"
+            and route == "split_logos"
+            and str(physical_route).startswith("portrait_split_logos")
+        ):
+            return "two_line"
+        return "single_line" if self.header_config.get("force_single_line_title", True) else "two_line"
+
+    def _display_title_text(self, title: str, wrap_policy: str) -> str:
+        clean_title = re.sub(r"\s+", " ", str(title or "")).strip()
+        if wrap_policy != "two_line" or not clean_title:
+            return clean_title
+        return "\n".join(self._split_title_two_lines(clean_title))
+
+    def _split_title_two_lines(self, title: str) -> List[str]:
+        words = title.split()
+        if len(words) <= 2:
+            return [title]
+        best_index = 1
+        best_score = float("inf")
+        strong_break_words = {"for", "with", "via", "using", "under", "through", "toward", "towards"}
+        for index in range(1, len(words)):
+            left = " ".join(words[:index])
+            right = " ".join(words[index:])
+            balance_score = abs(len(left) - len(right))
+            max_line_penalty = max(len(left), len(right)) * 0.08
+            break_bonus = -7 if words[index].lower() in strong_break_words else 0
+            score = balance_score + max_line_penalty + break_bonus
+            if score < best_score:
+                best_score = score
+                best_index = index
+        return [" ".join(words[:best_index]), " ".join(words[best_index:])]
+
+    def _fit_wrapped_title_font_size(
+        self,
+        display_title: str,
+        width_inches: float,
+        desired_size: int,
+        template_layout: Dict[str, Any],
+    ) -> int:
+        clean_lines = [
+            re.sub(r"\s+", " ", line).strip()
+            for line in str(display_title or "").splitlines()
+            if re.sub(r"\s+", " ", line).strip()
+        ]
+        if not clean_lines or width_inches <= 0:
+            return int(desired_size)
+        avg_char_width = float(self.header_config.get("wrapped_title_fit_avg_char_width_em", 0.48))
+        width_safety = float(self.header_config.get("title_fit_width_safety", 0.94))
+        usable_width = max(width_inches * width_safety, 0.1)
+        max_line_len = max(len(line) for line in clean_lines)
+        estimated_size = int((usable_width * 72) / max(max_line_len * avg_char_width, 1))
+        min_key = (
+            "portrait_wrapped_title_min_font_size"
+            if template_layout.get("orientation") == "portrait"
+            else "title_single_line_min_font_size"
+        )
+        min_size = int(self.header_config.get(min_key, 44))
         return max(min_size, min(int(desired_size), estimated_size))
 
     def _choose_checked_logo_plan(
@@ -617,6 +715,29 @@ class HeaderPlanner:
         title_h = max(h - 0.15, 0.8)
         if not has_logo:
             return {"x": x0, "y": y0, "w": w, "h": title_h}, {}, alignment, "portrait_full_title"
+
+        if route == "split_logos" and has_conf and aff_logos:
+            side_w = min(
+                max(
+                    w * float(self.header_config.get("portrait_split_logo_side_width_fraction", 0.15)),
+                    float(self.header_config.get("portrait_split_logo_min_side_width_inches", 3.2)),
+                ),
+                w * float(self.header_config.get("portrait_split_logo_max_side_width_fraction", 0.18)),
+            )
+            gap = float(self.header_config.get("portrait_split_title_logo_gap_inches", 0.34))
+            vertical_pad = min(max(h * 0.12, 0.16), 0.34)
+            logo_y = y0 + vertical_pad
+            logo_h = max(h - 2 * vertical_pad, 0.65)
+            left = {"x": x0, "y": logo_y, "w": side_w, "h": logo_h}
+            right = {"x": x0 + w - side_w, "y": logo_y, "w": side_w, "h": logo_h}
+            title_x = left["x"] + left["w"] + gap
+            title_w = max(right["x"] - title_x - gap, w * 0.48)
+            return (
+                {"x": title_x, "y": y0, "w": min(title_w, right["x"] - title_x - gap), "h": title_h},
+                {"aff": left, "conf": right},
+                "center",
+                "portrait_split_logos_title_center",
+            )
 
         gap = float(self.header_config.get("portrait_logo_title_gap_inches", 0.14))
         min_title_h = float(self.header_config.get("portrait_min_title_height_inches", 3.75))

@@ -63,11 +63,14 @@ header_planner:
   subtitle_font_scale: 0.58
   portrait_subtitle_font_scale: 0.72
   title_subtitle_gap_inches: 0.08
+  title_wrap_policy: "auto"
   force_single_line_title: true
   title_fit_avg_char_width_em: 0.56
+  wrapped_title_fit_avg_char_width_em: 0.48
   title_fit_width_safety: 0.94
   title_single_line_min_font_size: 34
   portrait_title_single_line_min_font_size: 32
+  portrait_wrapped_title_min_font_size: 44
   subtitle_single_line_min_font_size: 24
   single_line_title_gate_min_font_size: 42
   portrait_single_line_title_gate_min_font_size: 40
@@ -87,6 +90,12 @@ header_planner:
   portrait_logo_divider_gap_inches: 0.18
   portrait_max_logo_height: 2.55
   portrait_logo_strip_max_logo_fraction: 0.88
+  portrait_allow_split_logos: true
+  portrait_split_logo_side_width_fraction: 0.18
+  portrait_split_logo_max_side_width_fraction: 0.22
+  portrait_split_logo_min_side_width_inches: 4.0
+  portrait_split_title_logo_gap_inches: 0.34
+  manual_affiliation_logo_overrides_auto: true
   stable_random_by_default: false
 
 default_poster_style: "navy_serif"

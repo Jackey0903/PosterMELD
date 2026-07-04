@@ -824,12 +824,19 @@ def main():
         default_section_title_numbering = "off"
     header_route_choices = ["auto", "classic_left", "centered", "right_title", "split_logos"]
     header_subtitle_choices = ["auto", "off", "always"]
+    header_title_wrap_choices = ["auto", "single_line", "two_line"]
     default_header_route = os.getenv("PAPER2POSTER_HEADER_ROUTE", "auto")
     if default_header_route not in header_route_choices:
         default_header_route = "auto"
     default_header_subtitle = os.getenv("PAPER2POSTER_HEADER_SUBTITLE", "auto")
     if default_header_subtitle not in header_subtitle_choices:
         default_header_subtitle = "auto"
+    default_header_title_wrap = os.getenv(
+        "PAPER2POSTER_HEADER_TITLE_WRAP",
+        str((config.get("header_planner") or {}).get("title_wrap_policy", "auto")),
+    )
+    if default_header_title_wrap not in header_title_wrap_choices:
+        default_header_title_wrap = "auto"
     header_seed_env = os.getenv("PAPER2POSTER_HEADER_SEED")
     try:
         default_header_seed = int(header_seed_env) if header_seed_env else None
@@ -944,6 +951,12 @@ def main():
         choices=header_subtitle_choices,
         default=default_header_subtitle,
         help="Whether to add a short generated subtitle when the paper title is short enough.",
+    )
+    parser.add_argument(
+        "--header-title-wrap",
+        choices=header_title_wrap_choices,
+        default=default_header_title_wrap,
+        help="Title wrapping policy for the header: auto, single_line, or two_line.",
     )
     parser.add_argument(
         "--header-seed",
@@ -1068,6 +1081,7 @@ def main():
     print(f"🔢 Section Title Numbering: {args.section_title_numbering}")
     print(f"🧾 Header Route: {args.header_route}")
     print(f"🧾 Header Subtitle: {args.header_subtitle}")
+    print(f"🧾 Header Title Wrap: {args.header_title_wrap}")
     if args.header_seed is not None:
         print(f"🧾 Header Seed: {args.header_seed}")
     print(f"🖼️ Generated Teaser: {'enabled' if args.enable_generated_teaser else 'disabled'}")
@@ -1097,6 +1111,7 @@ def main():
             section_title_numbering=args.section_title_numbering,
             header_route=args.header_route,
             header_subtitle_policy=args.header_subtitle,
+            header_title_wrap_policy=args.header_title_wrap,
             header_seed=args.header_seed,
             vlm_model=args.vlm_model,
             conference_name=conference_name,

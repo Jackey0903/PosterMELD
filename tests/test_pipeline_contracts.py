@@ -1243,9 +1243,67 @@ def test_header_planner_maps_portrait_routes_to_logo_strip_full_title(tmp_path):
     assert estimated_title_width <= title_box["w"] * 0.95
     assert title_box["w"] == pytest.approx(header["w"])
     assert title_box["y"] > header["y"]
-    assert len(institution_logos) == 2
+    assert len(institution_logos) == 1
+    assert institution_logos[0]["source"] == "manual"
     assert plan["authors"]["font_size"] >= 38
     assert all(element["y"] + element["height"] <= title_box["y"] for element in non_divider_logos)
+    assert plan["validation"]["passed"]
+
+
+def test_header_planner_supports_portrait_split_logos_with_two_line_title(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    manual_aff_path = tmp_path / "affiliation.png"
+    auto_aff_path = tmp_path / "auto-affiliation.png"
+    Image.new("RGBA", (1200, 360), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (900, 900), (150, 20, 35, 255)).save(manual_aff_path)
+    Image.new("RGBA", (900, 240), (30, 110, 80, 255)).save(auto_aff_path)
+
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_22_portrait",
+        width=27,
+        height=54,
+        logo_path=str(conf_path),
+        aff_logo_path=str(manual_aff_path),
+        header_route="split_logos",
+        header_subtitle_policy="off",
+        header_title_wrap_policy="two_line",
+    )
+    state["affiliation_logos"] = [
+        {
+            "institution": "Auto Institution",
+            "logo_path": str(auto_aff_path),
+            "domain": None,
+            "source": "test",
+            "aspect": 3.75,
+        }
+    ]
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Active Geospatial Search for Efficient Tenant Eviction Outreach",
+            "authors": "A. Researcher, B. Scientist, and C. Collaborator",
+        }
+    }
+
+    result = HeaderPlanner()(state)
+    plan = result["header_plan"]
+    title_box = plan["title_box"]
+    institution_logos = [element for element in plan["logo_elements"] if element["type"] == "institution_logo"]
+    conference_logos = [element for element in plan["logo_elements"] if element["type"] == "conf_logo"]
+
+    assert plan["route"] == "split_logos"
+    assert plan["physical_route"] == "portrait_split_logos_title_center"
+    assert plan["title"]["alignment"] == "center"
+    assert plan["title"]["single_line"] is False
+    assert plan["title"]["wrap_policy"] == "two_line"
+    assert "\n" in plan["title"]["display_text"]
+    assert plan["title"]["font_size"] >= 44
+    assert len(institution_logos) == 1
+    assert institution_logos[0]["image_path"] == str(manual_aff_path)
+    assert institution_logos[0]["source"] == "manual"
+    assert len(conference_logos) == 1
+    assert institution_logos[0]["x"] + institution_logos[0]["width"] < title_box["x"]
+    assert title_box["x"] + title_box["w"] < conference_logos[0]["x"]
     assert plan["validation"]["passed"]
 
 

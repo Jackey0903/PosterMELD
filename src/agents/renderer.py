@@ -211,6 +211,8 @@ class Renderer:
         title_shadow = title_shadow_cfg if title_shadow_cfg.get("enabled", False) else None
         alignment = element.get("alignment", "left")
         title_single_line = bool(element.get("title_single_line", True))
+        title_wrap_policy = str(element.get("title_wrap_policy") or "single_line")
+        title_word_wrap = not (title_single_line or title_wrap_policy == "two_line")
         subtitle_single_line = bool(element.get("subtitle_single_line", True))
         if title_single_line:
             title_text = self._single_line_text(title_text)
@@ -277,7 +279,7 @@ class Renderer:
                 line_spacing=self.typography_config["line_spacing"],
                 alignment=alignment,
                 shadow=title_shadow,
-                word_wrap=not title_single_line,
+                word_wrap=title_word_wrap,
             )
             cursor_y += title_box_height
             if subtitle_text:
@@ -348,7 +350,7 @@ class Renderer:
                 line_spacing=self.typography_config["line_spacing"],
                 alignment=alignment,
                 shadow=title_shadow,
-                word_wrap=not title_single_line,
+                word_wrap=title_word_wrap,
             )
             self._add_title_textbox(
                 slide,
@@ -382,7 +384,7 @@ class Renderer:
             line_spacing=self.typography_config["line_spacing"],
             alignment=alignment,
             shadow=title_shadow,
-            word_wrap=not title_single_line,
+            word_wrap=title_word_wrap,
         )
 
     def _add_title_textbox(
