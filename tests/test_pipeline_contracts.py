@@ -1189,6 +1189,62 @@ def test_header_planner_centered_route_splits_affiliation_and_conference_logos(t
     assert plan["validation"]["passed"]
 
 
+def test_header_planner_maps_portrait_routes_to_logo_strip_full_title(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    manual_aff_path = tmp_path / "manual_affiliation.png"
+    auto_aff_paths = []
+    Image.new("RGBA", (900, 420), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (700, 700), (160, 40, 60, 255)).save(manual_aff_path)
+    for index in range(3):
+        path = tmp_path / f"auto_affiliation_{index}.png"
+        Image.new("RGBA", (900, 240), (40 + index * 30, 90, 150, 255)).save(path)
+        auto_aff_paths.append(path)
+
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_8_portrait",
+        width=27,
+        height=54,
+        logo_path=str(conf_path),
+        aff_logo_path=str(manual_aff_path),
+        header_route="right_title",
+        header_subtitle_policy="off",
+    )
+    state["affiliation_logos"] = [
+        {
+            "institution": f"Auto Institution {index}",
+            "logo_path": str(path),
+            "domain": None,
+            "source": "test",
+            "aspect": 3.75,
+        }
+        for index, path in enumerate(auto_aff_paths)
+    ]
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Active Geospatial Search for Efficient Tenant Eviction Outreach",
+            "authors": "A. Researcher, B. Scientist, and C. Collaborator",
+        }
+    }
+
+    result = HeaderPlanner()(state)
+    plan = result["header_plan"]
+    header = result["layout_template_metadata"]["header"]
+    title_box = plan["title_box"]
+    institution_logos = [element for element in plan["logo_elements"] if element["type"] == "institution_logo"]
+    non_divider_logos = [element for element in plan["logo_elements"] if element["type"] != "logo_divider"]
+
+    assert plan["route"] == "right_title"
+    assert plan["physical_route"] == "portrait_logo_strip_full_title"
+    assert plan["title"]["alignment"] == "right"
+    assert title_box["w"] == pytest.approx(header["w"])
+    assert title_box["y"] > header["y"]
+    assert len(institution_logos) == 2
+    assert plan["authors"]["font_size"] >= 38
+    assert all(element["y"] + element["height"] <= title_box["y"] for element in non_divider_logos)
+    assert plan["validation"]["passed"]
+
+
 def test_header_planner_boosts_affiliation_logo_when_safe(tmp_path):
     conf_path = tmp_path / "conference.png"
     aff_path = tmp_path / "affiliation.png"
@@ -4848,6 +4904,41 @@ def test_truncation_removes_dangling_connector_suffixes():
     assert normalize_text_for_poster("HAGS scales this process by splitting.").endswith("process.")
     assert normalize_text_for_poster("HAGS achieves the best target discovery across all budgets, typically.").endswith("budgets.")
     assert normalize_text_for_poster("choose a parcel inside that region..").endswith("region.")
+
+
+def test_template_block_planner_filters_reference_text_and_truncation_fragments():
+    planner = TemplateBlockPlanner()
+    state = create_state("/tmp/paper.pdf")
+    state["raw_text"] = """
+    Introduction
+    The method prioritizes outreach cases with high eviction risk across neighborhoods.
+    It updates regional scores after each field visit.
+
+    References
+    Desmond, M. 2016. Evicted: Poverty and Profit in the American City. Proceedings Press.
+    Smith, A. 2020. Unrelated citation in Journal of Housing.
+    """
+    section = {
+        "section_title": "Method",
+        "section_id": "method",
+        "content_role": "method",
+    }
+
+    source_sentences = planner._source_sentences_for_section(section, state)
+
+    assert source_sentences
+    assert all("Evicted" not in sentence for sentence in source_sentences)
+    assert planner._truncate_on_word_boundary(
+        "The planner tries to maximize discovery across neighborhoods using policy gradients.",
+        37,
+    ).endswith("maximize.")
+    assert planner._truncate_on_word_boundary(
+        "Risk targets for outreach are selected from high-priority geospatial regions.",
+        38,
+    ).endswith("outreach.")
+    assert planner._is_clean_poster_bullet("risk targets fo.") is False
+    assert planner._is_clean_poster_bullet("maximize dis.") is False
+    assert planner._is_clean_poster_bullet("large-area se.") is False
 
 
 def test_block_content_refiner_forces_min_budget_for_vlm_underfilled_keep(tmp_path):

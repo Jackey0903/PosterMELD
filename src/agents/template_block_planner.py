@@ -928,9 +928,11 @@ class TemplatePriorPlanner:
                 if remaining < 45:
                     break
                 candidate = self._truncate_on_word_boundary(candidate, remaining)
+            if not self._is_clean_poster_bullet(candidate):
+                continue
             result.append(candidate)
             used += len(candidate)
-        return result or bullets[:1]
+        return result or ["Key takeaway."]
 
     def _expand_bullets_from_source(
         self,
@@ -948,10 +950,12 @@ class TemplatePriorPlanner:
             if self._bullet_chars(result) >= min_chars or len(result) >= max(target_bullets + 1, 2):
                 break
             candidate = normalize_text_for_poster(sentence)
-            if len(candidate) < 35:
+            if len(candidate) < 35 or not self._is_clean_poster_bullet(candidate):
                 continue
             if len(candidate) > 180:
                 candidate = self._truncate_on_word_boundary(candidate, 180)
+            if not self._is_clean_poster_bullet(candidate):
+                continue
             key = self._dedupe_key(candidate)
             if not key or key in existing:
                 continue
@@ -962,6 +966,8 @@ class TemplatePriorPlanner:
                 if remaining < 60:
                     break
                 candidate = self._truncate_on_word_boundary(candidate, remaining)
+            if not self._is_clean_poster_bullet(candidate):
+                continue
             result.append(candidate)
             existing.add(key)
         return result
@@ -974,6 +980,7 @@ class TemplatePriorPlanner:
                 str(state.get("raw_text") or ""),
             ]
         )
+        source_text = self._strip_reference_sections(source_text)
         sentences = self._split_sentences(source_text)
         if not sentences:
             return []
@@ -982,6 +989,9 @@ class TemplatePriorPlanner:
         )
         scored = []
         for sentence in sentences:
+            sentence = normalize_text_for_poster(sentence)
+            if not self._is_clean_poster_bullet(sentence):
+                continue
             overlap = len(query_terms & self._terms(sentence))
             if overlap or len(scored) < 16:
                 scored.append((overlap, len(sentence), sentence))
@@ -1035,6 +1045,8 @@ class TemplatePriorPlanner:
                 continue
             if len(text) > char_limit:
                 text = self._truncate_on_word_boundary(text, char_limit)
+            if not self._is_clean_poster_bullet(text):
+                continue
             trimmed.append(text)
             if len(trimmed) >= max_bullets:
                 break
@@ -1058,16 +1070,43 @@ class TemplatePriorPlanner:
             str(text or "").strip(),
             flags=re.IGNORECASE,
         )
-        return re.sub(r"\s+and\s+[A-Za-z][A-Za-z-]{0,10}$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+and\s+[A-Za-z][A-Za-z-]{0,10}$", "", text, flags=re.IGNORECASE).strip()
+        return re.sub(r"\s+(?:fo|dis|se|lo|ri|mo|res|vis|analys)$", "", text, flags=re.IGNORECASE).strip()
 
     def _clean_bullets(self, bullets: List[Any]) -> List[str]:
         cleaned = []
         for item in bullets or []:
             text = normalize_text_for_poster(str(item or "").strip())
             text = re.sub(r"^\s*[•\-]\s*", "", text).strip()
-            if text:
+            if text and self._is_clean_poster_bullet(text):
                 cleaned.append(text)
         return cleaned
+
+    def _strip_reference_sections(self, text: str) -> str:
+        if not text:
+            return ""
+        return re.split(
+            r"(?im)^\s*(references|bibliography|works\s+cited|literature\s+cited)\s*$",
+            text,
+            maxsplit=1,
+        )[0]
+
+    def _is_clean_poster_bullet(self, text: Any) -> bool:
+        text = str(text or "").strip()
+        if len(text) < 8:
+            return False
+        lowered = text.lower().strip(" .")
+        if lowered in {"references", "bibliography", "works cited"}:
+            return False
+        if re.search(r"\b(?:doi|isbn|arxiv)\s*[:/]", text, flags=re.IGNORECASE):
+            return False
+        if re.search(r"\b(?:proceedings|conference|journal|transactions|press)\b", text, flags=re.IGNORECASE) and re.search(r"\b(?:19|20)\d{2}[a-z]?\b", text):
+            return False
+        if len(re.findall(r"\b[A-Z][a-z]+,\s+[A-Z]\.", text)) >= 2 and re.search(r"\b(?:19|20)\d{2}[a-z]?\b", text):
+            return False
+        if re.search(r"\b(?:fo|dis|se|lo|ri|mo|res|vis|analys)\.$", text, flags=re.IGNORECASE):
+            return False
+        return True
 
     def _bullet_chars(self, bullets: List[Any]) -> int:
         return sum(len(str(item or "")) for item in bullets or [])

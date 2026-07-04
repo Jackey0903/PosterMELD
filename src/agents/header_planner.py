@@ -38,7 +38,7 @@ class HeaderPlanner:
 
             template_layout = self._resolve_template_layout(state)
             title, authors = self._title_and_authors(state)
-            aff_logos = self._collect_affiliation_logos(state)
+            aff_logos = self._collect_affiliation_logos(state, template_layout)
             has_conf = bool(state.get("logo_path") and Path(str(state["logo_path"])).exists())
 
             rng = self._rng(state, title)
@@ -150,7 +150,7 @@ class HeaderPlanner:
             normalize_text_for_poster(str(authors)) or "Authors",
         )
 
-    def _collect_affiliation_logos(self, state: PosterState) -> List[Dict[str, Any]]:
+    def _collect_affiliation_logos(self, state: PosterState, template_layout: Dict[str, Any]) -> List[Dict[str, Any]]:
         logos = [
             dict(logo)
             for logo in (state.get("affiliation_logos") or [])
@@ -163,6 +163,8 @@ class HeaderPlanner:
         ):
             logos.insert(0, manual_logo)
         max_logos = int(self.config.get("affiliation_logos", {}).get("max_logos", 4))
+        if template_layout.get("orientation") == "portrait":
+            max_logos = min(max_logos, int(self.header_config.get("portrait_max_affiliation_logos", 2)))
         return logos[:max_logos]
 
     def _manual_affiliation_logo_entry(self, state: PosterState) -> Optional[Dict[str, Any]]:
@@ -322,7 +324,13 @@ class HeaderPlanner:
     ) -> Dict[str, Any]:
         header = template_layout["header"]
         title_font_size, subtitle_font_size, author_font_size = self._font_sizes(template_layout, bool(subtitle_text))
-        title_box, logo_regions, alignment = self._route_boxes(template_layout, route, has_conf, aff_logos)
+        title_box, logo_regions, alignment, physical_route = self._route_boxes(
+            template_layout,
+            route,
+            has_conf,
+            aff_logos,
+            title=title,
+        )
         layout_mode = "split" if {"aff", "conf"}.issubset(set(logo_regions)) else "combined"
         logo_elements = self._logo_elements(
             state=state,
@@ -337,6 +345,7 @@ class HeaderPlanner:
         plan = {
             "selected_template": template_layout.get("template_name"),
             "route": route,
+            "physical_route": physical_route,
             "fallback": fallback,
             "logo_scale": max(affiliation_logo_scale, conference_logo_scale),
             "affiliation_logo_scale": affiliation_logo_scale,
@@ -413,13 +422,26 @@ class HeaderPlanner:
             self._logo_attempt_summary(boosted_plan, "boosted_affiliation_logo"),
         ]
         if boosted_plan["validation"]["passed"]:
+            base_area = self._logo_area(base_plan, "institution_logo")
+            boosted_area = self._logo_area(boosted_plan, "institution_logo")
+            area_ratio = boosted_area / base_area if base_area > 0 else 1.0
+            boosted_plan["effective_affiliation_logo_area_ratio"] = round(area_ratio, 3)
             boosted_plan["logo_resize_decision"] = "boosted_affiliation_logo"
+            if area_ratio < float(self.header_config.get("min_effective_logo_area_ratio", 1.08)):
+                boosted_plan["logo_resize_decision"] = "boosted_affiliation_logo_cell_limited"
             boosted_plan["logo_resize_attempts"] = attempts
             return boosted_plan
 
         base_plan["logo_resize_decision"] = "base_after_boost_rejected"
         base_plan["logo_resize_attempts"] = attempts
         return base_plan
+
+    def _logo_area(self, plan: Dict[str, Any], logo_type: str) -> float:
+        return sum(
+            float(element.get("width", 0.0) or 0.0) * float(element.get("height", 0.0) or 0.0)
+            for element in plan.get("logo_elements") or []
+            if element.get("type") == logo_type
+        )
 
     def _logo_attempt_summary(self, plan: Dict[str, Any], label: str) -> Dict[str, Any]:
         logo_boxes = []
@@ -454,7 +476,11 @@ class HeaderPlanner:
             author_size = int(self.header_config.get("landscape_author_font_size", 72))
         if has_subtitle:
             title_size = int(title_size * float(self.header_config.get("subtitle_title_scale", 0.94)))
-        subtitle_size = max(int(title_size * float(self.header_config.get("subtitle_font_scale", 0.58))), 24)
+        subtitle_scale_key = "portrait_subtitle_font_scale" if orientation == "portrait" else "subtitle_font_scale"
+        subtitle_size = max(
+            int(title_size * float(self.header_config.get(subtitle_scale_key, self.header_config.get("subtitle_font_scale", 0.58)))),
+            24,
+        )
         return title_size, subtitle_size, author_size
 
     def _route_boxes(
@@ -463,7 +489,9 @@ class HeaderPlanner:
         route: str,
         has_conf: bool,
         aff_logos: List[Dict[str, Any]],
-    ) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], str]:
+        *,
+        title: str = "",
+    ) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], str, str]:
         header = template_layout["header"]
         x0 = float(header["x"])
         y0 = float(header["y"])
@@ -474,8 +502,17 @@ class HeaderPlanner:
         title_h = max(h - 0.15, 0.8)
         has_logo = has_conf or bool(aff_logos)
 
+        if template_layout.get("orientation") == "portrait":
+            return self._portrait_route_boxes(
+                template_layout,
+                route,
+                has_conf,
+                aff_logos,
+                title=title,
+            )
+
         if not has_logo:
-            return {"x": x0, "y": y0, "w": w, "h": title_h}, {}, self._alignment_for_route(route)
+            return {"x": x0, "y": y0, "w": w, "h": title_h}, {}, self._alignment_for_route(route), route
 
         if route in {"centered", "split_logos"} and has_conf and aff_logos:
             side_w = min(max(w * 0.17, 2.8), w * 0.24)
@@ -485,7 +522,7 @@ class HeaderPlanner:
             right = {"x": x0 + w - side_w, "y": logo_y, "w": side_w, "h": logo_h}
             title_x = left["x"] + left["w"] + gap
             title_w = max(right["x"] - title_x - gap, w * 0.42)
-            return {"x": title_x, "y": y0, "w": title_w, "h": title_h}, {"aff": left, "conf": right}, "center"
+            return {"x": title_x, "y": y0, "w": title_w, "h": title_h}, {"aff": left, "conf": right}, "center", route
 
         explicit_logo = self._rightmost_logo_region(template_layout) if route != "right_title" else None
         reserve_frac = self._reserve_fraction(template_layout, has_conf, len(aff_logos))
@@ -499,16 +536,71 @@ class HeaderPlanner:
             logo_box = {"x": x0, "y": logo_y, "w": logo_w, "h": logo_h}
             title_x = logo_box["x"] + logo_box["w"] + gap
             title_w = max(x0 + w - title_x, w * 0.48)
-            return {"x": title_x, "y": y0, "w": min(title_w, x0 + w - title_x), "h": title_h}, {"combined": logo_box}, "right"
+            return {"x": title_x, "y": y0, "w": min(title_w, x0 + w - title_x), "h": title_h}, {"combined": logo_box}, "right", route
 
         if explicit_logo:
             logo_box = explicit_logo
             title_w = max(logo_box["x"] - x0 - gap, w * 0.45)
-            return {"x": x0, "y": y0, "w": min(title_w, w), "h": title_h}, {"combined": logo_box}, self._alignment_for_route(route)
+            return {"x": x0, "y": y0, "w": min(title_w, w), "h": title_h}, {"combined": logo_box}, self._alignment_for_route(route), route
 
         logo_box = {"x": x0 + w - logo_w, "y": logo_y, "w": logo_w, "h": logo_h}
         title_w = max(logo_box["x"] - x0 - gap, w * 0.50)
-        return {"x": x0, "y": y0, "w": min(title_w, max(logo_box["x"] - x0 - gap, 0.1)), "h": title_h}, {"combined": logo_box}, self._alignment_for_route(route)
+        return {"x": x0, "y": y0, "w": min(title_w, max(logo_box["x"] - x0 - gap, 0.1)), "h": title_h}, {"combined": logo_box}, self._alignment_for_route(route), route
+
+    def _portrait_route_boxes(
+        self,
+        template_layout: Dict[str, Any],
+        route: str,
+        has_conf: bool,
+        aff_logos: List[Dict[str, Any]],
+        *,
+        title: str = "",
+    ) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], str, str]:
+        """Map shared header route intent onto stable portrait geometry.
+
+        Portrait posters cannot afford the landscape side-logo routes for long
+        paper titles. The intent still controls title alignment, but logos move
+        into a compact strip so title/authors keep the full readable width.
+        """
+        header = template_layout["header"]
+        x0 = float(header["x"])
+        y0 = float(header["y"])
+        w = float(header["w"])
+        h = float(header["h"])
+        alignment = self._alignment_for_route(route)
+        has_logo = has_conf or bool(aff_logos)
+        title_h = max(h - 0.15, 0.8)
+        if not has_logo:
+            return {"x": x0, "y": y0, "w": w, "h": title_h}, {}, alignment, "portrait_full_title"
+
+        gap = float(self.header_config.get("portrait_logo_title_gap_inches", 0.14))
+        min_title_h = float(self.header_config.get("portrait_min_title_height_inches", 3.75))
+        desired_strip_h = max(
+            h * float(self.header_config.get("portrait_logo_strip_height_fraction", 0.30)),
+            float(self.header_config.get("portrait_logo_strip_min_height_inches", 1.25)),
+        )
+        max_strip_h = h * float(self.header_config.get("portrait_logo_strip_max_height_fraction", 0.40))
+        strip_h = min(desired_strip_h, max_strip_h)
+        if h - strip_h - gap < min_title_h:
+            strip_h = max(h - min_title_h - gap, float(self.header_config.get("portrait_logo_strip_min_height_inches", 1.25)))
+        strip_h = min(strip_h, max(h - gap - 0.8, 0.65))
+
+        vertical_pad = min(max(strip_h * 0.10, 0.08), 0.18)
+        logo_region = {
+            "x": x0,
+            "y": y0 + vertical_pad,
+            "w": w,
+            "h": max(strip_h - 2 * vertical_pad, 0.45),
+            "portrait_logo_strip": True,
+        }
+        title_y = y0 + strip_h + gap
+        title_box = {
+            "x": x0,
+            "y": title_y,
+            "w": w,
+            "h": max(y0 + h - title_y, 0.8),
+        }
+        return title_box, {"combined": logo_region}, alignment, "portrait_logo_strip_full_title"
 
     def _alignment_for_route(self, route: str) -> str:
         if route == "centered":
@@ -573,7 +665,11 @@ class HeaderPlanner:
 
     def _layout_conf_only(self, conf_path: str, region: Dict[str, float], scale: float) -> List[Dict[str, Any]]:
         aspect = self._get_image_aspect_ratio(conf_path)
-        max_frac = float(self.header_config.get("max_logo_header_fraction", 0.78))
+        max_frac = float(
+            self.header_config.get("portrait_logo_strip_max_logo_fraction", 0.88)
+            if region.get("portrait_logo_strip")
+            else self.header_config.get("max_logo_header_fraction", 0.78)
+        )
         logo_h = min(region["h"] * max_frac * scale, region["w"] / max(aspect, 0.1))
         logo_w = logo_h * aspect
         return [{
@@ -598,14 +694,24 @@ class HeaderPlanner:
         divider_w = float(conf_cfg.get("divider_width", 0.04))
         gap = float(conf_cfg.get("divider_gap", 0.22))
         conf_frac = float(conf_cfg.get("conf_zone_fraction", 0.48))
+        if region.get("portrait_logo_strip"):
+            gap = float(self.header_config.get("portrait_logo_divider_gap_inches", gap))
+            conf_frac = float(self.header_config.get("portrait_conf_zone_fraction", min(conf_frac, 0.34)))
         conf_zone_w = region["w"] * conf_frac
         aff_zone_w = max(region["w"] - conf_zone_w - divider_w - 2 * gap, 0.2)
-        aff_region = {"x": region["x"], "y": region["y"], "w": aff_zone_w, "h": region["h"]}
+        aff_region = {
+            "x": region["x"],
+            "y": region["y"],
+            "w": aff_zone_w,
+            "h": region["h"],
+            "portrait_logo_strip": bool(region.get("portrait_logo_strip")),
+        }
         conf_region = {
             "x": region["x"] + aff_zone_w + divider_w + 2 * gap,
             "y": region["y"],
             "w": conf_zone_w,
             "h": region["h"],
+            "portrait_logo_strip": bool(region.get("portrait_logo_strip")),
         }
         elements = self._layout_aff_grid(aff_logos, aff_region, aff_scale)
         elements.append({
@@ -644,9 +750,16 @@ class HeaderPlanner:
         gap = float(logo_cfg.get("logo_box_gap", 0.24))
         cell_w = max((region["w"] - (cols - 1) * gap) / cols, 0.2)
         cell_h = max((region["h"] - (rows - 1) * gap) / rows, 0.2)
+        configured_max_h = float(logo_cfg.get("max_logo_height", 1.55))
+        if region.get("portrait_logo_strip"):
+            configured_max_h = max(configured_max_h, float(self.header_config.get("portrait_max_logo_height", configured_max_h)))
         max_h = min(
-            float(logo_cfg.get("max_logo_height", 1.55)),
-            region["h"] * float(self.header_config.get("max_logo_header_fraction", 0.78)),
+            configured_max_h,
+            region["h"] * float(
+                self.header_config.get("portrait_logo_strip_max_logo_fraction", 0.88)
+                if region.get("portrait_logo_strip")
+                else self.header_config.get("max_logo_header_fraction", 0.78)
+            ),
         ) * scale
         cell_h = min(cell_h, max_h)
         grid_h = rows * cell_h + (rows - 1) * gap
