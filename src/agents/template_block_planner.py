@@ -1090,8 +1090,12 @@ class TemplatePriorPlanner:
         )
         text = re.sub(r"\s+and\s+[A-Za-z][A-Za-z-]{0,10}$", "", text, flags=re.IGNORECASE).strip()
         text = re.sub(r"\s+(?:while|where|when|because|although|whereas)\s+[A-Za-z]{1,12}$", "", text, flags=re.IGNORECASE).strip()
-        text = re.sub(r"\s+(?:and|or|for|with|under|to|by|of)\s+[A-Za-z-]*(?:cos|thousan)$", "", text, flags=re.IGNORECASE).strip()
-        return re.sub(r"\s+(?:fo|fou|ou|ar|cos|evic|prob|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan)$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+under\s+(?:tight|limited|strict)$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+with\s+(?:a|an|the)\s+[A-Za-z-]{0,16}$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+and\s+a\s+share$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+with\s+(?:either|any|the|a|an)\s+[A-Za-z-]*(?:unif|uniform|vi)$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+(?:and|or|for|with|under|to|by|of|over|via)\s+[A-Za-z-]*(?:cos|thousan|princ|approxima|substant|tight|co|wit|mul|stronges|unif|vi)$", "", text, flags=re.IGNORECASE).strip()
+        return re.sub(r"\s+(?:fo|fou|ou|ar|cos|evic|prob|unif|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan|princ|approxima|substant|tight|co|wit|mul|stronges|vi)$", "", text, flags=re.IGNORECASE).strip()
 
     def _clean_bullets(self, bullets: List[Any]) -> List[str]:
         cleaned = []
@@ -1124,7 +1128,7 @@ class TemplatePriorPlanner:
             return False
         if len(re.findall(r"\b[A-Z][a-z]+,\s+[A-Z]\.", text)) >= 2 and re.search(r"\b(?:19|20)\d{2}[a-z]?\b", text):
             return False
-        if re.search(r"\b(?:fo|fou|ou|ar|cos|evic|prob|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan)\.$", text, flags=re.IGNORECASE):
+        if re.search(r"\b(?:fo|fou|ou|ar|cos|evic|prob|unif|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan|princ|approxima|substant|tight|co|wit|mul|stronges|vi)\.$", text, flags=re.IGNORECASE):
             return False
         return True
 

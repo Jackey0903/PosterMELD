@@ -145,6 +145,7 @@ class BlockContentRefiner:
         allow_text_fill_repair = bool(fast_config.get("allow_text_fill_repair", True))
         fast_text_fill_cap = int(fast_config.get("fast_text_fill_max_extra_chars", 280))
         protected_teaser_sections = self._protected_teaser_sections(state)
+        teaser_max_extra_chars = int(self.block_config.get("teaser_max_extra_chars", 90))
 
         actions = []
         for block in occupancy.get("blocks", []):
@@ -152,14 +153,18 @@ class BlockContentRefiner:
             section_id = str(block.get("section_id") or "")
             if not slot_id or not section_id:
                 continue
-            if section_id in protected_teaser_sections:
+            target_extra_chars = int(block.get("target_extra_chars") or 0)
+            teaser_protected = section_id in protected_teaser_sections
+            if teaser_protected and not (
+                block.get("action") == "expand"
+                and 0 < target_extra_chars <= teaser_max_extra_chars
+            ):
                 continue
 
             vlm = vlm_by_slot.get(slot_id, {})
             status = str(vlm.get("status") or "").lower()
             severity = str(vlm.get("severity") or "low").lower()
             utilization = float(block.get("utilization") or 0.0)
-            target_extra_chars = int(block.get("target_extra_chars") or 0)
             action = "keep"
             reason = block.get("reason", "")
 
@@ -173,6 +178,7 @@ class BlockContentRefiner:
                 and severity in {"medium", "high"}
                 and utilization < acceptable_min
             )
+            geometry_expand_requested = block.get("action") == "expand" and target_extra_chars > 0
             visual_too_small = (
                 status == "visual_too_small"
                 and severity in {"medium", "high"}
@@ -190,12 +196,16 @@ class BlockContentRefiner:
             elif visual_too_small:
                 action = "reduce"
                 reason = "compress text to prioritize visual scale for unreadable figure/table labels"
-            elif block.get("action") == "reduce" or vlm_crowded or utilization > hard_max:
+            elif (
+                block.get("action") == "reduce"
+                or utilization > hard_max
+                or (vlm_crowded and not (geometry_expand_requested and severity != "high"))
+            ):
                 action = "reduce"
                 reason = vlm.get("description") or reason or "block is crowded or overflowing"
             elif (
                 (
-                    (block.get("action") == "expand" and target_extra_chars > 0)
+                    geometry_expand_requested
                     or vlm_underfilled
                 )
                 and status not in {"overflow", "visual_too_small"}
@@ -218,6 +228,8 @@ class BlockContentRefiner:
                     reason = "fast mode skips non-emergency underfill repair"
                 else:
                     target_extra_chars = min(max(target_extra_chars, int(self.block_config.get("min_extra_chars", 40))), fast_text_fill_cap)
+            if teaser_protected and action == "expand":
+                target_extra_chars = min(target_extra_chars, teaser_max_extra_chars)
             if (
                 fast_mode
                 and action == "reduce"
@@ -238,7 +250,12 @@ class BlockContentRefiner:
 
             if action == "expand" and loop_index >= 1:
                 second_round_cap = int(self.block_config.get("second_round_max_extra_chars", 220))
-                if utilization < float(self.block_config.get("final_min_utilization", 0.88)):
+                if previous.get("last_action") != "expand":
+                    target_extra_chars = min(
+                        max(target_extra_chars, int(self.block_config.get("min_extra_chars", 40))),
+                        second_round_cap,
+                    )
+                elif utilization < float(self.block_config.get("final_min_utilization", 0.88)):
                     target_extra_chars = min(
                         max(target_extra_chars, int(self.block_config.get("vlm_underfilled_min_extra_chars", 120))),
                         second_round_cap,
@@ -282,6 +299,10 @@ class BlockContentRefiner:
         safety = float(self.block_config.get("expand_height_safety_inches", 0.14))
         remaining_height = max(available_height - used_height - safety, 0.0)
         safe_lines = int(remaining_height / line_height)
+        bottom_whitespace = float(block.get("bottom_whitespace") or 0.0)
+        if bottom_whitespace > 0:
+            near_line_tolerance = line_height * 0.04
+            safe_lines = max(safe_lines, int((bottom_whitespace + near_line_tolerance) / line_height))
         return max(safe_lines, 0) * chars_per_line
 
     def _protected_teaser_sections(self, state: PosterState) -> set[str]:
@@ -684,8 +705,12 @@ Blocks:
             text,
             flags=re.IGNORECASE,
         ).strip()
-        text = re.sub(r"\s+(?:and|or|for|with|under|to|by|of)\s+[A-Za-z-]*(?:cos|thousan)$", "", text, flags=re.IGNORECASE).strip()
-        text = re.sub(r"\s+(?:[A-Za-z]|fo|fou|ou|ar|cos|evic|prob|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan)$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+under\s+(?:tight|limited|strict)$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+with\s+(?:a|an|the)\s+[A-Za-z-]{0,16}$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+and\s+a\s+share$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+with\s+(?:either|any|the|a|an)\s+[A-Za-z-]*(?:unif|uniform|vi)$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+(?:and|or|for|with|under|to|by|of|over|via)\s+[A-Za-z-]*(?:cos|thousan|princ|approxima|substant|tight|co|wit|mul|stronges|unif|vi)$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+(?:[A-Za-z]|fo|fou|ou|ar|cos|evic|prob|unif|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan|princ|approxima|substant|tight|co|wit|mul|stronges|vi)$", "", text, flags=re.IGNORECASE).strip()
         return text
 
     def _max_new_bullets(self, target_extra_chars: int) -> int:

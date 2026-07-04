@@ -57,15 +57,43 @@ class Parser:
             raw_text, raw_result = self._extract_raw_text(state["pdf_path"], content_dir)
 
             figures, tables = self._extract_assets(raw_result, state["poster_name"], assets_dir)
+            cached_narrative = self._load_cached_content(content_dir, "narrative_content.json")
+            cached_classified_visuals = self._load_cached_content(content_dir, "classified_visuals.json")
+            cached_structured_sections = self._load_cached_content(content_dir, "structured_sections.json")
             
-            title, authors = self._extract_title_authors(raw_text, state["text_model"], state)
+            cached_title_authors = self._title_authors_from_cached_narrative(cached_narrative)
+            try:
+                title, authors = self._extract_title_authors(raw_text, state["text_model"], state)
+                if self._is_missing_title_authors(title, authors) and cached_title_authors:
+                    title, authors = cached_title_authors
+                    log_agent_warning(self.name, "using cached title/authors after incomplete model extraction")
+            except Exception as exc:
+                if cached_title_authors:
+                    title, authors = cached_title_authors
+                    log_agent_warning(self.name, f"using cached title/authors after model failure: {exc}")
+                else:
+                    raise
             affiliations = self._extract_affiliations(raw_text)
             doi = self._extract_doi(raw_text)
 
-            narrative_content, inp_tok, out_tok = self._generate_narrative_content(raw_text, state["text_model"], state)
+            try:
+                narrative_content, inp_tok, out_tok = self._generate_narrative_content(raw_text, state["text_model"], state)
+            except Exception as exc:
+                if self._validate_narrative_content(cached_narrative):
+                    log_agent_warning(self.name, f"using cached narrative content after model failure: {exc}")
+                    narrative_content, inp_tok, out_tok = cached_narrative, 0, 0
+                else:
+                    raise
             state["tokens"].add_text(inp_tok, out_tok)
 
-            classified_visuals, inp_tok2, out_tok2 = self._classify_visual_assets(figures, tables, raw_text, state["text_model"], state)
+            try:
+                classified_visuals, inp_tok2, out_tok2 = self._classify_visual_assets(figures, tables, raw_text, state["text_model"], state)
+            except Exception as exc:
+                if self._validate_classified_visuals(cached_classified_visuals):
+                    log_agent_warning(self.name, f"using cached visual classification after model failure: {exc}")
+                    classified_visuals, inp_tok2, out_tok2 = cached_classified_visuals, 0, 0
+                else:
+                    raise
             state["tokens"].add_text(inp_tok2, out_tok2)
 
             narrative_content["meta"] = {
@@ -74,7 +102,14 @@ class Parser:
                 "affiliations": affiliations,
             }
 
-            structured_sections = self._extract_structured_sections(raw_text, state["text_model"], state)
+            try:
+                structured_sections = self._extract_structured_sections(raw_text, state["text_model"], state)
+            except Exception as exc:
+                if self._validate_structured_sections(cached_structured_sections):
+                    log_agent_warning(self.name, f"using cached structured sections after model failure: {exc}")
+                    structured_sections = cached_structured_sections
+                else:
+                    raise
             
             # save artifacts and update state
             self._save_content(narrative_content, "narrative_content.json", content_dir)
@@ -106,6 +141,47 @@ class Parser:
             state["errors"].append(str(e))
         
         return state
+
+    def _load_cached_content(self, content_dir: Path, filename: str) -> Dict[str, Any]:
+        path = content_dir / filename
+        if not path.exists():
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = json.load(f)
+            return content if isinstance(content, dict) else {}
+        except Exception as exc:
+            log_agent_warning(self.name, f"ignored unreadable cached {filename}: {exc}")
+            return {}
+
+    def _validate_narrative_content(self, narrative: Dict[str, Any]) -> bool:
+        return isinstance(narrative, dict) and all(key in narrative for key in ("and", "but", "therefore"))
+
+    def _validate_classified_visuals(self, classified_visuals: Dict[str, Any]) -> bool:
+        if not isinstance(classified_visuals, dict):
+            return False
+        expected_keys = {
+            "key_visual",
+            "problem_illustration",
+            "method_workflow",
+            "main_results",
+            "comparative_results",
+            "supporting",
+        }
+        return any(key in classified_visuals for key in expected_keys)
+
+    def _is_missing_title_authors(self, title: str, authors: str) -> bool:
+        return not title or not authors or title == "Untitled" or authors == "Authors not found"
+
+    def _title_authors_from_cached_narrative(self, narrative: Dict[str, Any]) -> Tuple[str, str] | None:
+        meta = narrative.get("meta") if isinstance(narrative, dict) else None
+        if not isinstance(meta, dict):
+            return None
+        title = normalize_title_for_poster(str(meta.get("poster_title") or meta.get("title") or ""))
+        authors = normalize_text_for_poster(str(meta.get("authors") or ""))
+        if title and authors:
+            return title, authors
+        return None
     
     def _extract_raw_text(self, pdf_path: str, content_dir: Path) -> Tuple[str, Any]:
         log_agent_info(self.name, "converting pdf to raw text")
@@ -520,17 +596,7 @@ class Parser:
                 if attempt == 2:
                     raise ValueError("failed to extract structured sections after multiple attempts")
 
-        # fallback empty structure
-        return {
-            "paper_sections": [],
-            "paper_structure": {
-                "total_sections": 0,
-                "foundation_sections": 0,
-                "method_sections": 0,
-                "evaluation_sections": 0,
-                "conclusion_sections": 0
-            }
-        }
+        raise ValueError("failed to extract valid structured sections after multiple attempts")
     
     def _validate_structured_sections(self, structured_sections: Dict) -> bool:
         """validate structured sections format"""

@@ -580,6 +580,12 @@ class GeneratedTeaserAgent:
         output_dir.mkdir(parents=True, exist_ok=True)
         with open(output_dir / "generated_teaser_report.json", "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
+        if state.get("visual_assets") is not None:
+            with open(output_dir / "visual_assets.json", "w", encoding="utf-8") as f:
+                json.dump(state.get("visual_assets") or {}, f, indent=2)
+        if state.get("story_board") is not None:
+            with open(output_dir / "story_board.json", "w", encoding="utf-8") as f:
+                json.dump(state.get("story_board") or {}, f, indent=2)
 
 
 def generated_teaser_agent_node(state: PosterState) -> Dict[str, Any]:

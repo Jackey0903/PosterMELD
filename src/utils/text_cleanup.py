@@ -34,12 +34,13 @@ TITLE_SMALL_WORDS = {
 }
 
 DANGLING_TERMINAL_WORDS = (
-    "and|or|but|with|in|of|to|for|by|as|at|from|than|while|where|when|"
+    "and|or|but|with|in|of|to|for|by|as|at|from|than|while|where|when|despite|"
     "that|which|through|into|over|under|via|on|only|also|past|a|an|the|this|"
     "these|those|their|its|using|including|exploiting|selecting|relying|letting|local|stale|"
     "may|can|could|would|should|will|must|is|are|was|were|be|been|being|"
-    "typically|generally|often|roughly|approximately|consistently|significantly"
-    "|outperforming|improving|exceeding|achieving|injecting|creating|reducing"
+    "typically|generally|often|roughly|approximately|consistently|significantly|"
+    "limited|especially|particularly|notably|further"
+    "|outperforming|improving|exceeding|achieving|injecting|creating|reducing|enabling|enables|enabled"
 )
 
 
@@ -75,6 +76,10 @@ def normalize_text_for_poster(text: str) -> str:
     text = text.replace("\u00a0", " ")
     text = text.replace("–", "-")
     text = text.replace("—", "-")
+    text = text.replace("‐", "-")
+    text = text.replace("‑", "-")
+    text = text.replace("‒", "-")
+    text = text.replace("−", "-")
     text = text.replace("Î»", "lambda ")
     text = text.replace("î»", "lambda ")
 
@@ -101,7 +106,15 @@ def normalize_title_for_poster(title: str) -> str:
         return title
 
     text = repair_mojibake(title)
-    text = text.replace("\u00a0", " ").replace("–", "-").replace("—", "-")
+    text = (
+        text.replace("\u00a0", " ")
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("‐", "-")
+        .replace("‑", "-")
+        .replace("‒", "-")
+        .replace("−", "-")
+    )
     for wrong, right in COMMON_OCR_FIXES.items():
         text = re.sub(rf"\b{re.escape(wrong)}\b", right, text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -149,7 +162,23 @@ def _strip_poster_artifact_noise(line: str) -> str:
     line = re.sub(r"\b(?:fig(?:ure)?|table)\s*\d+[\.:]\s*[^.|;]*\.?", "", line, flags=re.IGNORECASE)
     if (
         re.search(r"\b(?:algorithm|appendix|supplement|supplementary)\b", line, flags=re.IGNORECASE)
-        and re.search(r"\b(?:detailed|complete|provided|presentation|details?|see|refer)\b", line, flags=re.IGNORECASE)
+        and re.search(r"\b(?:detailed|complete|provided|presentation|details?|see|refer|defer)\b", line, flags=re.IGNORECASE)
+    ):
+        return ""
+    if re.match(r"^\s*we\s+also\s+provide\s+results?\s+of\b", line, flags=re.IGNORECASE):
+        return ""
+    if re.match(
+        r"^\s*(?:next|then|finally|subsequently),?\s+we\s+"
+        r"(?:describe|present|discuss|report|evaluate|detail)\b",
+        line,
+        flags=re.IGNORECASE,
+    ):
+        return ""
+    if re.match(
+        r"^\s*(?:in\s+this\s+section|in\s+the\s+next\s+section|below),?\s+we\s+"
+        r"(?:describe|present|discuss|report|evaluate|detail)\b",
+        line,
+        flags=re.IGNORECASE,
     ):
         return ""
 
@@ -263,6 +292,10 @@ def repair_truncated_sentence_end(line: str) -> str:
     previous = None
     while previous != line:
         previous = line
+        if line.count("(") > line.count(")"):
+            open_paren = line.rfind("(")
+            if open_paren >= 0 and len(line) - open_paren <= 160:
+                line = line[:open_paren].rstrip(" ,;:") + "."
         line = re.sub(
             r"\s+(?:while|where|when|because|although|whereas)\s+[^.;:]{1,120}"
             r"\s+(?:may|can|could|would|should|will|must|is|are|was|were|be|been|being|with\s+[A-Z])\.$",
@@ -291,11 +324,18 @@ def repair_truncated_sentence_end(line: str) -> str:
         )
         line = re.sub(r"\s+and\s+(?:reducing|increasing|improving|decreasing)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+with\s+(?:especially|particularly|notably)\s+[A-Za-z-]{2,28}\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+despite\s+(?:limited|scarce|restricted)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+under\s+(?:tight|limited|strict)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+with\s+(?:a|an|the)\s+[A-Za-z-]{0,16}\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+and\s+a\s+share\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+to\s+large\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+with\s+(?:either|any|the|a|an)\s+[A-Za-z-]*(?:unif|uniform|vi)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+(?:by|with|under|to|for|and|over|via)\s+[A-Za-z-]*(?:princ|approxima|substant|tight|co|wit|mul|stronges|unif|vi)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+(?:and|or|for|with|under|to|by|of)\s+[A-Za-z-]*(?:cos|thousan)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+by\s+first\s+[A-Za-z-]+ing(?:\s+[A-Za-z-]+){0,2}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+by\s+[A-Za-z-]+ing\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+(?:with|using|via|by|for|to)\s+[A-Z]\.$", ".", line, flags=re.IGNORECASE)
-        line = re.sub(r"\s+(?:[A-Za-z]|fo|fou|ou|ar|cos|evic|prob|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+(?:[A-Za-z]|fo|fou|ou|ar|cos|evic|prob|unif|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan|princ|approxima|substant|tight|co|wit|mul|stronges|vi)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(rf"\s+({DANGLING_TERMINAL_WORDS})\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
             r"\s+and\s+(?:also|then|therefore|local|stale|limited|new|more|less|other)\.$",

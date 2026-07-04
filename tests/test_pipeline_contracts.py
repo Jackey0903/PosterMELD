@@ -131,6 +131,60 @@ def test_parser_extracts_watermark_paper_affiliations_from_header():
     assert "Hong Kong University of Science and Technology (Guangzhou)" in affiliations
 
 
+def test_parser_uses_cached_llm_outputs_when_model_calls_fail(tmp_path, monkeypatch):
+    output_dir = tmp_path / "output"
+    content_dir = output_dir / "content"
+    content_dir.mkdir(parents=True)
+    cached_narrative = {
+        "and": "Problem context",
+        "but": "Core tension",
+        "therefore": "Poster takeaway",
+        "meta": {
+            "poster_title": "Cached Poster Title",
+            "authors": "A. Author and B. Author",
+        },
+    }
+    cached_classified_visuals = {
+        "key_visual": "figure_1",
+        "problem_illustration": [],
+        "method_workflow": ["figure_1"],
+        "main_results": [],
+        "comparative_results": [],
+        "supporting": [],
+    }
+    cached_structured_sections = {
+        "paper_sections": [
+            {"section_name": "Intro", "section_type": "foundation", "content": "Intro content"},
+            {"section_name": "Method", "section_type": "method", "content": "Method content"},
+            {"section_name": "Results", "section_type": "evaluation", "content": "Results content"},
+        ]
+    }
+    (content_dir / "narrative_content.json").write_text(json.dumps(cached_narrative), encoding="utf-8")
+    (content_dir / "classified_visuals.json").write_text(json.dumps(cached_classified_visuals), encoding="utf-8")
+    (content_dir / "structured_sections.json").write_text(json.dumps(cached_structured_sections), encoding="utf-8")
+
+    parser = Parser.__new__(Parser)
+    parser.name = "parser"
+    state = create_state(str(tmp_path / "paper.pdf"))
+    state["output_dir"] = str(output_dir)
+
+    monkeypatch.setattr(parser, "_extract_raw_text", lambda pdf_path, content_dir: ("raw text", object()))
+    monkeypatch.setattr(parser, "_extract_assets", lambda raw_result, poster_name, assets_dir: ({}, {}))
+    monkeypatch.setattr(parser, "_extract_title_authors", lambda raw_text, config, state: (_ for _ in ()).throw(RuntimeError("title model down")))
+    monkeypatch.setattr(parser, "_generate_narrative_content", lambda raw_text, config, state: (_ for _ in ()).throw(RuntimeError("narrative model down")))
+    monkeypatch.setattr(parser, "_classify_visual_assets", lambda figures, tables, raw_text, config, state: (_ for _ in ()).throw(RuntimeError("visual model down")))
+    monkeypatch.setattr(parser, "_extract_structured_sections", lambda raw_text, config, state: (_ for _ in ()).throw(RuntimeError("section model down")))
+    monkeypatch.setattr(parser, "_extract_affiliations", lambda raw_text: [])
+    monkeypatch.setattr(parser, "_extract_doi", lambda raw_text: None)
+
+    result = parser(state)
+
+    assert result["errors"] == []
+    assert result["narrative_content"]["meta"]["poster_title"] == "Cached Poster Title"
+    assert result["classified_visuals"] == cached_classified_visuals
+    assert result["structured_sections"] == cached_structured_sections
+
+
 def test_poster_keypoint_selector_caps_to_ten_by_reading_order(tmp_path, monkeypatch):
     payload = {
         "paper_poster_keypoints": [
@@ -2205,6 +2259,10 @@ def test_generated_teaser_agent_injects_motivation_visual(tmp_path, monkeypatch)
     assert geometry["target_height_inches"] > geometry["slot_height_inches"] * 0.65
     assert section["generated_teaser_summary"] is True
     assert len(section["text_content"]) <= 2
+    saved_visual_assets = json.loads((Path(state["output_dir"]) / "content" / "visual_assets.json").read_text(encoding="utf-8"))
+    saved_story_board = json.loads((Path(state["output_dir"]) / "content" / "story_board.json").read_text(encoding="utf-8"))
+    assert saved_visual_assets[visual_id]["provenance"] == "generated_teaser"
+    assert saved_story_board["spatial_content_plan"]["sections"][0]["visual_assets"][0]["visual_id"] == visual_id
 
 
 def test_generated_teaser_uses_portrait_height_policy_for_tall_templates():
@@ -2314,6 +2372,66 @@ def test_generated_teaser_summary_blocks_are_protected_from_expansion(tmp_path):
     assert report["applied"] is False
     assert report["actions_considered"] == []
     assert state["story_board"]["spatial_content_plan"]["sections"][0]["text_content"] == ["Short motivation summary."]
+
+
+def test_generated_teaser_summary_blocks_allow_concise_fill_repair(tmp_path, monkeypatch):
+    state = create_state(str(tmp_path / "paper.pdf"), enable_block_vlm_review=True)
+    state["output_dir"] = str(tmp_path / "output")
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "slot_1_problem",
+                    "section_title": "Search Problem",
+                    "generated_teaser_summary": True,
+                    "visual_assets": [{"visual_id": "generated_teaser_1"}],
+                    "text_content": ["Short motivation summary."],
+                }
+            ]
+        }
+    }
+    state["block_occupancy_report"] = {
+        "settings": {"acceptable_min": 0.96, "hard_max": 0.995},
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "slot_1_problem",
+                "available_height": 12.91,
+                "visible_content_height": 11.9153,
+                "used_height": 11.9153,
+                "bottom_whitespace": 0.9947,
+                "line_height": 0.7667,
+                "chars_per_line": 58,
+                "utilization": 0.923,
+                "target_extra_chars": 47,
+                "action": "expand",
+                "visual_count": 1,
+            }
+        ],
+    }
+    state["block_vlm_review"] = {
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "slot_1_problem",
+                "status": "ok",
+                "severity": "low",
+                "description": "caption fits comfortably",
+            }
+        ]
+    }
+    state["block_refinement_count"] = 1
+
+    def fake_expansion(self, state, actions, section_by_id):
+        assert actions[0]["target_extra_chars"] == 47
+        return {"slot_1_problem": {"new_bullets": ["Adds budget and cost context for the teaser."]}}
+
+    monkeypatch.setattr(BlockContentRefiner, "_generate_expansion_patches", fake_expansion)
+
+    report = BlockContentRefiner().refine(state)
+
+    assert report["applied"] is True
+    assert state["story_board"]["spatial_content_plan"]["sections"][0]["text_content"][-1] == "Adds budget and cost context for the teaser."
 
 
 def test_background_image_agent_prompt_is_background_only():
@@ -5101,6 +5219,22 @@ def test_block_content_refiner_caps_second_round_expand_by_remaining_geometry(tm
     assert patch["actions_considered"][0]["target_extra_chars"] == 42
 
 
+def test_block_content_refiner_allows_near_one_line_bottom_whitespace():
+    refiner = BlockContentRefiner()
+    safe_extra_chars = refiner._safe_extra_chars_for_block(
+        {
+            "available_height": 18.98,
+            "visible_content_height": 18.1317,
+            "used_height": 18.1317,
+            "bottom_whitespace": 0.8483,
+            "line_height": 0.8306,
+            "chars_per_line": 86,
+        }
+    )
+
+    assert safe_extra_chars == 86
+
+
 def test_block_content_refiner_reduces_crowded_block_without_changing_refs(tmp_path):
     state = _block_refinement_state(tmp_path, utilization=0.997)
     section = state["story_board"]["spatial_content_plan"]["sections"][0]
@@ -5185,6 +5319,26 @@ def test_truncation_removes_dangling_connector_suffixes():
     assert normalize_text_for_poster("Symmetry acts as inductive bias for thousan.").endswith("bias.")
     assert normalize_text_for_poster("HAGS shares geospatial locality and reducing.").endswith("locality.")
     assert normalize_text_for_poster("HAGS wins in large-area search, with especially strong.").endswith("search.")
+    assert normalize_text_for_poster("Outreach operates under tight.").endswith("operates.")
+    assert normalize_text_for_poster("The MDP enables princ.").endswith("MDP.")
+    assert normalize_text_for_poster("Targets improve by approxima.").endswith("improve.")
+    assert normalize_text_for_poster("HAGS improves discovery and substant.").endswith("discovery.")
+    assert normalize_text_for_poster("The policy is optimized with a co.").endswith("optimized.")
+    assert normalize_text_for_poster("The policy chooses next parcels as actions wit.").endswith("actions.")
+    assert normalize_text_for_poster("The method learns a region-selection policy, and a share.").endswith("policy.")
+    assert normalize_text_for_poster("Features pass through a shared mul.").endswith("shared.")
+    assert normalize_text_for_poster("HAGS improves over the stronges.").endswith("improves.")
+    assert normalize_text_for_poster("Outreach works despite limited.").endswith("works.")
+    assert normalize_text_for_poster("Search uses either tabular or visual features with either unif.").endswith("features.")
+    assert normalize_text_for_poster("The modules are jointly optimized vi.").endswith("optimized.")
+    assert normalize_text_for_poster("Extend HAGS to scale learning and search to large.").endswith("search.")
+    assert normalize_text_for_poster("HAGS finds more targets found, especially.").endswith("found.")
+    assert normalize_text_for_poster("Multi-modal representations combining tabular and imagery features further.").endswith("features.")
+    assert normalize_text_for_poster("Construct multimodal parcel features by combining rich tabular data (eviction histories, ownership, property.").endswith("data.")
+    assert normalize_text_for_poster("Next, we describe in detail the data we use, as well as the baseline methods, before presenting our results.") == ""
+    assert normalize_text_for_poster("HAGS finds 5-17% more at‑risk properties.") == "HAGS finds 5-17% more at-risk properties."
+    assert normalize_text_for_poster("Our focus here is on large-area search; we defer most results involving small-area search to the Supplement.") == ""
+    assert normalize_text_for_poster("We also provide results of random queries for calibration purposes.") == ""
     assert normalize_text_for_poster("Louis, USA Brown School at Washington University in St.") == ""
     teaser_summary = GeneratedTeaserAgent()._truncate_on_word_boundary(
         "Eviction-prevention outreach must decide which rental properties to canvass under tight budgets, while true near-term eviction risk is only partially known and can change online.",
