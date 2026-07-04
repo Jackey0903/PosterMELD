@@ -55,7 +55,7 @@ header_planner:
   hard_max_logo_header_fraction: 0.88
   max_logo_zone_width_fraction: 0.38
   logo_resize_check_enabled: true
-  preferred_affiliation_logo_scale: 1.16
+  preferred_affiliation_logo_scale: 1.50
   preferred_conference_logo_scale: 1.0
   conservative_logo_scale: 0.82
   subtitle_title_scale: 0.94
