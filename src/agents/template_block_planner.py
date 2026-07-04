@@ -172,6 +172,7 @@ class TemplatePriorPlanner:
             refined_sections = capacity_sections
         else:
             refined_sections = self._refine_with_llm(capacity_sections, template_layout, state, capacity_contract) or capacity_sections
+        refined_sections = self._restore_generated_teaser_summaries(refined_sections, capacity_sections)
         refined_sections = self._apply_capacity_contract(refined_sections, capacity_contract, state)
         capacity_report = self._build_capacity_planning_report(refined_sections, capacity_contract)
 
@@ -911,6 +912,23 @@ class TemplatePriorPlanner:
             if isinstance(visual, dict)
         )
 
+    def _restore_generated_teaser_summaries(
+        self,
+        refined_sections: List[Dict[str, Any]],
+        source_sections: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        source_by_id = {str(section.get("section_id")): section for section in source_sections}
+        restored = []
+        for section in refined_sections:
+            item = deepcopy(section)
+            source = source_by_id.get(str(item.get("section_id"))) or {}
+            if self._is_generated_teaser_section(source):
+                item["text_content"] = list(source.get("text_content") or item.get("text_content") or [])
+                item["generated_teaser_summary"] = source.get("generated_teaser_summary", True)
+                item["generated_teaser_original_text_count"] = source.get("generated_teaser_original_text_count")
+            restored.append(item)
+        return restored
+
     def _trim_bullets_to_budget(self, bullets: List[str], max_chars: int, target_bullets: int) -> List[str]:
         if max_chars <= 0:
             return bullets[:target_bullets]
@@ -1071,7 +1089,9 @@ class TemplatePriorPlanner:
             flags=re.IGNORECASE,
         )
         text = re.sub(r"\s+and\s+[A-Za-z][A-Za-z-]{0,10}$", "", text, flags=re.IGNORECASE).strip()
-        return re.sub(r"\s+(?:fo|dis|se|lo|ri|mo|res|vis|analys)$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+(?:while|where|when|because|although|whereas)\s+[A-Za-z]{1,12}$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+(?:and|or|for|with|under|to|by|of)\s+[A-Za-z-]*(?:cos|thousan)$", "", text, flags=re.IGNORECASE).strip()
+        return re.sub(r"\s+(?:fo|fou|ou|ar|cos|evic|prob|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan)$", "", text, flags=re.IGNORECASE).strip()
 
     def _clean_bullets(self, bullets: List[Any]) -> List[str]:
         cleaned = []
@@ -1104,7 +1124,7 @@ class TemplatePriorPlanner:
             return False
         if len(re.findall(r"\b[A-Z][a-z]+,\s+[A-Z]\.", text)) >= 2 and re.search(r"\b(?:19|20)\d{2}[a-z]?\b", text):
             return False
-        if re.search(r"\b(?:fo|dis|se|lo|ri|mo|res|vis|analys)\.$", text, flags=re.IGNORECASE):
+        if re.search(r"\b(?:fo|fou|ou|ar|cos|evic|prob|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan)\.$", text, flags=re.IGNORECASE):
             return False
         return True
 

@@ -198,11 +198,15 @@ class BlockContentRefiner:
                     (block.get("action") == "expand" and target_extra_chars > 0)
                     or vlm_underfilled
                 )
-                and status not in {"crowded", "overflow", "visual_too_small"}
+                and status not in {"overflow", "visual_too_small"}
+                and not (status == "crowded" and severity == "high")
             ):
                 action = "expand"
-                if vlm_underfilled and target_extra_chars <= 0:
-                    target_extra_chars = int(self.block_config.get("vlm_underfilled_min_extra_chars", 120))
+                if vlm_underfilled:
+                    target_extra_chars = max(
+                        target_extra_chars,
+                        int(self.block_config.get("underfilled_min_extra_chars", 70)),
+                    )
                 reason = vlm.get("description") or reason or "block is underfilled"
 
             if fast_mode and action == "expand":
@@ -246,6 +250,14 @@ class BlockContentRefiner:
                     action = "keep"
                     reason = "second-round safe extra budget is below minimum"
 
+            if action == "expand":
+                safe_extra_chars = self._safe_extra_chars_for_block(block)
+                if safe_extra_chars is not None:
+                    target_extra_chars = min(target_extra_chars, safe_extra_chars)
+                    if target_extra_chars < int(self.block_config.get("min_extra_chars", 10)):
+                        action = "keep"
+                        reason = "geometry-safe extra budget is below minimum"
+
             if action != "keep":
                 actions.append({
                     "slot_id": slot_id,
@@ -259,6 +271,18 @@ class BlockContentRefiner:
                 })
 
         return actions
+
+    def _safe_extra_chars_for_block(self, block: Dict[str, Any]) -> Optional[int]:
+        available_height = float(block.get("available_height") or 0.0)
+        used_height = float(block.get("visible_content_height") or block.get("used_height") or 0.0)
+        line_height = float(block.get("line_height") or 0.0)
+        chars_per_line = int(block.get("chars_per_line") or 0)
+        if available_height <= 0 or used_height <= 0 or line_height <= 0 or chars_per_line <= 0:
+            return None
+        safety = float(self.block_config.get("expand_height_safety_inches", 0.14))
+        remaining_height = max(available_height - used_height - safety, 0.0)
+        safe_lines = int(remaining_height / line_height)
+        return max(safe_lines, 0) * chars_per_line
 
     def _protected_teaser_sections(self, state: PosterState) -> set[str]:
         sections = ((state.get("story_board") or {}).get("spatial_content_plan") or {}).get("sections") or []
@@ -382,6 +406,17 @@ class BlockContentRefiner:
                     normalized[section_id] = {
                         "new_bullets": self._clean_bullets(patch.get("new_bullets") or []),
                     }
+            for action in actions:
+                section_id = action["section_id"]
+                if normalized.get(section_id, {}).get("new_bullets"):
+                    continue
+                normalized[section_id] = {
+                    "new_bullets": self._fallback_new_bullets(
+                        self._source_context_for_section(state, section_by_id.get(section_id, {}), action),
+                        section_by_id.get(section_id, {}).get("text_content") or [],
+                        action,
+                    )
+                }
             return normalized
         except Exception as exc:
             log_agent_warning(self.name, f"LLM expansion unavailable; using source sentence fallback: {exc}")
@@ -549,11 +584,18 @@ Blocks:
         bullets = []
         used_chars = 0
         for sentence in self._split_sentences(source_context):
-            candidate = normalize_text_for_poster(sentence.strip())
-            if not candidate or len(candidate) < 40:
+            cleaned = self._clean_bullets([sentence.strip()])
+            if not cleaned:
+                continue
+            candidate = cleaned[0]
+            if len(candidate) < 40:
                 continue
             if len(candidate) > 190:
                 candidate = self._truncate_on_word_boundary(candidate, 190)
+                cleaned = self._clean_bullets([candidate])
+                if not cleaned:
+                    continue
+                candidate = cleaned[0]
             key = self._dedupe_key(candidate)
             if key in existing_keys:
                 continue
@@ -561,6 +603,10 @@ Blocks:
                 remaining = max_added_chars - used_chars
                 if remaining >= 60:
                     candidate = self._truncate_on_word_boundary(candidate, remaining)
+                    cleaned = self._clean_bullets([candidate])
+                    if not cleaned:
+                        continue
+                    candidate = cleaned[0]
                 else:
                     break
             bullets.append(candidate)
@@ -630,7 +676,17 @@ Blocks:
             str(text or "").strip(),
             flags=re.IGNORECASE,
         )
-        return re.sub(r"\s+and\s+[A-Za-z][A-Za-z-]{0,10}$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+and\s+[A-Za-z][A-Za-z-]{0,10}$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+by\s+first\s+[A-Za-z-]+ing(?:\s+[A-Za-z-]+){0,2}$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(
+            r"\s+(?:creates?|created|creating|causes?|caused|causing|forms?|formed|forming|poses?|posed|posing|injects?|injected|injecting|includes?|included|including)\s+(?:a|an|the)?\s*[A-Za-z-]{0,28}$",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+        text = re.sub(r"\s+(?:and|or|for|with|under|to|by|of)\s+[A-Za-z-]*(?:cos|thousan)$", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"\s+(?:[A-Za-z]|fo|fou|ou|ar|cos|evic|prob|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan)$", "", text, flags=re.IGNORECASE).strip()
+        return text
 
     def _max_new_bullets(self, target_extra_chars: int) -> int:
         chars_per_bullet = int(self.block_config.get("chars_per_bullet", 120))

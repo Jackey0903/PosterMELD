@@ -1237,6 +1237,10 @@ def test_header_planner_maps_portrait_routes_to_logo_strip_full_title(tmp_path):
     assert plan["route"] == "right_title"
     assert plan["physical_route"] == "portrait_logo_strip_full_title"
     assert plan["title"]["alignment"] == "right"
+    assert plan["title"]["single_line"] is True
+    assert plan["title"]["font_size"] < 58
+    estimated_title_width = len(plan["title"]["text"]) * (plan["title"]["font_size"] / 72) * 0.56
+    assert estimated_title_width <= title_box["w"] * 0.95
     assert title_box["w"] == pytest.approx(header["w"])
     assert title_box["y"] > header["y"]
     assert len(institution_logos) == 2
@@ -1746,6 +1750,7 @@ def test_renderer_separates_title_and_authors_with_physical_gap():
     title_box = slide.shapes[-2]
     author_box = slide.shapes[-1]
     actual_gap = author_box.top.inches - (title_box.top.inches + title_box.height.inches)
+    assert title_box.text_frame.word_wrap is False
     assert actual_gap == pytest.approx(16 / 72, abs=0.01)
 
 
@@ -2142,6 +2147,39 @@ def test_generated_teaser_agent_injects_motivation_visual(tmp_path, monkeypatch)
     assert geometry["target_height_inches"] > geometry["slot_height_inches"] * 0.65
     assert section["generated_teaser_summary"] is True
     assert len(section["text_content"]) <= 2
+
+
+def test_generated_teaser_uses_portrait_height_policy_for_tall_templates():
+    state = create_state(
+        "/tmp/paper.pdf",
+        width=27,
+        height=54,
+        layout_template="cluster_22_portrait",
+        enable_generated_teaser=True,
+    )
+    state["resolved_layout_template"] = "cluster_22_portrait"
+    section = {
+        "section_id": "motivation",
+        "section_title": "Why Search",
+        "content_role": "foundation",
+        "preferred_slot_id": "slot_1",
+        "column_assignment": "slot_1",
+    }
+
+    geometry = GeneratedTeaserAgent()._resolve_teaser_geometry(state, section)
+    section["text_content"] = [
+        "Outreach teams must decide where to visit with limited canvassing budget.",
+        "The search policy balances exploration with exploitation as labels arrive online.",
+    ]
+    summary = GeneratedTeaserAgent()._compress_target_section_text(section, geometry)
+    max_fraction = load_config()["generated_teaser"]["portrait_max_block_height_fraction"]
+    layout_fraction = LayoutAgent()._max_visual_height_fraction("generated_teaser_1", state)
+
+    assert geometry["orientation"] == "portrait"
+    assert geometry["target_height_inches"] <= geometry["slot_height_inches"] * max_fraction + 1e-6
+    assert geometry["target_height_inches"] < 8.6
+    assert layout_fraction == pytest.approx(load_config()["generated_teaser"]["portrait_layout_max_height_fraction"])
+    assert len(summary) == 1
 
 
 def test_generated_teaser_agent_skips_sections_with_existing_visuals_by_default(tmp_path, monkeypatch):
@@ -4683,6 +4721,27 @@ def test_final_quality_gate_rejects_excessive_bottom_whitespace(tmp_path):
     )
 
 
+def test_final_quality_gate_allows_readable_single_line_title_too_small_vlm_status(tmp_path):
+    state = _block_refinement_state(tmp_path, utilization=0.98)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    state["layout_template_metadata"]["orientation"] = "portrait"
+    state["header_plan"] = {"title": {"single_line": True, "font_size": 45}}
+    state["vlm_layout_review"] = {"global_assessment": {"title_readability": "too_small"}}
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_quality_gate"]["accepted"] is True
+    assert result["final_quality_gate"]["overrides"][0]["reason"] == "single_line_title_policy"
+
+
 def test_final_quality_gate_rejects_visual_below_footprint_contract(tmp_path):
     state = _block_refinement_state(tmp_path, utilization=0.96)
     state["output_dir"] = str(tmp_path / "output")
@@ -4840,6 +4899,150 @@ def test_block_content_refiner_expands_underfilled_block_without_changing_refs(t
     assert after_section["visual_assets"] == before_section["visual_assets"]
 
 
+def test_block_content_refiner_fallback_expands_vlm_underfilled_small_gap(tmp_path, monkeypatch):
+    state = _block_refinement_state(tmp_path, utilization=0.943)
+    state["template_fast_mode"] = True
+    state["raw_text"] = (
+        "The method updates predictions after each queried parcel label arrives online. "
+        "The adaptive search policy balances exploration and exploitation under a limited outreach budget."
+    )
+    state["block_occupancy_report"] = {
+        "settings": {"acceptable_min": 0.96, "hard_max": 0.995},
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "section_title": "Method",
+                "utilization": 0.943,
+                "action": "expand",
+                "target_extra_chars": 27,
+                "visual_count": 0,
+                "reason": "utilization below target",
+            }
+        ],
+    }
+    state["block_vlm_review"] = {
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "status": "underfilled",
+                "severity": "medium",
+                "description": "visible bottom whitespace remains",
+            }
+        ]
+    }
+
+    class EmptyPatchResponse:
+        content = json.dumps({"patches": []})
+        input_tokens = 1
+        output_tokens = 1
+
+    class EmptyPatchAgent:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def step(self, prompt):
+            return EmptyPatchResponse()
+
+    monkeypatch.setattr("src.agents.block_content_refiner.LangGraphAgent", EmptyPatchAgent)
+
+    patch = BlockContentRefiner().refine(state)
+    section = state["story_board"]["spatial_content_plan"]["sections"][0]
+
+    assert patch["applied"] is True
+    assert patch["actions_considered"][0]["target_extra_chars"] >= 70
+    assert len(section["text_content"]) == 2
+    assert "queried parcel label" in section["text_content"][1]
+
+
+def test_block_content_refiner_expands_geometry_underfill_despite_medium_crowded_vlm(tmp_path, monkeypatch):
+    state = _block_refinement_state(tmp_path, utilization=0.955)
+    state["block_occupancy_report"] = {
+        "settings": {"acceptable_min": 0.96, "hard_max": 0.995},
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "section_title": "Method",
+                "utilization": 0.955,
+                "action": "expand",
+                "target_extra_chars": 70,
+                "visual_count": 1,
+                "reason": "bottom whitespace above final threshold",
+            }
+        ],
+    }
+    state["block_vlm_review"] = {
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "status": "crowded",
+                "severity": "medium",
+                "description": "dense but still has bottom whitespace",
+            }
+        ]
+    }
+
+    def fake_expansion(self, state, actions, section_by_id):
+        return {"method": {"new_bullets": ["Adds a concise paper-grounded result detail to close the remaining whitespace."]}}
+
+    monkeypatch.setattr(BlockContentRefiner, "_generate_expansion_patches", fake_expansion)
+
+    patch = BlockContentRefiner().refine(state)
+
+    assert patch["applied"] is True
+    assert patch["actions_considered"][0]["action"] == "expand"
+
+
+def test_block_content_refiner_caps_second_round_expand_by_remaining_geometry(tmp_path, monkeypatch):
+    state = _block_refinement_state(tmp_path, utilization=0.905)
+    state["block_refinement_count"] = 1
+    state["block_occupancy_report"] = {
+        "settings": {"acceptable_min": 0.96, "hard_max": 0.995},
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "section_title": "Method",
+                "available_height": 12.39,
+                "visible_content_height": 11.2168,
+                "used_height": 11.2168,
+                "line_height": 0.6069,
+                "chars_per_line": 42,
+                "utilization": 0.905,
+                "action": "expand",
+                "target_extra_chars": 34,
+                "visual_count": 0,
+                "reason": "utilization below target",
+            }
+        ],
+    }
+    state["block_vlm_review"] = {
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "status": "underfilled",
+                "severity": "medium",
+                "description": "visible bottom whitespace remains",
+            }
+        ]
+    }
+
+    def fake_expansion(self, state, actions, section_by_id):
+        assert actions[0]["target_extra_chars"] == 42
+        return {"method": {"new_bullets": ["Online labels update parcel risk during search."]}}
+
+    monkeypatch.setattr(BlockContentRefiner, "_generate_expansion_patches", fake_expansion)
+
+    patch = BlockContentRefiner().refine(state)
+
+    assert patch["applied"] is True
+    assert patch["actions_considered"][0]["target_extra_chars"] == 42
+
+
 def test_block_content_refiner_reduces_crowded_block_without_changing_refs(tmp_path):
     state = _block_refinement_state(tmp_path, utilization=0.997)
     section = state["story_board"]["spatial_content_plan"]["sections"][0]
@@ -4881,6 +5084,10 @@ def test_truncation_removes_dangling_connector_suffixes():
         "Perturbations include Random, Equal, Flip, and Mixed strategies; a stable method should preserve rankings and identify anomalous annotators.",
         108,
     ).endswith("rankings.")
+    assert planner._truncate_on_word_boundary(
+        "The paper formulates this as Active Geospatial Search (AGS): sequentially query parcels under a budget to maximize the number of at-risk properties identified while accounting for query and travel costs.",
+        168,
+    ).endswith("identified.")
     assert refiner._truncate_on_word_boundary(
         "A representative arena is Chatbot Arena, where two models answer the same prompt and annotators compare outputs.",
         86,
@@ -4889,6 +5096,10 @@ def test_truncation_removes_dangling_connector_suffixes():
         "The method identifies anomalous annotators and improves fit and generalization through annotator-aware modeling.",
         81,
     ).endswith("generalization.")
+    assert refiner._truncate_on_word_boundary(
+        "Evaluation uses municipal parcel features and NAIP satellite imagery; performance is measured by average target discovery.",
+        76,
+    ).endswith("imagery.")
     assert normalize_text_for_poster("Each visit consumes scarce outreach budget and may also.").endswith("budget.")
     assert normalize_text_for_poster("HAGS scales city-wide search by first selecting a.").endswith("search.")
     assert normalize_text_for_poster("The policy then selects the next property within the chosen region using local.").endswith("region.")
@@ -4904,6 +5115,25 @@ def test_truncation_removes_dangling_connector_suffixes():
     assert normalize_text_for_poster("HAGS scales this process by splitting.").endswith("process.")
     assert normalize_text_for_poster("HAGS achieves the best target discovery across all budgets, typically.").endswith("budgets.")
     assert normalize_text_for_poster("choose a parcel inside that region..").endswith("region.")
+    assert normalize_text_for_poster("Unknown current risk creates a sequential.").endswith("risk.")
+    assert normalize_text_for_poster("HAGS shares the policy across regions, injecting.").endswith("regions.")
+    assert normalize_text_for_poster("The policy identifies target parcels while ac.").endswith("parcels.")
+    assert normalize_text_for_poster("Evaluation reports average number of targets fou.").endswith("targets.")
+    assert normalize_text_for_poster("The formulation maximizes discoveries withi.").endswith("discoveries.")
+    assert normalize_text_for_poster("The policy chooses parcels from predictions, past ou.").endswith("predictions.")
+    assert normalize_text_for_poster("Average targets found under unifor.").endswith("found.")
+    assert normalize_text_for_poster("The non-hierarchical AGS model; gains ar.").endswith("gains.")
+    assert normalize_text_for_poster("Targets found under travel or query-cos.").endswith("travel.")
+    assert normalize_text_for_poster("Symmetry acts as inductive bias for thousan.").endswith("bias.")
+    assert normalize_text_for_poster("HAGS shares geospatial locality and reducing.").endswith("locality.")
+    assert normalize_text_for_poster("HAGS wins in large-area search, with especially strong.").endswith("search.")
+    assert normalize_text_for_poster("Louis, USA Brown School at Washington University in St.") == ""
+    teaser_summary = GeneratedTeaserAgent()._truncate_on_word_boundary(
+        "Eviction-prevention outreach must decide which rental properties to canvass under tight budgets, while true near-term eviction risk is only partially known and can change online.",
+        150,
+    )
+    assert len(teaser_summary) > 80
+    assert "cha." not in teaser_summary
 
 
 def test_template_block_planner_filters_reference_text_and_truncation_fragments():

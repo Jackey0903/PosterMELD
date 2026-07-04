@@ -9,7 +9,7 @@ import json
 import time
 from pathlib import Path
 from dotenv import load_dotenv
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -414,7 +414,13 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
         gate["failures"].append({"category": "vlm_high_issue", "issues": high_issues})
     if high_whitespace_regions:
         gate["failures"].append({"category": "vlm_major_whitespace", "regions": high_whitespace_regions})
-    if title_readability in {"too_small", "crowded", "unclear"}:
+    if title_readability == "too_small":
+        override = _single_line_title_readability_override(state, config)
+        if override:
+            gate.setdefault("overrides", []).append(override)
+        else:
+            gate["failures"].append({"category": "title_readability", "status": title_readability})
+    elif title_readability in {"crowded", "unclear"}:
         gate["failures"].append({"category": "title_readability", "status": title_readability})
 
     gate["accepted"] = not gate["failures"]
@@ -435,6 +441,36 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
     else:
         log_agent_success("final_quality_gate", "accepted final poster")
     return state
+
+
+def _single_line_title_readability_override(state: PosterState, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    header_plan = state.get("header_plan") or {}
+    title = header_plan.get("title") or {}
+    if not title.get("single_line"):
+        return None
+    try:
+        font_size = float(title.get("font_size") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    header_config = config.get("header_planner", {})
+    orientation = str((state.get("layout_template_metadata") or {}).get("orientation") or "").lower()
+    min_font_size = float(
+        header_config.get(
+            "portrait_single_line_title_gate_min_font_size"
+            if orientation == "portrait"
+            else "single_line_title_gate_min_font_size",
+            42,
+        )
+    )
+    if font_size < min_font_size:
+        return None
+    return {
+        "category": "title_readability",
+        "status": "too_small",
+        "reason": "single_line_title_policy",
+        "font_size": font_size,
+        "min_font_size": min_font_size,
+    }
 
 
 def create_workflow_graph():

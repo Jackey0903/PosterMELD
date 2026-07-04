@@ -733,7 +733,9 @@ class LayoutAgent:
                 "alignment": title.get("alignment", "left"),
                 "font_family": title.get("font_family", self.title_font_family),
                 "font_size": title.get("font_size", 100),
+                "title_single_line": title.get("single_line", True),
                 "subtitle_font_size": subtitle.get("font_size", 54),
+                "subtitle_single_line": subtitle.get("single_line", True),
                 "subtitle_box_height": subtitle.get("box_height", 0.0),
                 "title_box_height": title.get("box_height"),
                 "title_to_subtitle_gap_inches": subtitle.get("top_gap_inches", 0.0),
@@ -777,6 +779,7 @@ class LayoutAgent:
             "content": f"{poster_title}\n{authors}",
             "font_family": self.title_font_family,
             "font_size": title_font_size,
+            "title_single_line": True,
             "author_font_size": author_font_size,
             "author_top_gap_inches": author_top_gap_inches,
             "priority": 1.0
@@ -1599,7 +1602,18 @@ class LayoutAgent:
 
     def _max_visual_height_fraction(self, visual_id: str, state) -> float:
         if str(visual_id).startswith("generated_teaser"):
-            return float((self.config.get("generated_teaser") or {}).get("layout_max_height_fraction", 0.76))
+            teaser_config = self.config.get("generated_teaser") or {}
+            template_layout = state.get("layout_template_metadata") or {}
+            orientation = str(template_layout.get("orientation") or "").lower()
+            if not orientation:
+                orientation = (
+                    "portrait"
+                    if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0)
+                    else "landscape"
+                )
+            if orientation == "portrait":
+                return float(teaser_config.get("portrait_layout_max_height_fraction", teaser_config.get("layout_max_height_fraction", 0.76)))
+            return float(teaser_config.get("layout_max_height_fraction", 0.76))
         fast_visual_policy = state.get("fast_visual_policy") or (self.config.get("template_fast_mode") or {}).get("visual_policy") or {}
         if state.get("template_fast_mode"):
             if str(visual_id).startswith("table_"):

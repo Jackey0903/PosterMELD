@@ -341,6 +341,20 @@ class HeaderPlanner:
             affiliation_logo_scale=affiliation_logo_scale,
             conference_logo_scale=conference_logo_scale,
         )
+        title_font_size = self._fit_single_line_font_size(
+            title,
+            title_box["w"],
+            title_font_size,
+            template_layout,
+        )
+        if subtitle_text:
+            subtitle_font_size = self._fit_single_line_font_size(
+                subtitle_text,
+                title_box["w"],
+                subtitle_font_size,
+                template_layout,
+                min_key="subtitle_single_line_min_font_size",
+            )
         title_metrics = self._title_metrics(title_box["h"], title_font_size, subtitle_font_size, author_font_size, bool(subtitle_text))
         plan = {
             "selected_template": template_layout.get("template_name"),
@@ -357,12 +371,14 @@ class HeaderPlanner:
                 "font_size": title_font_size,
                 "font_family": self.config["typography"]["fonts"].get("title", "Georgia"),
                 "box_height": title_metrics["title_box_height"],
+                "single_line": bool(self.header_config.get("force_single_line_title", True)),
             },
             "subtitle": {
                 "text": subtitle_text,
                 "font_size": subtitle_font_size,
                 "box_height": title_metrics["subtitle_box_height"],
                 "top_gap_inches": title_metrics["title_to_subtitle_gap_inches"],
+                "single_line": bool(self.header_config.get("force_single_line_title", True)),
             },
             "authors": {
                 "text": authors,
@@ -376,6 +392,35 @@ class HeaderPlanner:
         }
         plan["validation"] = self._validate_plan(plan, header)
         return plan
+
+    def _fit_single_line_font_size(
+        self,
+        text: str,
+        width_inches: float,
+        desired_size: int,
+        template_layout: Dict[str, Any],
+        *,
+        min_key: str = "title_single_line_min_font_size",
+    ) -> int:
+        if not self.header_config.get("force_single_line_title", True):
+            return int(desired_size)
+        clean_text = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not clean_text or width_inches <= 0:
+            return int(desired_size)
+        avg_char_width = float(self.header_config.get("title_fit_avg_char_width_em", 0.56))
+        width_safety = float(self.header_config.get("title_fit_width_safety", 0.94))
+        usable_width = max(width_inches * width_safety, 0.1)
+        estimated_size = int((usable_width * 72) / max(len(clean_text) * avg_char_width, 1))
+        if min_key == "title_single_line_min_font_size" and template_layout.get("orientation") == "portrait":
+            min_size = int(
+                self.header_config.get(
+                    "portrait_title_single_line_min_font_size",
+                    self.header_config.get(min_key, 50),
+                )
+            )
+        else:
+            min_size = int(self.header_config.get(min_key, 50))
+        return max(min_size, min(int(desired_size), estimated_size))
 
     def _choose_checked_logo_plan(
         self,

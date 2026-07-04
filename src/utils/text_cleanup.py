@@ -35,11 +35,11 @@ TITLE_SMALL_WORDS = {
 
 DANGLING_TERMINAL_WORDS = (
     "and|or|but|with|in|of|to|for|by|as|at|from|than|while|where|when|"
-    "that|which|through|into|over|under|via|on|only|also|a|an|the|this|"
+    "that|which|through|into|over|under|via|on|only|also|past|a|an|the|this|"
     "these|those|their|its|using|including|exploiting|selecting|relying|letting|local|stale|"
     "may|can|could|would|should|will|must|is|are|was|were|be|been|being|"
     "typically|generally|often|roughly|approximately|consistently|significantly"
-    "|outperforming|improving|exceeding|achieving"
+    "|outperforming|improving|exceeding|achieving|injecting|creating|reducing"
 )
 
 
@@ -189,6 +189,18 @@ def _strip_poster_artifact_noise(line: str) -> str:
         return ""
     if _looks_like_bibliography(line):
         return ""
+    if re.search(
+        r"\b(?:USA|United States)\b.*\b(?:University|School|College|Department|Institute)\b",
+        line,
+        flags=re.IGNORECASE,
+    ):
+        return ""
+    if re.search(
+        r"\b(?:Brown School at Washington University|Washington University in St\.?\s*Louis|George Mason University)\b",
+        line,
+        flags=re.IGNORECASE,
+    ):
+        return ""
 
     line = re.sub(r"\b(?:results|values|details|comparison|performance)\s+are\s+(?:in|shown|presented|provided|reported)\s*\.?", "", line, flags=re.IGNORECASE)
     line = re.sub(r"\b(?:the\s+)?(?:table|figure)\s+(?:shows|reports|presents|summarizes)\b.*", "", line, flags=re.IGNORECASE)
@@ -252,8 +264,14 @@ def repair_truncated_sentence_end(line: str) -> str:
     while previous != line:
         previous = line
         line = re.sub(
-            r"\s+(?:while|where|when|which|that|because|although|whereas)\s+[^.;:]{1,120}"
+            r"\s+(?:while|where|when|because|although|whereas)\s+[^.;:]{1,120}"
             r"\s+(?:may|can|could|would|should|will|must|is|are|was|were|be|been|being|with\s+[A-Z])\.$",
+            ".",
+            line,
+            flags=re.IGNORECASE,
+        )
+        line = re.sub(
+            r"\s+(?:while|where|when|because|although|whereas)\s+[A-Za-z]{1,12}\.$",
             ".",
             line,
             flags=re.IGNORECASE,
@@ -265,8 +283,19 @@ def repair_truncated_sentence_end(line: str) -> str:
             flags=re.IGNORECASE,
         )
         line = re.sub(r"\s+as\s+(?:a|an|the)\s+[A-Za-z-]{2,28}\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(
+            r"\s+(?:creates?|created|creating|causes?|caused|causing|forms?|formed|forming|poses?|posed|posing|injects?|injected|injecting|includes?|included|including)\s+(?:a|an|the)?\s*[A-Za-z-]{0,28}\.$",
+            ".",
+            line,
+            flags=re.IGNORECASE,
+        )
+        line = re.sub(r"\s+and\s+(?:reducing|increasing|improving|decreasing)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+with\s+(?:especially|particularly|notably)\s+[A-Za-z-]{2,28}\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+(?:and|or|for|with|under|to|by|of)\s+[A-Za-z-]*(?:cos|thousan)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+by\s+first\s+[A-Za-z-]+ing(?:\s+[A-Za-z-]+){0,2}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+by\s+[A-Za-z-]+ing\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+(?:with|using|via|by|for|to)\s+[A-Z]\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+(?:[A-Za-z]|fo|fou|ou|ar|cos|evic|prob|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(rf"\s+({DANGLING_TERMINAL_WORDS})\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
             r"\s+and\s+(?:also|then|therefore|local|stale|limited|new|more|less|other)\.$",
@@ -275,7 +304,6 @@ def repair_truncated_sentence_end(line: str) -> str:
             flags=re.IGNORECASE,
         )
         line = re.sub(r"\s+instead\s+of\s+[^.;:]{1,64}\.$", ".", line, flags=re.IGNORECASE)
-        line = re.sub(r"\s+by\s+first\s+[A-Za-z-]+ing(?:\s+[A-Za-z-]+){0,2}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+using\s+[A-Za-z-]+(?:\s+[A-Za-z-]+){0,2}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r",\s+(travel|local|geospatial|stale|limited)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"[,;:]\s*\.$", ".", line.strip())

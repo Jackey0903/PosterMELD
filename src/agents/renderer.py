@@ -210,6 +210,16 @@ class Renderer:
         title_shadow_cfg = title_style.get("shadow") or {}
         title_shadow = title_shadow_cfg if title_shadow_cfg.get("enabled", False) else None
         alignment = element.get("alignment", "left")
+        title_single_line = bool(element.get("title_single_line", True))
+        subtitle_single_line = bool(element.get("subtitle_single_line", True))
+        if title_single_line:
+            title_text = self._single_line_text(title_text)
+            title_font_size = self._fit_single_line_font_size(
+                title_text,
+                w.inches,
+                float(title_font_size),
+                min_key="portrait_title_single_line_min_font_size" if h.inches > w.inches else "title_single_line_min_font_size",
+            )
 
         if element.get("title_text") or element.get("subtitle_text"):
             title_text = str(element.get("title_text") or title_text).strip()
@@ -217,6 +227,22 @@ class Renderer:
             authors_text = str(element.get("authors_text") or authors_text).strip()
             subtitle_font_size = float(element.get("subtitle_font_size", max(float(title_font_size) * 0.58, 24)))
             subtitle_color = self._parse_color(element.get("subtitle_font_color", title_style.get("subtitle_font_color", "#374151")))
+            if title_single_line:
+                title_text = self._single_line_text(title_text)
+                title_font_size = self._fit_single_line_font_size(
+                    title_text,
+                    w.inches,
+                    float(title_font_size),
+                    min_key="portrait_title_single_line_min_font_size" if h.inches > w.inches else "title_single_line_min_font_size",
+                )
+            if subtitle_text and subtitle_single_line:
+                subtitle_text = self._single_line_text(subtitle_text)
+                subtitle_font_size = self._fit_single_line_font_size(
+                    subtitle_text,
+                    w.inches,
+                    subtitle_font_size,
+                    min_key="subtitle_single_line_min_font_size",
+                )
 
             author_box_height = float(element.get("author_box_height") or max((float(author_font_size) / 72) * 1.15, 0.55))
             author_box_height = min(author_box_height, max(h.inches * 0.32, 0.55))
@@ -251,6 +277,7 @@ class Renderer:
                 line_spacing=self.typography_config["line_spacing"],
                 alignment=alignment,
                 shadow=title_shadow,
+                word_wrap=not title_single_line,
             )
             cursor_y += title_box_height
             if subtitle_text:
@@ -269,6 +296,7 @@ class Renderer:
                     color=subtitle_color,
                     line_spacing=self.typography_config["line_spacing"],
                     alignment=alignment,
+                    word_wrap=not subtitle_single_line,
                 )
                 cursor_y += subtitle_box_height
 
@@ -320,6 +348,7 @@ class Renderer:
                 line_spacing=self.typography_config["line_spacing"],
                 alignment=alignment,
                 shadow=title_shadow,
+                word_wrap=not title_single_line,
             )
             self._add_title_textbox(
                 slide,
@@ -353,6 +382,7 @@ class Renderer:
             line_spacing=self.typography_config["line_spacing"],
             alignment=alignment,
             shadow=title_shadow,
+            word_wrap=not title_single_line,
         )
 
     def _add_title_textbox(
@@ -371,6 +401,7 @@ class Renderer:
         line_spacing: float,
         alignment: str = "left",
         shadow: Optional[Dict[str, Any]] = None,
+        word_wrap: bool = True,
     ):
         if shadow and shadow.get("enabled", True):
             self._add_title_textbox(
@@ -387,11 +418,12 @@ class Renderer:
                 color=self._parse_color(shadow.get("color", "#8E96B2")),
                 line_spacing=line_spacing,
                 alignment=alignment,
+                word_wrap=word_wrap,
             )
         tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(width), Inches(height))
         tf = tb.text_frame
         tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
-        tf.word_wrap = True
+        tf.word_wrap = bool(word_wrap)
         p = tf.paragraphs[0]
         p.text = text
         p.font.name = font_family
@@ -408,6 +440,28 @@ class Renderer:
         p.space_before = Pt(0)
         p.space_after = Pt(0)
         return tb
+
+    def _single_line_text(self, text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "")).strip()
+
+    def _fit_single_line_font_size(
+        self,
+        text: str,
+        width_inches: float,
+        desired_size: float,
+        *,
+        min_key: str,
+    ) -> float:
+        clean_text = self._single_line_text(text)
+        if not clean_text or width_inches <= 0:
+            return desired_size
+        header_config = self.config.get("header_planner", {})
+        avg_char_width = float(header_config.get("title_fit_avg_char_width_em", 0.56))
+        width_safety = float(header_config.get("title_fit_width_safety", 0.94))
+        usable_width = max(width_inches * width_safety, 0.1)
+        estimated_size = (usable_width * 72) / max(len(clean_text) * avg_char_width, 1)
+        min_size = float(header_config.get(min_key, 34))
+        return max(min_size, min(float(desired_size), estimated_size))
 
     def _render_section_title(self, slide, element: Dict, state: PosterState):
         """render section title with enhanced styling"""

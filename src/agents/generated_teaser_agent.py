@@ -15,6 +15,7 @@ from src.config.poster_config import load_config
 from src.state.poster_state import PosterState
 from src.tools.image_api import ImageTools
 from src.tools.layout_api import LayoutTemplates
+from src.utils.text_cleanup import normalize_text_for_poster, repair_truncated_sentence_end
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success, log_agent_warning
 
 
@@ -62,7 +63,7 @@ class GeneratedTeaserAgent:
 
             used_fallback = self._postprocess_teaser(raw_path, final_path, width, height, state)
             self._inject_teaser_asset(state, target, asset_id, final_path, geometry)
-            summary_text = self._compress_target_section_text(target)
+            summary_text = self._compress_target_section_text(target, geometry)
 
             report = {
                 "enabled": True,
@@ -213,17 +214,41 @@ class GeneratedTeaserAgent:
 
         slot_w = max(float(region.get("w", region.get("width", 0.0)) or 0.0), 0.1)
         slot_h = max(float(region.get("h", region.get("height", 0.0)) or 0.0), 0.1)
+        orientation = str(layout.get("orientation") or "").lower()
+        if not orientation:
+            orientation = "portrait" if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0) else "landscape"
+        is_portrait = orientation == "portrait"
         layout_cfg = self.config.get("layout", {})
         padding = float((layout_cfg.get("text_padding") or {}).get("left_right", 0.24) or 0.24)
         title_gap = float(layout_cfg.get("title_to_content_spacing", 0.4) or 0.4)
         visual_gap = float((layout_cfg.get("visual_spacing") or {}).get("below_visual", 0.18) or 0.18)
         title_h = max(0.42, min(slot_h * 0.07, 0.72))
         text_h = float(self.teaser_config.get("summary_text_height_inches", 1.15) or 1.15)
-        safety = 0.18
+        safety = float(
+            self.teaser_config.get("portrait_geometry_safety_inches", 0.45)
+            if is_portrait
+            else self.teaser_config.get("geometry_safety_inches", 0.18)
+        )
         target_w = max(slot_w - 2 * padding, 1.0)
         content_h = max(slot_h - title_h - title_gap - visual_gap - safety, 1.0)
-        target_fraction = float(self.teaser_config.get("target_block_height_fraction", 0.72) or 0.72)
-        max_fraction = float(self.teaser_config.get("max_block_height_fraction", 0.74) or 0.74)
+        if is_portrait:
+            target_fraction = float(
+                self.teaser_config.get(
+                    "portrait_target_block_height_fraction",
+                    self.teaser_config.get("target_block_height_fraction", 0.72),
+                )
+                or 0.72
+            )
+            max_fraction = float(
+                self.teaser_config.get(
+                    "portrait_max_block_height_fraction",
+                    self.teaser_config.get("max_block_height_fraction", 0.74),
+                )
+                or 0.74
+            )
+        else:
+            target_fraction = float(self.teaser_config.get("target_block_height_fraction", 0.72) or 0.72)
+            max_fraction = float(self.teaser_config.get("max_block_height_fraction", 0.74) or 0.74)
         available_h = max(content_h - text_h, 0.9)
         target_h = min(slot_h * target_fraction, slot_h * max_fraction, available_h)
         target_h = max(target_h, min(slot_h * 0.55, 3.0))
@@ -240,6 +265,7 @@ class GeneratedTeaserAgent:
         return {
             "source": "template_slot",
             "template_id": template_name,
+            "orientation": orientation,
             "slot_id": str(region.get("region_id") or region.get("slot_id") or region.get("id") or ""),
             "slot_width_inches": round(slot_w, 4),
             "slot_height_inches": round(slot_h, 4),
@@ -314,9 +340,14 @@ class GeneratedTeaserAgent:
         line_count = max(2, min(7, int(len(text) / chars_per_line) + 1))
         return min(max(line_count * 0.42 + 0.25, 1.15), 3.2)
 
-    def _compress_target_section_text(self, section: Dict[str, Any]) -> List[str]:
-        max_items = max(1, int(self.teaser_config.get("summary_max_items", 2) or 2))
-        max_chars = max(80, int(self.teaser_config.get("summary_max_chars", 260) or 260))
+    def _compress_target_section_text(self, section: Dict[str, Any], geometry: Optional[Dict[str, Any]] = None) -> List[str]:
+        is_portrait = str((geometry or {}).get("orientation") or "").lower() == "portrait"
+        if is_portrait:
+            max_items = max(1, int(self.teaser_config.get("portrait_summary_max_items", self.teaser_config.get("summary_max_items", 2)) or 1))
+            max_chars = max(80, int(self.teaser_config.get("portrait_summary_max_chars", self.teaser_config.get("summary_max_chars", 260)) or 150))
+        else:
+            max_items = max(1, int(self.teaser_config.get("summary_max_items", 2) or 2))
+            max_chars = max(80, int(self.teaser_config.get("summary_max_chars", 260) or 260))
         original_items = [str(item).strip() for item in section.get("text_content") or [] if str(item).strip()]
         candidates = self._summary_sentence_candidates(original_items)
         if not candidates:
@@ -364,13 +395,13 @@ class GeneratedTeaserAgent:
         return re.sub(r"\s+", " ", value).strip()
 
     def _truncate_on_word_boundary(self, value: str, limit: int) -> str:
-        value = self._strip_markup(value)
+        value = normalize_text_for_poster(self._strip_markup(value))
         if len(value) <= limit:
             return value
         trimmed = value[: max(limit - 1, 1)].rsplit(" ", 1)[0].rstrip(" ,;:")
         if not trimmed:
             trimmed = value[: max(limit - 1, 1)].rstrip(" ,;:")
-        return f"{trimmed}."
+        return normalize_text_for_poster(repair_truncated_sentence_end(f"{trimmed.rstrip('.')}."))
 
     def _postprocess_teaser(self, raw_path: Path, final_path: Path, width: int, height: int, state: PosterState) -> bool:
         used_fallback = True

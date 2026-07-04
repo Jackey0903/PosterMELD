@@ -63,6 +63,14 @@ header_planner:
   subtitle_font_scale: 0.58
   portrait_subtitle_font_scale: 0.72
   title_subtitle_gap_inches: 0.08
+  force_single_line_title: true
+  title_fit_avg_char_width_em: 0.56
+  title_fit_width_safety: 0.94
+  title_single_line_min_font_size: 34
+  portrait_title_single_line_min_font_size: 32
+  subtitle_single_line_min_font_size: 24
+  single_line_title_gate_min_font_size: 42
+  portrait_single_line_title_gate_min_font_size: 40
   landscape_title_font_size: 100
   landscape_author_font_size: 72
   large_landscape_title_font_size: 108
@@ -781,10 +789,16 @@ generated_teaser:
   aspect: 2.7692
   target_block_height_fraction: 0.72
   max_block_height_fraction: 0.74
+  portrait_target_block_height_fraction: 0.66
+  portrait_max_block_height_fraction: 0.68
   summary_text_height_inches: 1.15
   summary_max_items: 2
   summary_max_chars: 260
+  portrait_summary_max_items: 1
+  portrait_summary_max_chars: 150
   layout_max_height_fraction: 0.76
+  portrait_layout_max_height_fraction: 0.68
+  portrait_geometry_safety_inches: 0.45
   allow_existing_visual: false
   prompt_style: "top-tier AI conference panoramic teaser banner, clean conceptual schematic, polished NeurIPS/ICLR-style visual"
 
@@ -866,6 +880,8 @@ block_refinement:
   min_extra_chars: 10
   min_missing_height_for_expand: 0.08
   vlm_underfilled_min_extra_chars: 120
+  underfilled_min_extra_chars: 70
+  expand_height_safety_inches: 0.14
   max_extra_chars_per_block: 620
   chars_per_bullet: 120
   max_new_bullets_per_block: 5
