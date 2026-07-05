@@ -79,7 +79,7 @@ header_planner:
   large_landscape_title_font_size: 108
   large_landscape_author_font_size: 50
   portrait_title_font_size: 58
-  portrait_author_font_size: 38
+  portrait_author_font_size: 44
   portrait_max_affiliation_logos: 2
   portrait_logo_strip_height_fraction: 0.30
   portrait_logo_strip_max_height_fraction: 0.40
@@ -92,7 +92,9 @@ header_planner:
   portrait_logo_strip_max_logo_fraction: 0.88
   portrait_allow_split_logos: true
   portrait_split_logo_side_width_fraction: 0.18
-  portrait_split_logo_max_side_width_fraction: 0.22
+  portrait_split_logo_max_side_width_fraction: 0.24
+  portrait_split_wide_conference_aspect_threshold: 3.0
+  portrait_split_wide_conference_side_width_fraction: 0.22
   portrait_split_logo_min_side_width_inches: 4.0
   portrait_split_title_logo_gap_inches: 0.34
   manual_affiliation_logo_overrides_auto: true

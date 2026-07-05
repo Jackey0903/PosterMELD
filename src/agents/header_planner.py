@@ -332,12 +332,14 @@ class HeaderPlanner:
     ) -> Dict[str, Any]:
         header = template_layout["header"]
         title_font_size, subtitle_font_size, author_font_size = self._font_sizes(template_layout, bool(subtitle_text))
+        conference_aspect = self._get_image_aspect_ratio(str(state.get("logo_path"))) if has_conf else 1.0
         title_box, logo_regions, alignment, physical_route = self._route_boxes(
             template_layout,
             route,
             has_conf,
             aff_logos,
             title=title,
+            conference_aspect=conference_aspect,
         )
         layout_mode = "split" if {"aff", "conf"}.issubset(set(logo_regions)) else "combined"
         logo_elements = self._logo_elements(
@@ -634,6 +636,7 @@ class HeaderPlanner:
         aff_logos: List[Dict[str, Any]],
         *,
         title: str = "",
+        conference_aspect: float = 1.0,
     ) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], str, str]:
         header = template_layout["header"]
         x0 = float(header["x"])
@@ -652,6 +655,7 @@ class HeaderPlanner:
                 has_conf,
                 aff_logos,
                 title=title,
+                conference_aspect=conference_aspect,
             )
 
         if not has_logo:
@@ -698,6 +702,7 @@ class HeaderPlanner:
         aff_logos: List[Dict[str, Any]],
         *,
         title: str = "",
+        conference_aspect: float = 1.0,
     ) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]], str, str]:
         """Map shared header route intent onto stable portrait geometry.
 
@@ -717,9 +722,15 @@ class HeaderPlanner:
             return {"x": x0, "y": y0, "w": w, "h": title_h}, {}, alignment, "portrait_full_title"
 
         if route == "split_logos" and has_conf and aff_logos:
+            side_fraction = float(self.header_config.get("portrait_split_logo_side_width_fraction", 0.15))
+            if float(conference_aspect or 1.0) >= float(self.header_config.get("portrait_split_wide_conference_aspect_threshold", 3.0)):
+                side_fraction = max(
+                    side_fraction,
+                    float(self.header_config.get("portrait_split_wide_conference_side_width_fraction", side_fraction)),
+                )
             side_w = min(
                 max(
-                    w * float(self.header_config.get("portrait_split_logo_side_width_fraction", 0.15)),
+                    w * side_fraction,
                     float(self.header_config.get("portrait_split_logo_min_side_width_inches", 3.2)),
                 ),
                 w * float(self.header_config.get("portrait_split_logo_max_side_width_fraction", 0.18)),
