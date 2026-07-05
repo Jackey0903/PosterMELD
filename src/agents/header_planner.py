@@ -398,6 +398,11 @@ class HeaderPlanner:
             author_line_count=author_line_count,
             compact_stack=compact_stack,
         )
+        title_font_family = self.config["typography"]["fonts"].get("title", "Georgia")
+        if compact_stack:
+            portrait_title_style = (self.config.get("poster_visual_style") or {}).get("portrait_header_main_title") or {}
+            if portrait_title_style.get("enabled", False):
+                title_font_family = portrait_title_style.get("font_family", title_font_family)
         plan = {
             "selected_template": template_layout.get("template_name"),
             "route": route,
@@ -412,7 +417,7 @@ class HeaderPlanner:
                 "display_text": display_title,
                 "alignment": alignment,
                 "font_size": title_font_size,
-                "font_family": self.config["typography"]["fonts"].get("title", "Georgia"),
+                "font_family": title_font_family,
                 "box_height": title_metrics["title_box_height"],
                 "single_line": title_wrap_policy == "single_line",
                 "wrap_policy": title_wrap_policy,

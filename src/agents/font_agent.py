@@ -173,6 +173,10 @@ class FontAgent:
         typography = resolve_typography_config(state, self.config)
         visual_style = resolve_poster_visual_style(state, self.config)
         main_title_style = visual_style.get("main_title", {}) if visual_style.get("enabled", False) else {}
+        title_style_override = self._portrait_header_main_title_override(element, state)
+        if title_style_override:
+            element["main_title_style_override"] = title_style_override
+            main_title_style = {**main_title_style, **title_style_override}
         element["font_family"] = main_title_style.get("font_family") or typography.get("fonts", {}).get("title", "Helvetica Neue")
         template_meta = (state or {}).get("layout_template_metadata") or {}
         header_color = (template_meta.get("style_tokens") or {}).get("header_background")
@@ -192,6 +196,16 @@ class FontAgent:
             element["subtitle_font_size"] = element.get("subtitle_font_size", max(int(element["font_size"] * 0.58), 24))
             element["alignment"] = element.get("alignment", "left")
         element["font_weight"] = "bold"
+
+    def _portrait_header_main_title_override(self, element: Dict, state: PosterState = None) -> Dict[str, Any]:
+        if not state or int(state.get("poster_height") or 0) <= int(state.get("poster_width") or 0):
+            return {}
+        if element.get("header_route") != "split_logos":
+            return {}
+        style = (self.config.get("poster_visual_style") or {}).get("portrait_header_main_title") or {}
+        if not style.get("enabled", False):
+            return {}
+        return {key: value for key, value in style.items() if key != "enabled"}
 
     def _is_dark_color(self, color: str) -> bool:
         color = (color or "").strip().lstrip("#")

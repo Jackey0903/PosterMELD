@@ -1351,10 +1351,11 @@ def test_header_planner_supports_portrait_split_logos_with_two_line_title(tmp_pa
     assert plan["title"]["single_line"] is False
     assert plan["title"]["wrap_policy"] == "two_line"
     assert "\n" in plan["title"]["display_text"]
-    assert plan["title"]["font_size"] >= 62
+    assert plan["title"]["font_size"] >= 68
+    assert plan["title"]["font_family"] == "Georgia"
     assert plan["title"]["box_height"] <= 2.0
     assert plan["authors"]["font_size"] >= 56
-    assert plan["authors"]["top_gap_inches"] <= 0.03
+    assert plan["authors"]["top_gap_inches"] == pytest.approx(0.10)
     assert plan["authors"]["word_wrap"] is True
     assert plan["authors"]["x"] == title_box["x"]
     assert plan["authors"]["w"] == title_box["w"]
@@ -1461,6 +1462,26 @@ def test_font_agent_preserves_header_plan_typography():
     assert element["author_font_size"] == 42
     assert element["subtitle_font_size"] == 35
     assert element["alignment"] == "center"
+
+
+def test_font_agent_applies_portrait_header_wordart_override():
+    agent = FontAgent()
+    state = create_state("/tmp/paper.pdf", width=27, height=54, poster_style_preset="teal_modern")
+    element = {
+        "type": "title",
+        "content": "Short Title\nAuthors",
+        "font_size": 68,
+        "author_font_size": 42,
+        "header_route": "split_logos",
+        "lock_header_typography": True,
+    }
+
+    agent._apply_title_styling(element, {"text_on_theme": "#000000"}, state)
+
+    assert element["font_family"] == "Georgia"
+    assert element["font_color"] == "#4A1020"
+    assert element["main_title_style_override"]["font_family"] == "Georgia"
+    assert element["main_title_style_override"]["author_font_color"] == "#211517"
 
 
 def test_layout_agent_section_title_uses_navy_band_wordart():
@@ -1895,6 +1916,45 @@ def test_renderer_main_title_visual_style_overrides_element_color():
     paragraph = title_box.text_frame.paragraphs[0]
     assert paragraph.font.name == "Georgia"
     assert str(paragraph.font.color.rgb) == "07164A"
+
+
+def test_renderer_allows_portrait_header_wordart_override():
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    renderer = Renderer()
+    renderer.styling_interfaces = {"font_sizes": {"title": 100, "authors": 72}}
+    renderer.visual_style_config = {
+        "enabled": True,
+        "main_title": {
+            "font_family": "Helvetica Neue",
+            "font_color": "#0B2F36",
+            "author_font_family": "Arial",
+            "author_font_color": "#27343A",
+        },
+    }
+    element = {
+        "type": "title",
+        "x": 1,
+        "y": 1,
+        "width": 12,
+        "height": 4,
+        "content": "Styled Title\nA. Author",
+        "font_color": "#FFFFFF",
+        "font_family": "Helvetica Neue",
+        "main_title_style_override": {
+            "font_family": "Georgia",
+            "font_color": "#4A1020",
+            "author_font_color": "#211517",
+        },
+    }
+
+    renderer._render_title(slide, element, create_state("/tmp/paper.pdf", poster_style_preset="teal_modern"))
+
+    title_box = slide.shapes[-2]
+    author_box = slide.shapes[-1]
+    assert title_box.text_frame.paragraphs[0].font.name == "Georgia"
+    assert str(title_box.text_frame.paragraphs[0].font.color.rgb) == "4A1020"
+    assert str(author_box.text_frame.paragraphs[0].font.color.rgb) == "211517"
 
 
 def test_renderer_tokenizer_consumes_malformed_markdown_marker():

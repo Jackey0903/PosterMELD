@@ -203,6 +203,9 @@ class Renderer:
         author_font_size = element.get("author_font_size", author_font_size)
         style_enabled = self.visual_style_config.get("enabled", False)
         title_style = self.visual_style_config.get("main_title", {}) if style_enabled else {}
+        title_style_override = element.get("main_title_style_override") or {}
+        if isinstance(title_style_override, dict):
+            title_style = {**title_style, **title_style_override}
         title_font_family = title_style.get("font_family") or element.get("font_family", "Georgia")
         author_font_family = title_style.get("author_font_family") or element.get("author_font_family", "Arial")
         title_color = self._parse_color(title_style.get("font_color") or element.get("font_color", "#07164A"))

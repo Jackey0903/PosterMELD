@@ -67,7 +67,7 @@ header_planner:
   force_single_line_title: true
   title_fit_avg_char_width_em: 0.56
   wrapped_title_fit_avg_char_width_em: 0.48
-  portrait_wrapped_title_fit_avg_char_width_em: 0.44
+  portrait_wrapped_title_fit_avg_char_width_em: 0.40
   title_fit_width_safety: 0.94
   title_single_line_min_font_size: 34
   portrait_title_single_line_min_font_size: 32
@@ -79,9 +79,9 @@ header_planner:
   landscape_author_font_size: 72
   large_landscape_title_font_size: 108
   large_landscape_author_font_size: 50
-  portrait_title_font_size: 66
+  portrait_title_font_size: 72
   portrait_author_font_size: 56
-  portrait_title_author_gap_inches: 0.02
+  portrait_title_author_gap_inches: 0.10
   portrait_title_line_height_em: 1.00
   portrait_author_line_height_em: 1.04
   portrait_author_max_lines: 2
@@ -327,6 +327,17 @@ poster_visual_style:
     shadow:
       enabled: true
       color: "#AEB5CC"
+      offset_x_inches: 0.035
+      offset_y_inches: 0.035
+  portrait_header_main_title:
+    enabled: true
+    font_family: "Georgia"
+    font_color: "#4A1020"
+    author_font_family: "Arial"
+    author_font_color: "#211517"
+    shadow:
+      enabled: true
+      color: "#D8B7BE"
       offset_x_inches: 0.035
       offset_y_inches: 0.035
   section_title:
