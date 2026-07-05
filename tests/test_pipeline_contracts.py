@@ -1562,6 +1562,38 @@ def test_layout_agent_section_title_default_strips_existing_number_prefix():
     assert title["section_numbering_mode"] == "off"
 
 
+def test_layout_agent_portrait_section_title_uses_wordart_font_override():
+    agent = LayoutAgent()
+    state = create_state("/tmp/paper.pdf", width=27, height=54, poster_style_preset="teal_modern")
+    agent._apply_state_style(state)
+    state["section_title_design"] = {
+        "section_title_design": {
+            "section_applications": [
+                {
+                    "section_id": "method",
+                    "title_styling": {"font_family": "Helvetica Neue", "color": "#FFFFFF"},
+                    "accent_styling": {"color": "#0B4F5C"},
+                }
+            ]
+        }
+    }
+    section = {
+        "section_id": "method",
+        "section_title": "Method",
+        "column_assignment": "slot_3",
+        "slot_id": "slot_3",
+    }
+
+    elements = agent._create_section_title_design(section, column_x=1.0, start_y=2.0, column_width=6.0, state=state)
+
+    bar = next(element for element in elements if element["type"] == "title_accent_block")
+    title = next(element for element in elements if element["type"] == "section_title")
+    assert bar["color"] == "#0B4F5C"
+    assert title["font_family"] == "Georgia"
+    assert title["font_color"] == "#FFFFFF"
+    assert title["wordart_style"]["shadow"]["color"] == "#9FB7BC"
+
+
 def test_section_title_designer_emits_navy_band_template():
     state = create_state("/tmp/paper.pdf")
     state["story_board"] = {

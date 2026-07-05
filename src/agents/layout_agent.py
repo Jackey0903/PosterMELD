@@ -1255,6 +1255,9 @@ class LayoutAgent:
         title_styling = section_app.get("title_styling", {})
         accent_styling = section_app.get("accent_styling", {})
         section_style = self.visual_style_config.get("section_title", {}) if self.visual_style_config.get("enabled", False) else {}
+        portrait_section_title_style = self._portrait_section_title_style_override(state)
+        if portrait_section_title_style:
+            section_style = {**section_style, **portrait_section_title_style}
 
         section_title_font_size = title_styling.get(
             "font_size",
@@ -1292,10 +1295,19 @@ class LayoutAgent:
             "lane_id": section.get("column_assignment"),
             "slot_id": section.get("slot_id"),
             "section_title": display_title,
-            "font_family": title_styling.get("font_family", section_style.get("font_family", self.section_title_font_family)),
+            "font_family": portrait_section_title_style.get(
+                "font_family",
+                title_styling.get("font_family", section_style.get("font_family", self.section_title_font_family)),
+            ),
             "font_size": section_title_font_size,
-            "font_weight": title_styling.get("font_weight", section_style.get("font_weight", "bold")),
-            "font_color": title_styling.get("color", section_style.get("font_color", "#FFFFFF")),
+            "font_weight": portrait_section_title_style.get(
+                "font_weight",
+                title_styling.get("font_weight", section_style.get("font_weight", "bold")),
+            ),
+            "font_color": portrait_section_title_style.get(
+                "font_color",
+                title_styling.get("color", section_style.get("font_color", "#FFFFFF")),
+            ),
             "alignment": title_styling.get("alignment", section_style.get("alignment", "left")),
             "section_number": title_label.get("number"),
             "section_numbering_mode": title_label.get("numbering_mode"),
@@ -1313,6 +1325,14 @@ class LayoutAgent:
         elements.append(title_element)
         
         return elements
+
+    def _portrait_section_title_style_override(self, state: PosterState) -> Dict[str, Any]:
+        if int(state.get("poster_height") or 0) <= int(state.get("poster_width") or 0):
+            return {}
+        style = (self.config.get("poster_visual_style") or {}).get("portrait_header_section_title") or {}
+        if not style.get("enabled", False):
+            return {}
+        return {key: value for key, value in style.items() if key != "enabled"}
 
     def _section_title_label(self, section: Dict[str, Any], title: str, state: PosterState) -> Dict[str, Any]:
         raw_title = str(title or "").strip()
