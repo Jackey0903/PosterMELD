@@ -256,6 +256,9 @@ class Renderer:
                     self.typography_config.get("title_author_gap_points", 16) / 72,
                 )
             )
+            author_x = float(element.get("author_x")) if element.get("author_x") is not None else x.inches
+            author_width = float(element.get("author_width")) if element.get("author_width") is not None else w.inches
+            author_word_wrap = bool(element.get("author_word_wrap", False))
             title_box_height = float(
                 element.get("title_box_height")
                 or max(h.inches - subtitle_box_height - subtitle_gap_inches - author_gap_inches - author_box_height, h.inches * 0.45)
@@ -308,9 +311,9 @@ class Renderer:
                     slide,
                     authors_text,
                     element,
-                    x.inches,
+                    author_x,
                     cursor_y,
-                    w.inches,
+                    author_width,
                     min(author_box_height, max(y.inches + h.inches - cursor_y, 0.35)),
                     font_size=author_font_size,
                     font_family=author_font_family,
@@ -318,6 +321,7 @@ class Renderer:
                     color=author_color,
                     line_spacing=self.typography_config["line_spacing"] + 0.1,
                     alignment=alignment,
+                    word_wrap=author_word_wrap,
                 )
             return
 
@@ -330,6 +334,9 @@ class Renderer:
             )
             author_box_height = max((float(author_font_size) / 72) * 1.15, 0.55)
             author_box_height = min(author_box_height, max(h.inches * 0.32, 0.55))
+            author_x = float(element.get("author_x")) if element.get("author_x") is not None else x.inches
+            author_width = float(element.get("author_width")) if element.get("author_width") is not None else w.inches
+            author_word_wrap = bool(element.get("author_word_wrap", False))
             title_box_height = max(h.inches - author_box_height - author_gap_inches, h.inches * 0.55)
             if title_box_height + author_gap_inches + author_box_height > h.inches:
                 title_box_height = max(h.inches - author_gap_inches - author_box_height, h.inches * 0.45)
@@ -356,9 +363,9 @@ class Renderer:
                 slide,
                 authors_text.strip(),
                 element,
-                x.inches,
+                author_x,
                 author_y,
-                w.inches,
+                author_width,
                 min(author_box_height, max(y.inches + h.inches - author_y, 0.4)),
                 font_size=author_font_size,
                 font_family=author_font_family,
@@ -366,6 +373,7 @@ class Renderer:
                 color=author_color,
                 line_spacing=self.typography_config["line_spacing"] + 0.1,
                 alignment=alignment,
+                word_wrap=author_word_wrap,
             )
             return
 
@@ -426,6 +434,10 @@ class Renderer:
         tf = tb.text_frame
         tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
         tf.word_wrap = bool(word_wrap)
+        tf.margin_left = Inches(0)
+        tf.margin_right = Inches(0)
+        tf.margin_top = Inches(0)
+        tf.margin_bottom = Inches(0)
         p = tf.paragraphs[0]
         p.text = text
         p.font.name = font_family

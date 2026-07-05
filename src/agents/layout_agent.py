@@ -747,6 +747,9 @@ class LayoutAgent:
                 "title_box_height": title.get("box_height"),
                 "title_to_subtitle_gap_inches": subtitle.get("top_gap_inches", 0.0),
                 "author_font_size": authors.get("font_size", 72),
+                "author_x": authors.get("x"),
+                "author_width": authors.get("w"),
+                "author_word_wrap": authors.get("word_wrap", False),
                 "author_box_height": authors.get("box_height"),
                 "author_top_gap_inches": authors.get(
                     "top_gap_inches",

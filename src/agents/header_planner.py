@@ -351,6 +351,10 @@ class HeaderPlanner:
             affiliation_logo_scale=affiliation_logo_scale,
             conference_logo_scale=conference_logo_scale,
         )
+        compact_stack = self._uses_compact_portrait_header_stack(template_layout, physical_route)
+        if compact_stack:
+            text_band = self._portrait_split_text_band(title_box, logo_elements)
+            title_box = {**title_box, "x": text_band["x"], "w": text_band["w"]}
         title_wrap_policy = self._resolve_title_wrap_policy(state, template_layout, route, physical_route)
         display_title = self._display_title_text(title, title_wrap_policy)
         if title_wrap_policy == "single_line":
@@ -375,7 +379,25 @@ class HeaderPlanner:
                 template_layout,
                 min_key="subtitle_single_line_min_font_size",
             )
-        title_metrics = self._title_metrics(title_box["h"], title_font_size, subtitle_font_size, author_font_size, bool(subtitle_text))
+        author_box = self._author_box_for_plan(template_layout, title_box, logo_elements, physical_route)
+        author_font_size, author_line_count = self._fit_author_font_size(
+            authors,
+            author_box["w"],
+            author_font_size,
+            template_layout,
+            physical_route,
+        )
+        title_line_count = max(1, len([line for line in str(display_title or title).splitlines() if line.strip()]))
+        title_metrics = self._title_metrics(
+            title_box["h"],
+            title_font_size,
+            subtitle_font_size,
+            author_font_size,
+            bool(subtitle_text),
+            title_line_count=title_line_count,
+            author_line_count=author_line_count,
+            compact_stack=compact_stack,
+        )
         plan = {
             "selected_template": template_layout.get("template_name"),
             "route": route,
@@ -405,6 +427,10 @@ class HeaderPlanner:
             "authors": {
                 "text": authors,
                 "font_size": author_font_size,
+                "x": author_box["x"],
+                "w": author_box["w"],
+                "word_wrap": author_line_count > 1,
+                "line_count": author_line_count,
                 "box_height": title_metrics["author_box_height"],
                 "top_gap_inches": title_metrics["author_top_gap_inches"],
             },
@@ -509,7 +535,15 @@ class HeaderPlanner:
         ]
         if not clean_lines or width_inches <= 0:
             return int(desired_size)
-        avg_char_width = float(self.header_config.get("wrapped_title_fit_avg_char_width_em", 0.48))
+        if template_layout.get("orientation") == "portrait":
+            avg_char_width = float(
+                self.header_config.get(
+                    "portrait_wrapped_title_fit_avg_char_width_em",
+                    self.header_config.get("wrapped_title_fit_avg_char_width_em", 0.48),
+                )
+            )
+        else:
+            avg_char_width = float(self.header_config.get("wrapped_title_fit_avg_char_width_em", 0.48))
         width_safety = float(self.header_config.get("title_fit_width_safety", 0.94))
         usable_width = max(width_inches * width_safety, 0.1)
         max_line_len = max(len(line) for line in clean_lines)
@@ -969,6 +1003,69 @@ class HeaderPlanner:
             })
         return elements
 
+    def _uses_compact_portrait_header_stack(self, template_layout: Dict[str, Any], physical_route: str) -> bool:
+        return (
+            template_layout.get("orientation") == "portrait"
+            and str(physical_route).startswith("portrait_split_logos")
+        )
+
+    def _author_box_for_plan(
+        self,
+        template_layout: Dict[str, Any],
+        title_box: Dict[str, float],
+        logo_elements: List[Dict[str, Any]],
+        physical_route: str,
+    ) -> Dict[str, float]:
+        if not self._uses_compact_portrait_header_stack(template_layout, physical_route):
+            return {"x": title_box["x"], "w": title_box["w"]}
+        return self._portrait_split_text_band(title_box, logo_elements)
+
+    def _portrait_split_text_band(
+        self,
+        title_box: Dict[str, float],
+        logo_elements: List[Dict[str, Any]],
+    ) -> Dict[str, float]:
+        non_divider_logos = [element for element in logo_elements if element.get("type") != "logo_divider"]
+        if len(non_divider_logos) < 2:
+            return {"x": title_box["x"], "w": title_box["w"]}
+
+        left_logo = min(non_divider_logos, key=lambda item: float(item.get("x", 0.0) or 0.0))
+        right_logo = max(non_divider_logos, key=lambda item: float(item.get("x", 0.0) or 0.0))
+        gap = float(self.header_config.get("min_title_logo_gap_inches", 0.20))
+        x = float(left_logo.get("x", 0.0) or 0.0) + float(left_logo.get("width", 0.0) or 0.0) + gap
+        right = float(right_logo.get("x", title_box["x"] + title_box["w"]) or title_box["x"] + title_box["w"]) - gap
+        if right - x < title_box["w"]:
+            return {"x": title_box["x"], "w": title_box["w"]}
+        return {"x": x, "w": right - x}
+
+    def _fit_author_font_size(
+        self,
+        authors: str,
+        width_inches: float,
+        desired_size: int,
+        template_layout: Dict[str, Any],
+        physical_route: str,
+    ) -> Tuple[int, int]:
+        if not self._uses_compact_portrait_header_stack(template_layout, physical_route):
+            return int(desired_size), 1
+
+        clean_text = re.sub(r"\s+", " ", str(authors or "")).strip()
+        if not clean_text or width_inches <= 0:
+            return int(desired_size), 1
+
+        max_lines = max(1, int(self.header_config.get("portrait_author_max_lines", 2)))
+        min_size = int(self.header_config.get("portrait_author_min_font_size", 46))
+        avg_char_width = float(self.header_config.get("author_fit_avg_char_width_em", 0.44))
+        width_safety = float(self.header_config.get("author_fit_width_safety", 0.96))
+        usable_width = max(width_inches * width_safety, 0.1)
+        target_size = int(desired_size)
+        for size in range(target_size, min_size - 1, -1):
+            chars_per_line = max(int((usable_width * 72) / max(size * avg_char_width, 1)), 1)
+            line_count = max(1, (len(clean_text) + chars_per_line - 1) // chars_per_line)
+            if line_count <= max_lines:
+                return size, line_count
+        return min_size, max_lines
+
     def _title_metrics(
         self,
         box_height: float,
@@ -976,12 +1073,33 @@ class HeaderPlanner:
         subtitle_font_size: int,
         author_font_size: int,
         has_subtitle: bool,
+        *,
+        title_line_count: int = 1,
+        author_line_count: int = 1,
+        compact_stack: bool = False,
     ) -> Dict[str, float]:
         author_gap = float(self.config["typography"].get("title_author_gap_points", 16)) / 72
+        if compact_stack:
+            author_gap = float(self.header_config.get("portrait_title_author_gap_inches", author_gap))
         subtitle_gap = float(self.header_config.get("title_subtitle_gap_inches", 0.08)) if has_subtitle else 0.0
-        author_box_h = min(max((author_font_size / 72) * 1.12, 0.45), max(box_height * 0.30, 0.45))
+        author_line_height = float(
+            self.header_config.get("portrait_author_line_height_em", 1.08) if compact_stack else 1.12
+        )
+        author_box_h = min(
+            max((author_font_size / 72) * author_line_height * max(author_line_count, 1), 0.45),
+            max(box_height * (0.42 if compact_stack else 0.30), 0.45),
+        )
         subtitle_box_h = max((subtitle_font_size / 72) * 1.12, 0.36) if has_subtitle else 0.0
-        title_box_h = max(box_height - subtitle_gap - subtitle_box_h - author_gap - author_box_h, box_height * 0.46)
+        if compact_stack:
+            title_line_height = float(self.header_config.get("portrait_title_line_height_em", 1.05))
+            desired_title_h = max(
+                (title_font_size / 72) * title_line_height * max(title_line_count, 1),
+                box_height * 0.28,
+            )
+            available_title_h = max(box_height - subtitle_gap - subtitle_box_h - author_gap - author_box_h, 0.45)
+            title_box_h = min(max(desired_title_h, box_height * 0.28), available_title_h)
+        else:
+            title_box_h = max(box_height - subtitle_gap - subtitle_box_h - author_gap - author_box_h, box_height * 0.46)
         if title_box_h + subtitle_gap + subtitle_box_h + author_gap + author_box_h > box_height:
             title_box_h = max(box_height - subtitle_gap - subtitle_box_h - author_gap - author_box_h, box_height * 0.38)
         return {

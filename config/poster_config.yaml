@@ -67,6 +67,7 @@ header_planner:
   force_single_line_title: true
   title_fit_avg_char_width_em: 0.56
   wrapped_title_fit_avg_char_width_em: 0.48
+  portrait_wrapped_title_fit_avg_char_width_em: 0.44
   title_fit_width_safety: 0.94
   title_single_line_min_font_size: 34
   portrait_title_single_line_min_font_size: 32
@@ -78,8 +79,13 @@ header_planner:
   landscape_author_font_size: 72
   large_landscape_title_font_size: 108
   large_landscape_author_font_size: 50
-  portrait_title_font_size: 58
-  portrait_author_font_size: 44
+  portrait_title_font_size: 66
+  portrait_author_font_size: 56
+  portrait_title_author_gap_inches: 0.02
+  portrait_title_line_height_em: 1.00
+  portrait_author_line_height_em: 1.04
+  portrait_author_max_lines: 2
+  portrait_author_min_font_size: 46
   portrait_max_affiliation_logos: 2
   portrait_logo_strip_height_fraction: 0.30
   portrait_logo_strip_max_height_fraction: 0.40

@@ -1351,8 +1351,13 @@ def test_header_planner_supports_portrait_split_logos_with_two_line_title(tmp_pa
     assert plan["title"]["single_line"] is False
     assert plan["title"]["wrap_policy"] == "two_line"
     assert "\n" in plan["title"]["display_text"]
-    assert plan["title"]["font_size"] >= 44
-    assert plan["authors"]["font_size"] >= 44
+    assert plan["title"]["font_size"] >= 62
+    assert plan["title"]["box_height"] <= 2.0
+    assert plan["authors"]["font_size"] >= 56
+    assert plan["authors"]["top_gap_inches"] <= 0.03
+    assert plan["authors"]["word_wrap"] is True
+    assert plan["authors"]["x"] == title_box["x"]
+    assert plan["authors"]["w"] == title_box["w"]
     assert len(institution_logos) == 1
     assert institution_logos[0]["image_path"] == str(manual_aff_path)
     assert institution_logos[0]["source"] == "manual"
