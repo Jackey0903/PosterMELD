@@ -497,7 +497,7 @@ class Renderer:
         font_family = element.get("font_family") or section_style.get("font_family", "Georgia")
         font_weight = element.get("font_weight", section_style.get("font_weight", "bold"))
         font_color = element.get("font_color") or section_style.get("font_color", "#FFFFFF")
-        alignment = element.get("alignment", section_style.get("alignment", "left")).lower()
+        alignment = element.get("alignment", section_style.get("alignment", "center")).lower()
         wordart_style = element.get("wordart_style") or {}
         shadow = wordart_style.get("shadow") or section_style.get("shadow")
         number_text = str(element.get("section_number") or "").strip()

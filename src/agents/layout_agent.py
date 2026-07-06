@@ -1308,7 +1308,7 @@ class LayoutAgent:
                 "font_color",
                 title_styling.get("color", section_style.get("font_color", "#FFFFFF")),
             ),
-            "alignment": title_styling.get("alignment", section_style.get("alignment", "left")),
+            "alignment": "center",
             "section_number": title_label.get("number"),
             "section_numbering_mode": title_label.get("numbering_mode"),
             "section_number_font_scale": float(section_style.get("small_number_font_scale", 0.62)),

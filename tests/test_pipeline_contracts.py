@@ -4393,6 +4393,129 @@ def test_micro_layout_refiner_uses_portrait_split_for_wide_shallow_figure_block(
     assert visual["visual_footprint"]["ok"] is True
 
 
+def test_micro_layout_refiner_portrait_wide_columns_fill_bottom_with_dense_content():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_13_portrait", width=36, height=51)
+    section_lines = [
+        "Evaluation uses 16,000 St. Louis residential rental properties with tabular records and overhead imagery.",
+        "<color:#7A1F2B>HAGS</color> gives the strongest yield across all shown search budgets.",
+        "The gains are largest when outreach budgets are tight and every visit must count.",
+        "Compared with greedy and conventional active-search baselines, HAGS keeps improving as the budget grows.",
+        "Operational takeaway: prioritize regions first, then parcels, to turn scarce canvassing visits into more tenant-support opportunities.",
+        "In uniform-cost search, HAGS consistently outperforms all baselines, including conventional active search, greedy adaptive search, and the non-hierarchical AGS model.",
+    ]
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "sec_results",
+                    "section_title": "City Results",
+                    "content_role": "results",
+                    "text_content": section_lines,
+                    "source_sections": ["Results"],
+                }
+            ]
+        }
+    }
+    state["structured_sections"] = {
+        "paper_sections": [
+            {
+                "section_name": "Results",
+                "section_type": "results",
+                "key_points": [
+                    "The results are for positive rates of 5% and 10%, respectively.",
+                    "HAGS stays strongest across the displayed query budgets.",
+                    "The hierarchy matters most when outreach visits are scarce.",
+                    "Region-first search avoids spending budget in low-yield areas.",
+                    "Parcel-level updates exploit each new observation immediately.",
+                    "Travel-aware settings amplify the gains over greedy baselines.",
+                ],
+            }
+        ]
+    }
+    lane = {"id": "slot_4", "x": 1.0, "y": 30.0, "w": 34.0, "h": 20.0}
+    params = {
+        "section_gap": 1.0,
+        "title_to_content_gap": 0.4,
+        "visual_gap": 0.3,
+        "text_padding": 0.3,
+        "body_font_reduction": 0,
+        "title_font_reduction": 0,
+        "body_font_boost": 0,
+        "title_font_boost": 0,
+        "visual_scale": 1.0,
+    }
+    text_elements = [
+        {
+            "type": "text",
+            "id": "sec_results_text",
+            "section_id": "sec_results",
+            "lane_id": "slot_4",
+            "content": "\n".join(section_lines),
+            "font_family": "Arial",
+            "font_size": 40,
+            "line_spacing": 0.96,
+        }
+    ]
+
+    result = refiner._layout_wide_text_columns_for_fill(
+        text_elements,
+        lane,
+        current_y=39.5,
+        state=state,
+        params=params,
+        template_layout={"template_name": "cluster_13_portrait", "orientation": "portrait", "layout_mode": "template_prior"},
+        section_id="sec_results",
+        is_last_group=True,
+    )
+
+    assert result is not None
+    column_elements, _, content_bottom = result
+    assert lane["y"] + lane["h"] - content_bottom <= 0.18
+    assert sum(len(element["content"].splitlines()) for element in column_elements) >= 10
+
+
+def test_micro_layout_refiner_portrait_text_fill_uses_fine_line_spacing_step():
+    refiner = MicroLayoutRefiner()
+    text_element = {
+        "type": "text",
+        "id": "sec_core_method_text",
+        "section_id": "sec_core_method",
+        "lane_id": "slot_2",
+        "width": 16.4,
+        "content": "\n".join(
+            [
+                "<color:#7A1F2B>AGS</color> couples exploration and exploitation: each query discovers a current eviction-risk case and improves future predictions.",
+                "The predictor estimates parcel risk from tabular records and overhead imagery.",
+                "The search policy chooses the next parcel under remaining budget and observed labels.",
+                "Each query updates the model, so the route can shift as new evidence arrives.",
+                "Region-level choices avoid spending visits in low-yield parts of the city.",
+                "AGS explicitly couples exploration and exploitation: each query both discovers a current eviction-risk case and improves future predictions from newly observed labels.",
+                "Predict risk; query a parcel, then update the route.",
+            ]
+        ),
+        "font_family": "Arial",
+        "font_size": 42,
+        "line_spacing": 0.98,
+    }
+    state = {"story_board": {}, "structured_sections": {}, "narrative_content": {}}
+
+    updated, font_size, line_spacing = refiner._expand_text_content_to_fill(
+        text_element,
+        "sec_core_method",
+        state,
+        text_width=16.4,
+        font_size=42,
+        line_spacing=0.98,
+        max_height=12.7025,
+        template_layout={"template_name": "cluster_13_portrait", "orientation": "portrait", "layout_mode": "template_prior"},
+    )
+
+    assert updated["content"] == text_element["content"]
+    assert font_size == 42
+    assert line_spacing == pytest.approx(0.99)
+
+
 def test_micro_layout_refiner_uses_conservative_portrait_text_measurement():
     refiner = MicroLayoutRefiner()
     text = (
@@ -5002,6 +5125,16 @@ def test_final_quality_gate_allows_readable_single_line_title_too_small_vlm_stat
     state["template_layout_mode"] = "template_prior"
     state["final_poster_accepted"] = True
     state["layout_template_metadata"]["orientation"] = "portrait"
+    state["styled_layout"][1].update(
+        {
+            "y": 2.1,
+            "height": 29.8,
+            "content": "\n".join(
+                f"Filled factual line {index} with method detail and evidence."
+                for index in range(1, 30)
+            ),
+        }
+    )
     state["header_plan"] = {"title": {"single_line": True, "font_size": 45}}
     state["vlm_layout_review"] = {"global_assessment": {"title_readability": "too_small"}}
     content_dir = Path(state["output_dir"]) / "content"

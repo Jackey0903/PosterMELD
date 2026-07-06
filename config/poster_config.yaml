@@ -356,7 +356,7 @@ poster_visual_style:
     font_size: 48
     font_weight: "bold"
     font_color: "#FFFFFF"
-    alignment: "left"
+    alignment: "center"
     bar_fill_color: "#06134A"
     bar_height_inches: 0.78
     horizontal_padding_inches: 0.28
@@ -1010,8 +1010,20 @@ micro_layout_refinement:
   bottom_fill_wide_min_width_inches: 24
   bottom_fill_font_size: 38
   bottom_fill_line_spacing: 0.9
-  bottom_edge_fill_min_gap_inches: 0.18
-  bottom_edge_fill_height_inches: 0.08
+  real_content_fill_enabled: true
+  real_content_fill_portrait_only: true
+  real_content_fill_disable_portrait_bottom_fill: true
+  real_content_fill_threshold_inches: 0.16
+  real_content_fill_target_slack_inches: 0.12
+  portrait_real_content_fill_threshold_inches: 0.04
+  portrait_real_content_fill_target_slack_inches: 0.04
+  real_content_fill_max_sentences: 16
+  real_content_fill_max_chars: 190
+  real_content_fill_max_line_spacing: 1.16
+  real_content_fill_max_font_boost: 4
+  wide_text_columns_min_width_inches: 24
+  wide_text_columns_gap_inches: 0.42
+  wide_text_columns_min_height_inches: 2.2
 
 # spacing presets
 spacing_presets:

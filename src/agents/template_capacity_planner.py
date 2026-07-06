@@ -450,8 +450,30 @@ class TemplateCapacityPlanner:
         title_height = float(block_cfg.get("title_height_inches", 1.0))
         gap = float(block_cfg.get("title_content_gap_inches", 0.4))
         padding = float(block_cfg.get("section_padding_inches", 0.4))
+        orientation = str(region.get("poster_orientation") or "").lower()
+        if not orientation:
+            orientation = "portrait" if height > width else "landscape"
+        footprint_cfg = visual_footprint_config(self.config)
+        usable_width = max(width - padding * 2, 0.5)
+        split_text_width = usable_width
+        portrait_side_by_side_figure = False
+        if orientation == "portrait" and "figure" in str(visual_policy or ""):
+            split_min_width = float(footprint_cfg.get("portrait_split_min_width_inches", 18.0) or 18.0)
+            split_min_height = float(footprint_cfg.get("portrait_split_min_height_inches", 4.8) or 4.8)
+            split_min_aspect = float(footprint_cfg.get("portrait_split_min_aspect", 2.35) or 2.35)
+            if width >= split_min_width and height >= split_min_height and width / max(height, 0.01) >= split_min_aspect:
+                split_gap = float(footprint_cfg.get("portrait_split_gap_inches", 0.45) or 0.45)
+                visual_fraction = float(footprint_cfg.get("portrait_split_visual_width_fraction", 0.48) or 0.48)
+                min_text_width = float(footprint_cfg.get("portrait_split_min_text_width_inches", 8.0) or 8.0)
+                split_visual_width = min(
+                    usable_width * visual_fraction,
+                    usable_width - split_gap - min_text_width,
+                )
+                if split_visual_width > 0:
+                    split_text_width = max(usable_width - split_visual_width - split_gap, min_text_width)
+                    portrait_side_by_side_figure = True
         visual_reserved = 0.0
-        if "figure" in visual_policy:
+        if "figure" in visual_policy and not portrait_side_by_side_figure:
             footprint = visual_requirements("figure_contract", {"asset_type": "figure"}, region, self.config)
             visual_reserved = max(height * 0.58, float(footprint.get("min_height") or 0.0))
         elif "table" in visual_policy:
@@ -459,7 +481,7 @@ class TemplateCapacityPlanner:
             visual_reserved = max(height * 0.50, float(footprint.get("min_height") or 0.0))
         line_height = max((float((typography.get("sizes") or {}).get("body_text", 44)) / 72.0) * 1.05, 0.32)
         chars_per_inch = self._chars_per_inch(region)
-        chars_per_line = max(20, int(max(width - padding * 2, 0.5) * chars_per_inch))
+        chars_per_line = max(20, int(max(split_text_width, 0.5) * chars_per_inch))
         text_height_budget = max(target_used_height - title_height - gap - padding - visual_reserved, line_height)
         target_lines = max(1, int(math.floor(text_height_budget / line_height)))
         target_chars = int(target_lines * chars_per_line * float(block_cfg.get("safety_factor", 0.82)))

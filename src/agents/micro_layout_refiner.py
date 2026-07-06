@@ -735,6 +735,7 @@ class MicroLayoutRefiner:
                     child["height"] = title_height
                     child["width"] = max(lane["w"] - (child["x"] - lane["x"]) - params["text_padding"], 0.5)
                     child["font_size"] = title_font_size
+                    child["alignment"] = "center"
                 else:
                     child["x"] = lane["x"] + child_x_offset
                     child["y"] = section_y + child_y_offset
@@ -772,6 +773,7 @@ class MicroLayoutRefiner:
                 state,
                 params,
                 template_layout,
+                section_id,
             )
             if split_tail:
                 tail_elements, current_y, content_bottom = split_tail
@@ -805,7 +807,22 @@ class MicroLayoutRefiner:
                     current_y = visual["y"] + visual["height"] + params["visual_gap"]
                     content_bottom = max(content_bottom, visual["y"] + visual["height"])
 
-        for text_element in text_elements:
+        wide_text_columns = self._layout_wide_text_columns_for_fill(
+            text_elements,
+            lane,
+            current_y,
+            state,
+            params,
+            template_layout,
+            section_id,
+            is_last_group,
+        )
+        if wide_text_columns:
+            column_elements, current_y, content_bottom = wide_text_columns
+            rebuilt_children.extend(column_elements)
+            text_elements = []
+
+        for index, text_element in enumerate(text_elements):
             original_font_size = int(text_element.get("font_size", self.typography_config["sizes"]["body_text"]))
             font_size = max(
                 self._min_body_font_size(template_layout),
@@ -813,13 +830,31 @@ class MicroLayoutRefiner:
             )
             font_size = min(self.refine_config.get("max_body_font_size", font_size), font_size)
             text_width = max(lane["w"] - 2 * params["text_padding"], 0.5)
+            line_spacing = float(text_element.get("line_spacing", 1.0) or 1.0)
+            if is_last_group and index == len(text_elements) - 1:
+                target_bottom = (
+                    float(lane["y"])
+                    + float(lane["h"])
+                    - float(self.refine_config.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06)
+                )
+                max_text_height = max(target_bottom - current_y, 0.2)
+                text_element, font_size, line_spacing = self._expand_text_content_to_fill(
+                    text_element,
+                    section_id,
+                    state,
+                    text_width,
+                    font_size,
+                    line_spacing,
+                    max_text_height,
+                    template_layout,
+                )
             plain_text = self._strip_markup_for_measurement(text_element.get("content", ""))
             measured = self._measure_text_height_for_refinement(
                 text_content=plain_text,
                 width_inches=text_width,
                 font_name=text_element.get("font_family", self.typography_config["fonts"]["body_text"]),
                 font_size=font_size,
-                line_spacing=text_element.get("line_spacing", 1.0),
+                line_spacing=line_spacing,
                 template_layout=template_layout,
             )
 
@@ -831,6 +866,7 @@ class MicroLayoutRefiner:
                 + self.refine_config.get("text_height_safety_padding", 0.05)
             )
             text_element["font_size"] = font_size
+            text_element["line_spacing"] = line_spacing
 
             rebuilt_children.append(text_element)
             current_y = text_element["y"] + text_element["height"]
@@ -867,7 +903,470 @@ class MicroLayoutRefiner:
 
     def _is_generated_bottom_fill(self, element: Dict[str, Any]) -> bool:
         element_id = str(element.get("id") or "")
-        return element_id.endswith("_bottom_takeaway") or "_bottom_fill_" in element_id
+        return (
+            element_id.endswith("_bottom_takeaway")
+            or "_bottom_fill_" in element_id
+            or element_id.endswith("_bottom_edge_fill")
+        )
+
+    def _layout_wide_text_columns_for_fill(
+        self,
+        text_elements: List[Dict[str, Any]],
+        lane: Dict[str, Any],
+        current_y: float,
+        state: PosterState,
+        params: Dict[str, Any],
+        template_layout: Dict[str, Any],
+        section_id: str,
+        is_last_group: bool,
+    ) -> Optional[tuple[List[Dict[str, Any]], float, float]]:
+        if not is_last_group or not self._real_content_fill_enabled(template_layout):
+            return None
+        if template_layout.get("layout_mode") != "template_prior":
+            return None
+        if len(text_elements) != 1:
+            return None
+
+        lane_width = float(lane.get("w", 0.0) or 0.0)
+        min_width = float(self.refine_config.get("wide_text_columns_min_width_inches", 24.0) or 24.0)
+        if lane_width < min_width:
+            return None
+
+        lane_bottom = float(lane["y"]) + float(lane["h"])
+        bottom_padding = float(self.refine_config.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06)
+        available_height = lane_bottom - bottom_padding - current_y
+        if available_height < float(self.refine_config.get("wide_text_columns_min_height_inches", 2.2) or 2.2):
+            return None
+
+        original = deepcopy(text_elements[0])
+        font_size = min(
+            self.refine_config.get("max_body_font_size", int(original.get("font_size", self.typography_config["sizes"]["body_text"]))),
+            max(
+                self._min_body_font_size(template_layout),
+                int(original.get("font_size", self.typography_config["sizes"]["body_text"])) - params["body_font_reduction"] + params.get("body_font_boost", 0),
+            ),
+        )
+        line_spacing = float(original.get("line_spacing", 1.0) or 1.0)
+        padding = float(params.get("text_padding", 0.3) or 0.3)
+        gap = float(self.refine_config.get("wide_text_columns_gap_inches", 0.42) or 0.42)
+        col_width = max((lane_width - 2 * padding - gap) / 2, 0.5)
+
+        lines = self._content_lines_for_fill(
+            section_id,
+            state,
+            original.get("content", ""),
+            int(self.refine_config.get("real_content_fill_max_sentences", 16) or 16),
+        )
+        if len(lines) < 2:
+            return None
+
+        target_height = max(available_height - self._real_content_fill_target_slack(template_layout), 0.4)
+        max_line_spacing = float(self.refine_config.get("real_content_fill_max_line_spacing", 1.08) or 1.08)
+        max_font_boost = int(self.refine_config.get("real_content_fill_max_font_boost", 0) or 0)
+        max_font_size = min(
+            int(self.refine_config.get("max_body_font_size", font_size) or font_size),
+            font_size + max(max_font_boost, 0),
+        )
+        height_tolerance = self._real_content_fill_height_tolerance(template_layout)
+
+        spacing_values = [line_spacing]
+        trial_spacing = line_spacing
+        spacing_step = self._real_content_fill_spacing_step(template_layout)
+        while trial_spacing + spacing_step <= max_line_spacing + 1e-9:
+            trial_spacing = round(trial_spacing + spacing_step, 3)
+            spacing_values.append(trial_spacing)
+
+        best_payload: Optional[tuple[float, int, int, float, List[str], int, float, float]] = None
+        fill_threshold = self._real_content_fill_threshold(template_layout)
+        best_score: Optional[tuple[int, int, float, float, int, float]] = None
+        for trial_font_size in range(font_size, max_font_size + 1):
+            for trial_line_spacing in spacing_values:
+                for end in range(2, len(lines) + 1):
+                    trial_lines = lines[:end]
+                    for split in range(1, len(trial_lines)):
+                        left = "\n".join(trial_lines[:split])
+                        right = "\n".join(trial_lines[split:])
+                        left_h = self._text_height_for_width(left, col_width, original, trial_font_size, trial_line_spacing, template_layout)
+                        right_h = self._text_height_for_width(right, col_width, original, trial_font_size, trial_line_spacing, template_layout)
+                        max_height_used = max(left_h, right_h)
+                        if max_height_used > available_height + height_tolerance:
+                            continue
+                        height_gap = abs(max_height_used - target_height)
+                        balance = abs(left_h - right_h)
+                        fills_target = max_height_used >= target_height - fill_threshold
+                        score = (
+                            0 if fills_target else 1,
+                            -len(trial_lines),
+                            height_gap,
+                            balance,
+                            -trial_font_size,
+                            -trial_line_spacing,
+                        )
+                        if best_score is None or score < best_score:
+                            best_score = score
+                            best_payload = (
+                                max_height_used,
+                                trial_font_size,
+                                split,
+                                trial_line_spacing,
+                                trial_lines,
+                                len(trial_lines),
+                                left_h,
+                                right_h,
+                            )
+        if best_payload is None:
+            return None
+        _, font_size, best_split, line_spacing, best_lines, _, _, _ = best_payload
+        left_lines = best_lines[:best_split]
+        right_lines = best_lines[best_split:]
+
+        elements: List[Dict[str, Any]] = []
+        bottoms = []
+        for index, column_lines in enumerate([left_lines, right_lines]):
+            if not column_lines:
+                continue
+            item = deepcopy(original)
+            content = "\n".join(column_lines)
+            measured_height = self._text_height_for_width(content, col_width, item, font_size, line_spacing, template_layout)
+            item.update(
+                {
+                    "id": f"{section_id}_text_col_{index + 1}",
+                    "x": float(lane["x"]) + padding + index * (col_width + gap),
+                    "y": current_y,
+                    "width": col_width,
+                    "height": min(measured_height, available_height),
+                    "content": content,
+                    "font_size": font_size,
+                    "line_spacing": line_spacing,
+                }
+            )
+            elements.append(item)
+            bottoms.append(item["y"] + item["height"])
+        if not elements:
+            return None
+        content_bottom = max(bottoms)
+        return elements, content_bottom, content_bottom
+
+    def _expand_text_content_to_fill(
+        self,
+        text_element: Dict[str, Any],
+        section_id: str,
+        state: PosterState,
+        text_width: float,
+        font_size: int,
+        line_spacing: float,
+        max_height: float,
+        template_layout: Dict[str, Any],
+    ) -> tuple[Dict[str, Any], int, float]:
+        if not self._real_content_fill_enabled(template_layout):
+            return text_element, font_size, line_spacing
+        if max_height <= 0.2:
+            return text_element, font_size, line_spacing
+
+        target_slack = self._real_content_fill_target_slack(template_layout)
+        target_height = max(max_height - target_slack, 0.2)
+        threshold = self._real_content_fill_threshold(template_layout)
+        height_tolerance = self._real_content_fill_height_tolerance(template_layout)
+        content = self._clean_existing_fill_content(str(text_element.get("content") or ""))
+        if content != str(text_element.get("content") or ""):
+            text_element = deepcopy(text_element)
+            text_element["content"] = content
+        measured = self._text_height_for_width(content, text_width, text_element, font_size, line_spacing, template_layout)
+        if target_height - measured < threshold:
+            return text_element, font_size, line_spacing
+
+        candidates = self._content_lines_for_fill(
+            section_id,
+            state,
+            content,
+            int(self.refine_config.get("real_content_fill_max_sentences", 16) or 16),
+        )
+        existing = {self._dedupe_text_key(line) for line in content.splitlines() if line.strip()}
+        best_content = content
+        best_measured = measured
+        for candidate in candidates:
+            key = self._dedupe_text_key(candidate)
+            if not key or key in existing:
+                continue
+            trial = (best_content.rstrip() + "\n" + candidate).strip()
+            trial_measured = self._text_height_for_width(trial, text_width, text_element, font_size, line_spacing, template_layout)
+            if trial_measured <= max_height + height_tolerance:
+                best_content = trial
+                best_measured = trial_measured
+                existing.add(key)
+            if target_height - best_measured < threshold:
+                break
+
+        max_line_spacing = float(self.refine_config.get("real_content_fill_max_line_spacing", 1.08) or 1.08)
+        best_line_spacing = line_spacing
+        if target_height - best_measured >= threshold:
+            trial_spacing = line_spacing
+            spacing_step = self._real_content_fill_spacing_step(template_layout)
+            while trial_spacing + spacing_step <= max_line_spacing + 1e-9:
+                trial_spacing = round(trial_spacing + spacing_step, 3)
+                trial_measured = self._text_height_for_width(best_content, text_width, text_element, font_size, trial_spacing, template_layout)
+                if trial_measured <= max_height + height_tolerance:
+                    best_line_spacing = trial_spacing
+                    best_measured = trial_measured
+                if target_height - best_measured < threshold:
+                    break
+
+        best_font_size = font_size
+        if target_height - best_measured >= threshold:
+            max_font_boost = int(self.refine_config.get("real_content_fill_max_font_boost", 0) or 0)
+            max_font_size = min(
+                int(self.refine_config.get("max_body_font_size", font_size) or font_size),
+                font_size + max(max_font_boost, 0),
+            )
+            for trial_font_size in range(font_size + 1, max_font_size + 1):
+                trial_measured = self._text_height_for_width(
+                    best_content,
+                    text_width,
+                    text_element,
+                    trial_font_size,
+                    best_line_spacing,
+                    template_layout,
+                )
+                if trial_measured <= max_height + height_tolerance:
+                    best_font_size = trial_font_size
+                    best_measured = trial_measured
+                if target_height - best_measured < threshold:
+                    break
+
+        updated = deepcopy(text_element)
+        updated["content"] = best_content
+        return updated, best_font_size, best_line_spacing
+
+    def _content_lines_for_fill(
+        self,
+        section_id: str,
+        state: PosterState,
+        current_content: str,
+        max_items: int,
+    ) -> List[str]:
+        max_chars = int(self.refine_config.get("real_content_fill_max_chars", 190) or 190)
+        section = self._story_section_by_id(state, section_id)
+        candidates: List[str] = []
+        candidates.extend(self._section_sentence_candidates(section))
+        candidates.extend(self._bottom_fill_texts(section_id, state, max_items))
+        candidates.extend(self._source_sentence_candidates(section_id, state))
+
+        existing = {self._dedupe_text_key(line) for line in str(current_content or "").splitlines() if line.strip()}
+        result = []
+        seen = set(existing)
+        for candidate in candidates:
+            text = self._truncate_takeaway(str(candidate or "").strip(), max_chars)
+            key = self._dedupe_text_key(text)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(text)
+            if len(result) >= max_items:
+                break
+        current_lines = [
+            line.strip()
+            for line in self._clean_existing_fill_content(str(current_content or "")).splitlines()
+            if line.strip()
+        ]
+        return current_lines + result
+
+    def _source_sentence_candidates(self, section_id: str, state: PosterState) -> List[str]:
+        section = self._story_section_by_id(state, section_id)
+        title = str(section.get("section_title") or section_id)
+        role = str(section.get("content_role") or "")
+        query_terms = self._terms(f"{title} {role} {section_id}")
+        scored = []
+        for sentence in self._iter_source_sentences_for_fill(section, state):
+            clean = re.sub(r"\s+", " ", sentence).strip(" -[]{}\"'")
+            if len(clean) < 40 or self._is_bad_fill_sentence(clean):
+                continue
+            overlap = len(query_terms & self._terms(clean))
+            source_match = self._source_section_match_bonus(section, clean)
+            scored.append((overlap + source_match + 1, len(clean), clean))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return [item[2] for item in scored[:24]]
+
+    def _iter_source_sentences_for_fill(self, section: Dict[str, Any], state: PosterState) -> List[str]:
+        texts: List[str] = []
+        narrative = state.get("narrative_content") or {}
+        if isinstance(narrative, dict):
+            for key in ("poster_hook", "and", "but", "therefore", "key_impact"):
+                value = narrative.get(key)
+                if isinstance(value, str):
+                    texts.append(value)
+
+        structured = state.get("structured_sections") or {}
+        paper_sections = structured.get("paper_sections") if isinstance(structured, dict) else []
+        source_names = {
+            str(name or "").strip().lower()
+            for name in (section.get("source_sections") or [])
+            if str(name or "").strip()
+        }
+        role = str(section.get("content_role") or "").lower()
+        title_terms = self._terms(
+            " ".join(
+                [
+                    str(section.get("section_title") or ""),
+                    str(section.get("section_id") or ""),
+                    role,
+                ]
+            )
+        )
+        for paper_section in paper_sections or []:
+            if not isinstance(paper_section, dict):
+                continue
+            section_name = str(paper_section.get("section_name") or "").strip()
+            section_type = str(paper_section.get("section_type") or "").strip().lower()
+            section_terms = self._terms(f"{section_name} {section_type}")
+            include = False
+            if section_name.lower() in source_names:
+                include = True
+            elif role and role == section_type:
+                include = True
+            elif title_terms & section_terms:
+                include = True
+            elif role == "results" and section_type in {"results", "evaluation", "experiments"}:
+                include = True
+            elif role in {"method", "methods"} and section_type in {"method", "methods", "approach"}:
+                include = True
+            elif role in {"foundation", "motivation"} and section_type in {"foundation", "introduction"}:
+                include = True
+            if not include:
+                continue
+            content = paper_section.get("content")
+            if isinstance(content, str):
+                texts.append(content)
+            for key_point in paper_section.get("key_points") or []:
+                if isinstance(key_point, str):
+                    texts.append(key_point)
+
+        sentences: List[str] = []
+        for text in texts:
+            cleaned = re.sub(r"\s+", " ", self._strip_markup_for_measurement(str(text or ""))).strip()
+            if not cleaned:
+                continue
+            for piece in re.split(r"(?<=[.!?])\s+", cleaned):
+                piece = piece.strip(" -\t\n")
+                if piece:
+                    sentences.append(piece)
+        return sentences
+
+    def _source_section_match_bonus(self, section: Dict[str, Any], sentence: str) -> int:
+        source_terms = self._terms(" ".join(str(name or "") for name in section.get("source_sections") or []))
+        if not source_terms:
+            return 0
+        return 1 if source_terms & self._terms(sentence) else 0
+
+    def _is_bad_fill_sentence(self, text: str) -> bool:
+        cleaned = str(text or "").strip()
+        lowered = cleaned.lower()
+        if re.match(r"^\d{4}\.\s+", cleaned):
+            return True
+        if re.search(r"\b(?:st|fig|eq|sec)\.\s*$", lowered):
+            return True
+        if re.search(r"\b(evicted:\s+poverty|using machine learning to help vulnerable tenants|legal representation on tenant outcomes)\b", lowered):
+            return True
+        if re.search(r"\bperfo\.?$", lowered):
+            return True
+        if any(token in lowered for token in ("http://", "https://", "www.", "doi:", "arxiv", "isbn")):
+            return True
+        if re.search(r"\b(references|bibliography|proceedings|journal|journal of|conference on|transactions on)\b", lowered):
+            return True
+        if re.search(r"\b(in:|eds?\.|vol\.|pp\.)\b", lowered):
+            return True
+        if re.match(r"^[A-Z][A-Za-z ,.'’:-]{10,90}\.\s*$", cleaned) and len(self._terms(cleaned)) <= 8:
+            return True
+        return False
+
+    def _clean_existing_fill_content(self, content: str) -> str:
+        cleaned_lines: List[str] = []
+        seen: set[str] = set()
+        for raw_line in str(content or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            plain = self._strip_markup_for_measurement(line).strip()
+            if self._is_bad_fill_sentence(plain):
+                continue
+            key = self._dedupe_text_key(plain)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            cleaned_lines.append(line)
+        return "\n".join(cleaned_lines)
+
+    def _text_height_for_width(
+        self,
+        content: str,
+        width: float,
+        text_element: Dict[str, Any],
+        font_size: int,
+        line_spacing: float,
+        template_layout: Dict[str, Any],
+    ) -> float:
+        measured = self._measure_text_height_for_refinement(
+            text_content=self._strip_markup_for_measurement(content),
+            width_inches=max(width, 0.5),
+            font_name=text_element.get("font_family", self.typography_config["fonts"]["body_text"]),
+            font_size=font_size,
+            line_spacing=line_spacing,
+            template_layout=template_layout,
+        )
+        return (
+            float(measured["optimal_height"]) * self.refine_config.get("text_height_safety_factor", 1.0)
+            + self.refine_config.get("text_height_safety_padding", 0.05)
+        )
+
+    def _dedupe_text_key(self, text: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", self._strip_markup_for_measurement(str(text or "")).lower()).strip()
+
+    def _terms(self, text: str) -> set[str]:
+        return {
+            term
+            for term in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", str(text or "").lower())
+            if term not in {"section", "result", "method", "using", "with", "from", "this", "that", "paper"}
+        }
+
+    def _real_content_fill_enabled(self, template_layout: Dict[str, Any]) -> bool:
+        if not bool(self.refine_config.get("real_content_fill_enabled", True)):
+            return False
+        if not bool(self.refine_config.get("real_content_fill_portrait_only", False)):
+            return True
+        return str(template_layout.get("orientation") or "").lower() == "portrait"
+
+    def _real_content_fill_target_slack(self, template_layout: Dict[str, Any]) -> float:
+        default = float(self.refine_config.get("real_content_fill_target_slack_inches", 0.12) or 0.12)
+        if str(template_layout.get("orientation") or "").lower() != "portrait":
+            return default
+        return float(
+            self.refine_config.get(
+                "portrait_real_content_fill_target_slack_inches",
+                min(default, 0.04),
+            )
+            or min(default, 0.04)
+        )
+
+    def _real_content_fill_threshold(self, template_layout: Dict[str, Any]) -> float:
+        default = float(self.refine_config.get("real_content_fill_threshold_inches", 0.16) or 0.16)
+        if str(template_layout.get("orientation") or "").lower() != "portrait":
+            return default
+        return float(
+            self.refine_config.get(
+                "portrait_real_content_fill_threshold_inches",
+                min(default, 0.04),
+            )
+            or min(default, 0.04)
+        )
+
+    def _real_content_fill_height_tolerance(self, template_layout: Dict[str, Any]) -> float:
+        if str(template_layout.get("orientation") or "").lower() == "portrait":
+            return 0.02
+        return 0.04
+
+    def _real_content_fill_spacing_step(self, template_layout: Dict[str, Any]) -> float:
+        if str(template_layout.get("orientation") or "").lower() == "portrait":
+            return 0.01
+        return 0.02
 
     def _bottom_fill_elements(
         self,
@@ -883,6 +1382,12 @@ class MicroLayoutRefiner:
             return []
         if template_layout.get("layout_mode") != "template_prior":
             return []
+        if (
+            self._real_content_fill_enabled(template_layout)
+            and str(template_layout.get("orientation") or "").lower() == "portrait"
+            and bool(cfg.get("real_content_fill_disable_portrait_bottom_fill", True))
+        ):
+            return []
 
         section_id = str(group.get("section_id") or "")
         if not section_id:
@@ -892,16 +1397,14 @@ class MicroLayoutRefiner:
         threshold = float(cfg.get("bottom_takeaway_threshold_inches", 0.42) or 0.42)
         free_height = lane_bottom - content_bottom
         if free_height < threshold:
-            edge_fill = self._bottom_edge_fill_element(group, lane, template_layout, content_bottom)
-            return [edge_fill] if edge_fill else []
+            return []
 
         large_gap_threshold = float(cfg.get("bottom_fill_large_gap_threshold_inches", 1.15) or 1.15)
         if free_height < large_gap_threshold:
             single = self._bottom_takeaway_element(group, lane, state, params, template_layout, content_bottom)
             if single:
                 return [single]
-            edge_fill = self._bottom_edge_fill_element(group, lane, template_layout, content_bottom)
-            return [edge_fill] if edge_fill else []
+            return []
 
         bottom_padding = float(cfg.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06)
         gap = float(cfg.get("bottom_takeaway_gap_inches", 0.12) or 0.12)
@@ -982,40 +1485,6 @@ class MicroLayoutRefiner:
             )
         )
         return elements
-
-    def _bottom_edge_fill_element(
-        self,
-        group: Dict[str, Any],
-        lane: Dict[str, Any],
-        template_layout: Dict[str, Any],
-        content_bottom: float,
-    ) -> Optional[Dict[str, Any]]:
-        if template_layout.get("layout_mode") != "template_prior":
-            return None
-        cfg = self.refine_config
-        lane_bottom = float(lane["y"]) + float(lane["h"])
-        free_height = lane_bottom - content_bottom
-        min_gap = float(cfg.get("bottom_edge_fill_min_gap_inches", 0.18) or 0.18)
-        if free_height < min_gap:
-            return None
-        edge_height = min(float(cfg.get("bottom_edge_fill_height_inches", 0.08) or 0.08), max(free_height * 0.45, 0.04))
-        bottom_padding = min(float(cfg.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06), max(free_height - edge_height, 0.0))
-        section_id = str(group.get("section_id") or "")
-        slot_id = str(lane.get("id") or group.get("lane_id") or "")
-        return {
-            "type": "title_accent_block",
-            "id": f"{section_id}_bottom_edge_fill",
-            "section_id": section_id,
-            "lane_id": slot_id,
-            "slot_id": slot_id,
-            "x": float(lane["x"]),
-            "y": lane_bottom - bottom_padding - edge_height,
-            "width": float(lane["w"]),
-            "height": edge_height,
-            "color": str((self.config.get("color_scheme") or {}).get("theme") or "#5A1420"),
-            "fill_color": "#5A1420",
-            "priority": 0.49,
-        }
 
     def _distributed_bottom_text_elements(
         self,
@@ -1232,7 +1701,7 @@ class MicroLayoutRefiner:
                 continue
             for piece in re.split(r"(?<=[.!?])\s+", text):
                 piece = piece.strip(" -\t\n")
-                if len(piece) >= 28:
+                if len(piece) >= 28 and not self._is_bad_fill_sentence(piece):
                     candidates.append(piece)
         return candidates
 
@@ -1271,6 +1740,7 @@ class MicroLayoutRefiner:
         state: PosterState,
         params: Dict[str, Any],
         template_layout: Dict[str, Any],
+        section_id: str,
     ) -> Optional[tuple[List[Dict[str, Any]], float, float]]:
         if not self._should_use_portrait_split_layout(visual_elements, text_elements, lane, state, template_layout):
             return None
@@ -1313,8 +1783,34 @@ class MicroLayoutRefiner:
         if text_width < float(cfg.get("portrait_split_min_text_width_inches", 8.0) or 8.0):
             return None
 
+        expanded_text_elements = [deepcopy(text_element) for text_element in text_elements]
+        if expanded_text_elements and self._real_content_fill_enabled(template_layout):
+            base_size = int(expanded_text_elements[0].get("font_size", self.typography_config["sizes"]["body_text"]))
+            preferred_font_size = min(
+                int(self.refine_config.get("max_body_font_size", base_size) or base_size),
+                max(
+                    self._min_body_font_size(template_layout),
+                    base_size - int(params.get("body_font_reduction", 0)) + int(params.get("body_font_boost", 0)),
+                ),
+            )
+            last_index = len(expanded_text_elements) - 1
+            line_spacing = float(expanded_text_elements[last_index].get("line_spacing", 1.0) or 1.0)
+            expanded_last, expanded_font_size, expanded_spacing = self._expand_text_content_to_fill(
+                expanded_text_elements[last_index],
+                section_id,
+                state,
+                text_width,
+                preferred_font_size,
+                line_spacing,
+                max(available_height, 0.2),
+                template_layout,
+            )
+            expanded_last["font_size"] = expanded_font_size
+            expanded_last["line_spacing"] = expanded_spacing
+            expanded_text_elements[last_index] = expanded_last
+
         laid_out_text = self._measure_split_text_elements(
-            text_elements,
+            expanded_text_elements,
             text_width,
             available_height,
             params,
@@ -1334,9 +1830,14 @@ class MicroLayoutRefiner:
             visual_x = text_x + text_width + gap
 
         vertical_alignment = str(cfg.get("portrait_split_vertical_alignment", "bottom") or "bottom").lower()
+        if self._real_content_fill_enabled(template_layout):
+            vertical_alignment = "top"
         if vertical_alignment == "center":
             visual_y = current_y + max((available_height - scaled_height) / 2, 0.0)
             text_y = current_y + max((available_height - total_text_height) / 2, 0.0)
+        elif vertical_alignment == "top":
+            visual_y = current_y + max((available_height - scaled_height) / 2, 0.0)
+            text_y = current_y
         else:
             content_bottom = lane_bottom - bottom_padding
             visual_y = max(current_y, content_bottom - scaled_height)

@@ -94,7 +94,7 @@ class SectionTitleDesigner:
             "font_family": section_style.get("font_family", "Georgia"),
             "font_size": section_style.get("font_size", 48),
             "font_weight": section_style.get("font_weight", "bold"),
-            "alignment": section_style.get("alignment", "left"),
+            "alignment": section_style.get("alignment", "center"),
             "bar_height_inches": section_style.get("bar_height_inches", 0.78),
             "horizontal_padding_inches": section_style.get("horizontal_padding_inches", 0.28),
             "shadow": section_style.get("shadow", {}),
