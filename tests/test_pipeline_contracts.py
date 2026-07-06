@@ -1173,6 +1173,17 @@ def test_header_planner_generates_centered_subtitle_for_short_title(tmp_path):
     assert plan["validation"]["passed"]
 
 
+def test_header_planner_shortens_subtitle_to_complete_clause():
+    agent = HeaderPlanner()
+
+    subtitle = agent._shorten_subtitle(
+        "Eviction-prevention outreach faces a sequential search problem: canvassers have limited budget, uncertain current risk labels, and travel costs.",
+        86,
+    )
+
+    assert subtitle == "Eviction-prevention outreach faces a sequential search problem"
+
+
 def test_layout_agent_uses_header_plan_for_title_and_logo_elements(tmp_path):
     conf_path = tmp_path / "conference.png"
     aff_path = tmp_path / "affiliation.png"
@@ -1355,7 +1366,8 @@ def test_header_planner_supports_portrait_split_logos_with_two_line_title(tmp_pa
     assert plan["title"]["font_family"] == "Georgia"
     assert plan["title"]["box_height"] <= 2.0
     assert plan["authors"]["font_size"] >= 56
-    assert plan["authors"]["top_gap_inches"] == pytest.approx(0.10)
+    expected_author_gap = load_config()["header_planner"]["portrait_title_author_gap_inches"]
+    assert plan["authors"]["top_gap_inches"] == pytest.approx(expected_author_gap)
     assert plan["authors"]["word_wrap"] is True
     assert plan["authors"]["x"] == title_box["x"]
     assert plan["authors"]["w"] == title_box["w"]

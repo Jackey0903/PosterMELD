@@ -313,7 +313,33 @@ class HeaderPlanner:
         if len(text) <= max_chars:
             return text
         truncated = text[: max_chars + 1].rsplit(" ", 1)[0].strip()
-        return truncated.rstrip(".,;:") if truncated else text[:max_chars].rstrip(".,;:")
+        truncated = truncated.rstrip(".,;:")
+        if ":" in truncated:
+            prefix, suffix = truncated.rsplit(":", 1)
+            if 18 <= len(prefix.strip()) and len(suffix.split()) <= 4:
+                truncated = prefix.strip()
+        dangling_words = {
+            "a",
+            "an",
+            "and",
+            "are",
+            "as",
+            "at",
+            "by",
+            "for",
+            "from",
+            "have",
+            "in",
+            "of",
+            "or",
+            "the",
+            "to",
+            "using",
+            "with",
+        }
+        while truncated and truncated.split()[-1].lower() in dangling_words:
+            truncated = " ".join(truncated.split()[:-1]).rstrip(".,;:")
+        return truncated if truncated else text[:max_chars].rstrip(".,;:")
 
     def _build_plan(
         self,
