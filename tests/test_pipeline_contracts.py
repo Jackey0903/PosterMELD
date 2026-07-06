@@ -4448,10 +4448,20 @@ def test_micro_layout_refiner_portrait_wide_columns_fill_bottom_with_dense_conte
     text_elements = [
         {
             "type": "text",
-            "id": "sec_results_text",
+            "id": "sec_results_text_col_1",
             "section_id": "sec_results",
             "lane_id": "slot_4",
-            "content": "\n".join(section_lines),
+            "content": "\n".join(section_lines[:3]),
+            "font_family": "Arial",
+            "font_size": 40,
+            "line_spacing": 0.96,
+        },
+        {
+            "type": "text",
+            "id": "sec_results_text_col_2",
+            "section_id": "sec_results",
+            "lane_id": "slot_4",
+            "content": "\n".join(section_lines[3:]),
             "font_family": "Arial",
             "font_size": 40,
             "line_spacing": 0.96,
@@ -4473,6 +4483,48 @@ def test_micro_layout_refiner_portrait_wide_columns_fill_bottom_with_dense_conte
     column_elements, _, content_bottom = result
     assert lane["y"] + lane["h"] - content_bottom <= 0.18
     assert sum(len(element["content"].splitlines()) for element in column_elements) >= 10
+
+
+def test_micro_layout_refiner_portrait_expands_visual_to_absorb_bottom_gap():
+    refiner = MicroLayoutRefiner()
+    lane = {"id": "slot_3", "x": 1.0, "y": 20.0, "w": 34.0, "h": 12.0}
+    elements = [
+        {
+            "type": "visual",
+            "id": "method_figure",
+            "section_id": "method",
+            "lane_id": "slot_3",
+            "x": 9.0,
+            "y": 22.0,
+            "width": 16.0,
+            "height": 5.0,
+        },
+        {
+            "type": "text",
+            "id": "method_text",
+            "section_id": "method",
+            "lane_id": "slot_3",
+            "x": 1.3,
+            "y": 27.3,
+            "width": 33.4,
+            "height": 4.0,
+        },
+    ]
+    params = {"text_padding": 0.3}
+
+    updated, content_bottom = refiner._portrait_expand_visual_to_absorb_bottom_gap(
+        elements,
+        lane,
+        params,
+        {"template_name": "cluster_8_portrait", "orientation": "portrait"},
+        content_bottom=31.3,
+    )
+
+    visual = next(element for element in updated if element["type"] == "visual")
+    text = next(element for element in updated if element["type"] == "text")
+    assert visual["height"] > 5.0
+    assert text["y"] > 27.3
+    assert lane["y"] + lane["h"] - content_bottom <= 0.18
 
 
 def test_micro_layout_refiner_portrait_text_fill_uses_fine_line_spacing_step():

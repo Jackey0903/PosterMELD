@@ -1016,10 +1016,10 @@ micro_layout_refinement:
   real_content_fill_threshold_inches: 0.16
   real_content_fill_target_slack_inches: 0.12
   portrait_real_content_fill_threshold_inches: 0.04
-  portrait_real_content_fill_target_slack_inches: 0.04
+  portrait_real_content_fill_target_slack_inches: 0.02
   real_content_fill_max_sentences: 16
   real_content_fill_max_chars: 190
-  real_content_fill_max_line_spacing: 1.16
+  real_content_fill_max_line_spacing: 1.20
   real_content_fill_max_font_boost: 4
   wide_text_columns_min_width_inches: 24
   wide_text_columns_gap_inches: 0.42

@@ -879,6 +879,13 @@ class MicroLayoutRefiner:
             content_bottom = max(content_bottom, other["y"] + other.get("height", 0))
 
         if is_last_group:
+            rebuilt_children, content_bottom = self._portrait_expand_visual_to_absorb_bottom_gap(
+                rebuilt_children,
+                lane,
+                params,
+                template_layout,
+                content_bottom,
+            )
             bottom_fill = self._bottom_fill_elements(
                 group,
                 lane,
@@ -924,7 +931,7 @@ class MicroLayoutRefiner:
             return None
         if template_layout.get("layout_mode") != "template_prior":
             return None
-        if len(text_elements) != 1:
+        if not text_elements:
             return None
 
         lane_width = float(lane.get("w", 0.0) or 0.0)
@@ -939,6 +946,11 @@ class MicroLayoutRefiner:
             return None
 
         original = deepcopy(text_elements[0])
+        merged_content = "\n".join(
+            str(text_element.get("content") or "").strip()
+            for text_element in text_elements
+            if str(text_element.get("content") or "").strip()
+        )
         font_size = min(
             self.refine_config.get("max_body_font_size", int(original.get("font_size", self.typography_config["sizes"]["body_text"]))),
             max(
@@ -954,8 +966,20 @@ class MicroLayoutRefiner:
         lines = self._content_lines_for_fill(
             section_id,
             state,
-            original.get("content", ""),
+            merged_content,
             int(self.refine_config.get("real_content_fill_max_sentences", 16) or 16),
+        )
+        if len(lines) < 2:
+            return None
+
+        lines = self._pack_wide_column_lines_for_fill(
+            lines,
+            col_width,
+            original,
+            font_size,
+            line_spacing,
+            available_height,
+            template_layout,
         )
         if len(lines) < 2:
             return None
@@ -1046,6 +1070,108 @@ class MicroLayoutRefiner:
             return None
         content_bottom = max(bottoms)
         return elements, content_bottom, content_bottom
+
+    def _portrait_expand_visual_to_absorb_bottom_gap(
+        self,
+        elements: List[Dict[str, Any]],
+        lane: Dict[str, Any],
+        params: Dict[str, Any],
+        template_layout: Dict[str, Any],
+        content_bottom: float,
+    ) -> tuple[List[Dict[str, Any]], float]:
+        if not self._real_content_fill_enabled(template_layout):
+            return elements, content_bottom
+        if str(template_layout.get("orientation") or "").lower() != "portrait":
+            return elements, content_bottom
+
+        lane_bottom = float(lane["y"]) + float(lane["h"])
+        bottom_gap = lane_bottom - content_bottom
+        allowed_gap = self._final_bottom_whitespace_limit(lane)
+        target_gap = min(allowed_gap, 0.08)
+        if bottom_gap <= allowed_gap:
+            return elements, content_bottom
+
+        visuals = [element for element in elements if element.get("type") == "visual"]
+        if not visuals:
+            return elements, content_bottom
+        visual = max(
+            visuals,
+            key=lambda item: float(item.get("width", 0.0) or 0.0) * float(item.get("height", 0.0) or 0.0),
+        )
+        visual_width = float(visual.get("width", 0.0) or 0.0)
+        visual_height = float(visual.get("height", 0.0) or 0.0)
+        if visual_width <= 0 or visual_height <= 0:
+            return elements, content_bottom
+
+        aspect_ratio = visual_width / max(visual_height, 0.01)
+        padding = max(float(params.get("text_padding", 0.24) or 0.24), 0.18)
+        max_width = max(float(lane["w"]) - 2 * padding, visual_width)
+        max_height = max_width / max(aspect_ratio, 0.01)
+        grow_by = min(bottom_gap - target_gap, max_height - visual_height)
+        if grow_by <= 0.03:
+            return elements, content_bottom
+
+        old_visual_bottom = float(visual.get("y", 0.0) or 0.0) + visual_height
+        new_height = visual_height + grow_by
+        new_width = min(new_height * aspect_ratio, max_width)
+        visual["width"] = new_width
+        visual["height"] = new_height
+        visual["x"] = float(lane["x"]) + (float(lane["w"]) - new_width) / 2
+
+        for element in elements:
+            if element is visual:
+                continue
+            element_y = float(element.get("y", 0.0) or 0.0)
+            if element_y >= old_visual_bottom - 0.02:
+                element["y"] = element_y + grow_by
+
+        return elements, content_bottom + grow_by
+
+    def _pack_wide_column_lines_for_fill(
+        self,
+        lines: List[str],
+        col_width: float,
+        text_element: Dict[str, Any],
+        font_size: int,
+        line_spacing: float,
+        available_height: float,
+        template_layout: Dict[str, Any],
+    ) -> List[str]:
+        """Keep dense portrait columns from getting blocked by one overlong candidate."""
+        packed: List[str] = []
+        for line in lines:
+            trial = [*packed, line]
+            if len(trial) < 2 or self._wide_column_lines_fit(
+                trial,
+                col_width,
+                text_element,
+                font_size,
+                line_spacing,
+                available_height,
+                template_layout,
+            ):
+                packed = trial
+        return packed if len(packed) >= 2 else lines
+
+    def _wide_column_lines_fit(
+        self,
+        lines: List[str],
+        col_width: float,
+        text_element: Dict[str, Any],
+        font_size: int,
+        line_spacing: float,
+        available_height: float,
+        template_layout: Dict[str, Any],
+    ) -> bool:
+        height_tolerance = self._real_content_fill_height_tolerance(template_layout)
+        for split in range(1, len(lines)):
+            left = "\n".join(lines[:split])
+            right = "\n".join(lines[split:])
+            left_h = self._text_height_for_width(left, col_width, text_element, font_size, line_spacing, template_layout)
+            right_h = self._text_height_for_width(right, col_width, text_element, font_size, line_spacing, template_layout)
+            if max(left_h, right_h) <= available_height + height_tolerance:
+                return True
+        return False
 
     def _expand_text_content_to_fill(
         self,
@@ -1367,6 +1493,23 @@ class MicroLayoutRefiner:
         if str(template_layout.get("orientation") or "").lower() == "portrait":
             return 0.01
         return 0.02
+
+    def _final_bottom_whitespace_limit(self, lane: Dict[str, Any]) -> float:
+        block_settings = self.config.get("block_refinement", {})
+        max_inches = float(block_settings.get("final_max_bottom_whitespace_inches", 0.0) or 0.0)
+        max_fraction = float(block_settings.get("final_max_bottom_whitespace_fraction", 0.0) or 0.0)
+        lane_height = float(lane.get("h", 0.0) or 0.0)
+        allowed_values = [
+            value
+            for value in (
+                max_inches,
+                lane_height * max_fraction if max_fraction > 0 else 0.0,
+            )
+            if value > 0
+        ]
+        if not allowed_values:
+            return 0.12
+        return min(allowed_values)
 
     def _bottom_fill_elements(
         self,
