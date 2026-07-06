@@ -1037,6 +1037,10 @@ micro_layout_refinement:
   real_content_fill_max_chars: 190
   real_content_fill_max_line_spacing: 1.20
   real_content_fill_max_font_boost: 4
+  portrait_split_text_min_fill_fraction: 0.92
+  portrait_split_text_max_fill_sentences: 16
+  portrait_split_text_max_candidate_chars: 170
+  portrait_split_text_min_candidate_chars: 42
   wide_text_columns_min_width_inches: 24
   wide_text_columns_gap_inches: 0.42
   wide_text_columns_min_height_inches: 2.2

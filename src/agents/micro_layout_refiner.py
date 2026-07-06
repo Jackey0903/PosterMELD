@@ -16,6 +16,7 @@ from src.config.poster_config import load_config
 from src.layout.text_height_measurement import measure_text_height
 from src.state.poster_state import PosterState
 from src.tools.layout_api import LayoutTemplates
+from src.utils.text_cleanup import repair_truncated_sentence_end
 from src.utils.visual_footprint import enforce_visual_footprint, visual_footprint_config
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success, log_agent_warning
 
@@ -1412,6 +1413,10 @@ class MicroLayoutRefiner:
             if not line:
                 continue
             plain = self._strip_markup_for_measurement(line).strip()
+            repaired_plain = repair_truncated_sentence_end(plain)
+            if repaired_plain != plain:
+                plain = repaired_plain.strip()
+                line = repaired_plain.strip()
             if self._is_bad_fill_sentence(plain):
                 continue
             key = self._dedupe_text_key(plain)
@@ -1872,7 +1877,7 @@ class MicroLayoutRefiner:
         if len(text) <= max_chars:
             return text
         candidate = text[: max_chars + 1].rsplit(" ", 1)[0].strip(" ,;:")
-        return candidate.rstrip(".") + "."
+        return repair_truncated_sentence_end(candidate.rstrip(".") + ".")
 
     def _layout_portrait_split_visual_text(
         self,
@@ -1926,31 +1931,15 @@ class MicroLayoutRefiner:
         if text_width < float(cfg.get("portrait_split_min_text_width_inches", 8.0) or 8.0):
             return None
 
-        expanded_text_elements = [deepcopy(text_element) for text_element in text_elements]
-        if expanded_text_elements and self._real_content_fill_enabled(template_layout):
-            base_size = int(expanded_text_elements[0].get("font_size", self.typography_config["sizes"]["body_text"]))
-            preferred_font_size = min(
-                int(self.refine_config.get("max_body_font_size", base_size) or base_size),
-                max(
-                    self._min_body_font_size(template_layout),
-                    base_size - int(params.get("body_font_reduction", 0)) + int(params.get("body_font_boost", 0)),
-                ),
-            )
-            last_index = len(expanded_text_elements) - 1
-            line_spacing = float(expanded_text_elements[last_index].get("line_spacing", 1.0) or 1.0)
-            expanded_last, expanded_font_size, expanded_spacing = self._expand_text_content_to_fill(
-                expanded_text_elements[last_index],
-                section_id,
-                state,
-                text_width,
-                preferred_font_size,
-                line_spacing,
-                max(available_height, 0.2),
-                template_layout,
-            )
-            expanded_last["font_size"] = expanded_font_size
-            expanded_last["line_spacing"] = expanded_spacing
-            expanded_text_elements[last_index] = expanded_last
+        expanded_text_elements = self._expand_portrait_split_text_to_fill(
+            text_elements,
+            section_id,
+            state,
+            text_width,
+            available_height,
+            params,
+            template_layout,
+        )
 
         laid_out_text = self._measure_split_text_elements(
             expanded_text_elements,
@@ -2010,6 +1999,253 @@ class MicroLayoutRefiner:
 
         current_y = max(content_bottom, lane_bottom - bottom_padding)
         return tail, current_y, max(content_bottom, current_y)
+
+    def _expand_portrait_split_text_to_fill(
+        self,
+        text_elements: List[Dict[str, Any]],
+        section_id: str,
+        state: PosterState,
+        text_width: float,
+        available_height: float,
+        params: Dict[str, Any],
+        template_layout: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        expanded_text_elements = [deepcopy(text_element) for text_element in text_elements]
+        if not expanded_text_elements or not self._real_content_fill_enabled(template_layout):
+            return expanded_text_elements
+
+        original = deepcopy(expanded_text_elements[0])
+        merged_content = self._clean_existing_fill_content(
+            "\n".join(
+                str(text_element.get("content") or "").strip()
+                for text_element in expanded_text_elements
+                if str(text_element.get("content") or "").strip()
+            )
+        )
+        if merged_content:
+            original["content"] = merged_content
+
+        base_size = int(original.get("font_size", self.typography_config["sizes"]["body_text"]))
+        preferred_font_size = min(
+            int(self.refine_config.get("max_body_font_size", base_size) or base_size),
+            max(
+                self._min_body_font_size(template_layout),
+                base_size - int(params.get("body_font_reduction", 0)) + int(params.get("body_font_boost", 0)),
+            ),
+        )
+        line_spacing = float(original.get("line_spacing", 1.0) or 1.0)
+        working, font_size, line_spacing = self._expand_text_content_to_fill(
+            original,
+            section_id,
+            state,
+            text_width,
+            preferred_font_size,
+            line_spacing,
+            max(available_height, 0.2),
+            template_layout,
+        )
+
+        working = deepcopy(working)
+        working["font_size"] = font_size
+        working["line_spacing"] = line_spacing
+        target_fraction = float(self.refine_config.get("portrait_split_text_min_fill_fraction", 0.92) or 0.92)
+        target_fraction = min(max(target_fraction, 0.50), 0.98)
+        target_height = max(available_height * target_fraction, 0.2)
+        threshold = self._real_content_fill_threshold(template_layout)
+        height_tolerance = self._real_content_fill_height_tolerance(template_layout)
+        measured = self._text_height_for_width(
+            str(working.get("content") or ""),
+            text_width,
+            working,
+            font_size,
+            line_spacing,
+            template_layout,
+        )
+
+        if target_height - measured >= threshold:
+            working, measured = self._add_short_split_fill_lines(
+                working,
+                section_id,
+                state,
+                text_width,
+                font_size,
+                line_spacing,
+                available_height,
+                target_height,
+                measured,
+                height_tolerance,
+                template_layout,
+            )
+
+        font_size, line_spacing, measured = self._inflate_split_text_style_to_target(
+            working,
+            text_width,
+            font_size,
+            line_spacing,
+            available_height,
+            target_height,
+            measured,
+            height_tolerance,
+            template_layout,
+        )
+        working["font_size"] = font_size
+        working["line_spacing"] = line_spacing
+        working["portrait_split_text_fill_ratio"] = round(measured / max(available_height, 0.01), 4)
+        return [working]
+
+    def _add_short_split_fill_lines(
+        self,
+        text_element: Dict[str, Any],
+        section_id: str,
+        state: PosterState,
+        text_width: float,
+        font_size: int,
+        line_spacing: float,
+        available_height: float,
+        target_height: float,
+        measured: float,
+        height_tolerance: float,
+        template_layout: Dict[str, Any],
+    ) -> tuple[Dict[str, Any], float]:
+        max_items = int(
+            self.refine_config.get(
+                "portrait_split_text_max_fill_sentences",
+                self.refine_config.get("real_content_fill_max_sentences", 16),
+            )
+            or 16
+        )
+        max_chars = int(
+            self.refine_config.get(
+                "portrait_split_text_max_candidate_chars",
+                self.refine_config.get("real_content_fill_max_chars", 190),
+            )
+            or 190
+        )
+        min_chars = int(self.refine_config.get("portrait_split_text_min_candidate_chars", 42) or 42)
+        threshold = self._real_content_fill_threshold(template_layout)
+        existing = {
+            self._dedupe_text_key(line)
+            for line in str(text_element.get("content") or "").splitlines()
+            if line.strip()
+        }
+        content = str(text_element.get("content") or "").strip()
+        added = 0
+
+        candidates = self._content_lines_for_fill(section_id, state, content, max_items)
+        for candidate in candidates:
+            if target_height - measured < threshold:
+                break
+            key = self._dedupe_text_key(candidate)
+            if not key or key in existing:
+                continue
+
+            best_content = None
+            best_height = measured
+            for limit in self._split_candidate_char_limits(max_chars):
+                trimmed = self._truncate_takeaway(candidate, limit)
+                plain = self._strip_markup_for_measurement(trimmed).strip()
+                if len(plain) < min_chars or self._is_bad_fill_sentence(plain):
+                    continue
+                trimmed_key = self._dedupe_text_key(trimmed)
+                if not trimmed_key or trimmed_key in existing:
+                    continue
+                trial = (content.rstrip() + "\n" + trimmed).strip() if content else trimmed
+                trial_height = self._text_height_for_width(
+                    trial,
+                    text_width,
+                    text_element,
+                    font_size,
+                    line_spacing,
+                    template_layout,
+                )
+                if trial_height <= available_height + height_tolerance and trial_height > best_height + 0.01:
+                    best_content = trial
+                    best_height = trial_height
+
+            if best_content is None:
+                continue
+            content = best_content
+            measured = best_height
+            existing.add(self._dedupe_text_key(candidate))
+            added += 1
+            if added >= max_items:
+                break
+
+        updated = deepcopy(text_element)
+        updated["content"] = content
+        return updated, measured
+
+    def _split_candidate_char_limits(self, max_chars: int) -> List[int]:
+        limits = [
+            max_chars,
+            170,
+            145,
+            125,
+            105,
+            92,
+            78,
+            64,
+            52,
+        ]
+        result: List[int] = []
+        for value in limits:
+            limit = max(1, min(int(value), max_chars))
+            if limit not in result:
+                result.append(limit)
+        return result
+
+    def _inflate_split_text_style_to_target(
+        self,
+        text_element: Dict[str, Any],
+        text_width: float,
+        font_size: int,
+        line_spacing: float,
+        available_height: float,
+        target_height: float,
+        measured: float,
+        height_tolerance: float,
+        template_layout: Dict[str, Any],
+    ) -> tuple[int, float, float]:
+        threshold = self._real_content_fill_threshold(template_layout)
+        max_line_spacing = float(self.refine_config.get("real_content_fill_max_line_spacing", 1.08) or 1.08)
+        spacing_step = self._real_content_fill_spacing_step(template_layout)
+        best_spacing = line_spacing
+        trial_spacing = line_spacing
+        while target_height - measured >= threshold and trial_spacing + spacing_step <= max_line_spacing + 1e-9:
+            trial_spacing = round(trial_spacing + spacing_step, 3)
+            trial_measured = self._text_height_for_width(
+                str(text_element.get("content") or ""),
+                text_width,
+                text_element,
+                font_size,
+                trial_spacing,
+                template_layout,
+            )
+            if trial_measured <= available_height + height_tolerance:
+                best_spacing = trial_spacing
+                measured = trial_measured
+
+        best_font_size = font_size
+        max_font_boost = int(self.refine_config.get("real_content_fill_max_font_boost", 0) or 0)
+        max_font_size = min(
+            int(self.refine_config.get("max_body_font_size", font_size) or font_size),
+            font_size + max(max_font_boost, 0),
+        )
+        for trial_font_size in range(font_size + 1, max_font_size + 1):
+            if target_height - measured < threshold:
+                break
+            trial_measured = self._text_height_for_width(
+                str(text_element.get("content") or ""),
+                text_width,
+                text_element,
+                trial_font_size,
+                best_spacing,
+                template_layout,
+            )
+            if trial_measured <= available_height + height_tolerance:
+                best_font_size = trial_font_size
+                measured = trial_measured
+        return best_font_size, best_spacing, measured
 
     def _should_use_portrait_split_layout(
         self,

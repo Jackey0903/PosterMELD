@@ -34,8 +34,8 @@ TITLE_SMALL_WORDS = {
 }
 
 DANGLING_TERMINAL_WORDS = (
-    "and|or|but|with|in|of|to|for|by|as|at|from|than|while|where|when|despite|"
-    "that|which|through|into|over|under|via|on|only|also|past|a|an|the|this|"
+    "and|or|but|with|in|of|to|for|by|as|at|from|than|while|where|when|after|despite|"
+    "that|which|through|into|over|under|within|via|on|only|also|past|a|an|the|this|"
     "these|those|their|its|using|including|exploiting|selecting|relying|letting|local|stale|"
     "may|can|could|would|should|will|must|is|are|was|were|be|been|being|"
     "typically|generally|often|roughly|approximately|consistently|significantly|"
@@ -324,6 +324,29 @@ def repair_truncated_sentence_end(line: str) -> str:
         )
         line = re.sub(r"\s+and\s+(?:reducing|increasing|improving|decreasing)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+with\s+(?:especially|particularly|notably)\s+[A-Za-z-]{2,28}\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(
+            r"\s+to\s+(?:update|learn|scale|adapt|improve|reach|select|query|discover|estimate|predict)\.$",
+            ".",
+            line,
+            flags=re.IGNORECASE,
+        )
+        line = re.sub(
+            r"[;:]\s+(?:performance|results?|evaluation|analysis|target|targets?|policy|method)\.$",
+            ".",
+            line,
+            flags=re.IGNORECASE,
+        )
+        line = re.sub(r"[,;:]\s+and\s+the\s+average\s+number\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"[,;:]\s+(?:measuring|testing|reporting)\s+[^.;:]{1,72}\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+and\s+lower\s+eviction\s+pr\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(
+            r"\s+(?:large-area|small-area|city-scale|region-level|parcel-level|query-cost|travel-aware|budget-constrained|non-hierarchical|within-region)\.$",
+            ".",
+            line,
+            flags=re.IGNORECASE,
+        )
+        line = re.sub(r"\s+for\s+thousands\s+of\s+[A-Za-z-]{1,24}\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"[,]?\s+and\s+the\s+non-hierarchi\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+despite\s+(?:limited|scarce|restricted)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+under\s+(?:tight|limited|strict)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+with\s+(?:a|an|the)\s+[A-Za-z-]{0,16}\.$", ".", line, flags=re.IGNORECASE)
@@ -335,7 +358,7 @@ def repair_truncated_sentence_end(line: str) -> str:
         line = re.sub(r"\s+by\s+first\s+[A-Za-z-]+ing(?:\s+[A-Za-z-]+){0,2}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+by\s+[A-Za-z-]+ing\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+(?:with|using|via|by|for|to)\s+[A-Z]\.$", ".", line, flags=re.IGNORECASE)
-        line = re.sub(r"\s+(?:[A-Za-z]|fo|fou|ou|ar|cos|evic|prob|unif|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan|princ|approxima|substant|tight|co|wit|mul|stronges|vi)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+(?:[A-Za-z]|fo|fou|ou|ar|re|wi|pr|parc|non|larg|hierarchi|non-hierarchi|cos|evic|prob|unif|unifor|withi|cha|dis|se|lo|ri|mo|res|vis|analys|thousan|princ|approxima|substant|tight|co|wit|mul|stronges|vi)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(rf"\s+({DANGLING_TERMINAL_WORDS})\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
             r"\s+and\s+(?:also|then|therefore|local|stale|limited|new|more|less|other)\.$",

@@ -4625,6 +4625,134 @@ def test_micro_layout_refiner_uses_portrait_split_for_wide_shallow_figure_block(
     assert visual["visual_footprint"]["ok"] is True
 
 
+def test_micro_layout_refiner_fills_portrait_split_text_column_from_source():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_8_portrait", width=36, height=50.88)
+    state["template_fast_mode"] = True
+    state["visual_assets"] = {"figure_1": {"asset_type": "figure", "aspect": 2.52}}
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "sec_core_hags",
+                    "section_title": "Adaptive Policy",
+                    "content_role": "method",
+                    "source_sections": ["Method"],
+                    "text_content": [
+                        "AGS updates beliefs online as new eviction labels are discovered.",
+                        "The predictor estimates parcel risk from tabular records and overhead imagery.",
+                        "The search policy chooses the next parcel under remaining budget and observed labels.",
+                    ],
+                }
+            ]
+        }
+    }
+    state["structured_sections"] = {
+        "paper_sections": [
+            {
+                "section_name": "Method",
+                "section_type": "method",
+                "content": (
+                    "The adaptive geospatial search policy alternates between querying promising parcels "
+                    "and updating the risk model with newly observed eviction labels. The prediction module "
+                    "scores parcels from administrative features, neighborhood context, and imagery. The policy "
+                    "uses the remaining outreach budget to balance exploration of uncertain areas with exploitation "
+                    "of parcels that already appear high risk."
+                ),
+                "key_points": [
+                    "Each query changes both the classifier and the search policy.",
+                    "Adaptive search balances exploration with immediate outreach yield.",
+                    "The budget-aware policy avoids spending visits in low-yield areas.",
+                ],
+            }
+        ]
+    }
+    lane = {"id": "slot_2", "x": 1.0, "y": 15.32, "w": 34.0, "h": 5.68}
+    group = {
+        "section_id": "sec_core_hags",
+        "container": {
+            "type": "section_container",
+            "section_id": "sec_core_hags",
+            "lane_id": "slot_2",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": lane["h"],
+            "importance_level": 1,
+        },
+        "children": [
+            {
+                "type": "title_accent_block",
+                "section_id": "sec_core_hags",
+                "lane_id": "slot_2",
+                "x": lane["x"],
+                "y": lane["y"],
+                "width": lane["w"],
+                "height": 0.78,
+            },
+            {
+                "type": "section_title",
+                "section_id": "sec_core_hags",
+                "lane_id": "slot_2",
+                "x": lane["x"] + 0.28,
+                "y": lane["y"] + 0.04,
+                "width": lane["w"] - 0.56,
+                "height": 0.7,
+                "font_size": 48,
+            },
+            {
+                "type": "visual",
+                "id": "sec_core_hags_figure_1",
+                "visual_id": "figure_1",
+                "section_id": "sec_core_hags",
+                "lane_id": "slot_2",
+                "x": lane["x"] + 12.75,
+                "y": lane["y"] + 1.1,
+                "width": 8.5,
+                "height": 3.37,
+            },
+            {
+                "type": "text",
+                "id": "sec_core_hags_text",
+                "section_id": "sec_core_hags",
+                "lane_id": "slot_2",
+                "x": lane["x"] + 0.24,
+                "y": lane["y"] + 4.7,
+                "width": lane["w"] - 0.48,
+                "height": 0.8,
+                "font_size": 44,
+                "content": "AGS updates beliefs online as new eviction labels are discovered.",
+            },
+        ],
+    }
+    params = {
+        "section_gap": 0.5,
+        "title_to_content_gap": 0.25,
+        "visual_gap": 0.18,
+        "text_padding": 0.24,
+        "body_font_reduction": 0,
+        "title_font_reduction": 0,
+        "body_font_boost": 0,
+        "title_font_boost": 0,
+        "visual_scale": 0.95,
+    }
+
+    elements, _ = refiner._layout_section(
+        group,
+        lane,
+        lane["y"],
+        state,
+        params,
+        {"template_name": "cluster_8_portrait", "orientation": "portrait", "layout_mode": "template_prior"},
+    )
+
+    text = next(element for element in elements if element.get("type") == "text")
+    assert text["portrait_split_layout"] == "image_left_text_right"
+    assert text["portrait_split_text_fill_ratio"] >= 0.90
+    assert len(text["content"].splitlines()) >= 3
+    assert "predictor estimates" in text["content"].lower()
+
+
 def test_micro_layout_refiner_portrait_wide_columns_fill_bottom_with_dense_content():
     refiner = MicroLayoutRefiner()
     state = create_state("/tmp/paper.pdf", layout_template="cluster_13_portrait", width=36, height=51)
@@ -5846,6 +5974,19 @@ def test_truncation_removes_dangling_connector_suffixes():
     assert normalize_text_for_poster("Symmetry acts as inductive bias for thousan.").endswith("bias.")
     assert normalize_text_for_poster("HAGS shares geospatial locality and reducing.").endswith("locality.")
     assert normalize_text_for_poster("HAGS wins in large-area search, with especially strong.").endswith("search.")
+    assert normalize_text_for_poster("first choose a region, then choose a parcel within that re.").endswith("parcel.")
+    assert normalize_text_for_poster("injecting geospatial locality and symmetry as inductive bias for large-area.").endswith("bias.")
+    assert normalize_text_for_poster("first choose a region, then a parcel wi.").endswith("parcel.")
+    assert normalize_text_for_poster("reducing action complexity for thousands of parc.").endswith("complexity.")
+    assert normalize_text_for_poster("outperforming random, active search, greedy heuristics, and the non-hierarchi.").endswith("heuristics.")
+    assert normalize_text_for_poster("must balance exploitation with exploration to update.").endswith("exploration.")
+    assert normalize_text_for_poster("features from tabular records and overhead imagery; performance.").endswith("imagery.")
+    assert normalize_text_for_poster("features plus overhead imagery, measuring average number.").endswith("imagery.")
+    assert normalize_text_for_poster("features plus NAIP overhead imagery, and the average number.").endswith("imagery.")
+    assert normalize_text_for_poster("strong gains under tighter budgets and lower eviction pr.").endswith("budgets.")
+    assert normalize_text_for_poster("true risk is only revealed after.").endswith("revealed.")
+    assert normalize_text_for_poster("outperforming random, greedy baselines, and the non.").endswith("baselines.")
+    assert normalize_text_for_poster("injecting geospatial locality and symmetry as inductive bias for larg.").endswith("bias.")
     assert normalize_text_for_poster("Outreach operates under tight.").endswith("operates.")
     assert normalize_text_for_poster("The MDP enables princ.").endswith("MDP.")
     assert normalize_text_for_poster("Targets improve by approxima.").endswith("improve.")
