@@ -355,6 +355,7 @@ class HeaderPlanner:
         if compact_stack:
             text_band = self._portrait_split_text_band(title_box, logo_elements)
             title_box = {**title_box, "x": text_band["x"], "w": text_band["w"]}
+        title_box = self._apply_title_vertical_offset(template_layout, title_box, physical_route)
         title_wrap_policy = self._resolve_title_wrap_policy(state, template_layout, route, physical_route)
         display_title = self._display_title_text(title, title_wrap_policy)
         if title_wrap_policy == "single_line":
@@ -474,6 +475,40 @@ class HeaderPlanner:
         else:
             min_size = int(self.header_config.get(min_key, 50))
         return max(min_size, min(int(desired_size), estimated_size))
+
+    def _apply_title_vertical_offset(
+        self,
+        template_layout: Dict[str, Any],
+        title_box: Dict[str, float],
+        physical_route: str,
+    ) -> Dict[str, float]:
+        if template_layout.get("orientation") != "portrait":
+            offset = float(self.header_config.get("title_vertical_offset_inches", 0.0) or 0.0)
+        elif str(physical_route).startswith("portrait_split_logos"):
+            offset = float(
+                self.header_config.get(
+                    "portrait_split_title_vertical_offset_inches",
+                    self.header_config.get("portrait_title_vertical_offset_inches", 0.0),
+                )
+                or 0.0
+            )
+        else:
+            offset = float(self.header_config.get("portrait_title_vertical_offset_inches", 0.0) or 0.0)
+
+        if offset <= 0:
+            return title_box
+
+        header = template_layout.get("header") or {}
+        header_bottom = float(header.get("y", 0.0) or 0.0) + float(header.get("h", 0.0) or 0.0)
+        min_height = float(self.header_config.get("min_shifted_title_box_height_inches", 0.8) or 0.8)
+        max_offset = max(float(title_box.get("h", 0.0) or 0.0) - min_height, 0.0)
+        applied = min(offset, max_offset)
+        shifted_y = min(float(title_box["y"]) + applied, max(header_bottom - min_height, float(title_box["y"])))
+        shifted_h = max(
+            min(float(title_box["h"]) - applied, header_bottom - shifted_y),
+            min_height,
+        )
+        return {**title_box, "y": shifted_y, "h": shifted_h}
 
     def _resolve_title_wrap_policy(
         self,

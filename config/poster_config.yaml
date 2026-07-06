@@ -103,6 +103,7 @@ header_planner:
   portrait_split_wide_conference_side_width_fraction: 0.22
   portrait_split_logo_min_side_width_inches: 4.0
   portrait_split_title_logo_gap_inches: 0.34
+  portrait_split_title_vertical_offset_inches: 0.42
   manual_affiliation_logo_overrides_auto: true
   stable_random_by_default: false
 
@@ -874,7 +875,8 @@ visual_footprint:
   portrait_split_visual_width_fraction: 0.48
   portrait_split_gap_inches: 0.45
   portrait_split_min_text_width_inches: 8.0
-  portrait_split_bottom_padding_inches: 0.10
+  portrait_split_bottom_padding_inches: 0.03
+  portrait_split_vertical_alignment: "bottom"
   feasibility_max_slot_height_fraction: 0.95
   min_visual_scale_in_visual_blocks: 0.95
   key_visual_min_scale: 1.0
@@ -900,8 +902,8 @@ block_refinement:
   acceptable_max: 0.992
   final_min_utilization: 0.96
   final_mean_utilization: 0.965
-  final_max_bottom_whitespace_inches: 0.6
-  final_max_bottom_whitespace_fraction: 0.04
+  final_max_bottom_whitespace_inches: 0.18
+  final_max_bottom_whitespace_fraction: 0.012
   hard_max: 0.995
   safety_factor: 0.82
   capacity_min_factor: 0.88
@@ -921,10 +923,13 @@ block_refinement:
   underfilled_min_extra_chars: 70
   expand_height_safety_inches: 0.14
   max_extra_chars_per_block: 620
+  teaser_max_extra_chars: 180
   chars_per_bullet: 120
   max_new_bullets_per_block: 5
   second_round_expand_scale: 0.75
   second_round_max_extra_chars: 260
+  max_text_box_slack_ratio: 2.2
+  max_text_box_slack_inches: 2.0
   source_context_chars: 7000
   portrait_ppt_chars_per_inch_at_44pt: 3.25
   temperature: 0.1
@@ -989,7 +994,24 @@ micro_layout_refinement:
   portrait_ppt_chars_per_inch_at_44pt: 3.25
   text_height_safety_factor: 1.12
   text_height_safety_padding: 0.12
-  container_bottom_padding: 0.08
+  container_bottom_padding: 0.02
+  bottom_takeaway_enabled: true
+  bottom_takeaway_threshold_inches: 0.42
+  bottom_takeaway_height_inches: 0.52
+  bottom_takeaway_bottom_padding_inches: 0.06
+  bottom_takeaway_gap_inches: 0.04
+  bottom_takeaway_font_size: 36
+  bottom_takeaway_font_color: "#4A1020"
+  bottom_takeaway_max_chars: 92
+  bottom_fill_large_gap_threshold_inches: 1.15
+  bottom_fill_item_height_inches: 1.05
+  bottom_fill_item_gap_inches: 0.18
+  bottom_fill_max_items: 5
+  bottom_fill_wide_min_width_inches: 24
+  bottom_fill_font_size: 38
+  bottom_fill_line_spacing: 0.9
+  bottom_edge_fill_min_gap_inches: 0.18
+  bottom_edge_fill_height_inches: 0.08
 
 # spacing presets
 spacing_presets:

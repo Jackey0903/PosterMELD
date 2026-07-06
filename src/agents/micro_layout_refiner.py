@@ -662,7 +662,15 @@ class MicroLayoutRefiner:
         current_y = lane["y"]
 
         for index, group in enumerate(groups):
-            section_elements, section_bottom = self._layout_section(group, lane, current_y, state, params, template_layout)
+            section_elements, section_bottom = self._layout_section(
+                group,
+                lane,
+                current_y,
+                state,
+                params,
+                template_layout,
+                is_last_group=index == len(groups) - 1,
+            )
             elements.extend(section_elements)
             current_y = section_bottom
             if index < len(groups) - 1:
@@ -672,9 +680,23 @@ class MicroLayoutRefiner:
         overflow = current_y - lane_bottom
         return elements, overflow
 
-    def _layout_section(self, group: Dict[str, Any], lane: Dict[str, Any], section_y: float, state: PosterState, params: Dict[str, Any], template_layout: Dict[str, Any]) -> tuple[List[Dict[str, Any]], float]:
+    def _layout_section(
+        self,
+        group: Dict[str, Any],
+        lane: Dict[str, Any],
+        section_y: float,
+        state: PosterState,
+        params: Dict[str, Any],
+        template_layout: Dict[str, Any],
+        *,
+        is_last_group: bool = True,
+    ) -> tuple[List[Dict[str, Any]], float]:
         container = deepcopy(group["container"])
-        children = [deepcopy(child) for child in group["children"]]
+        children = [
+            deepcopy(child)
+            for child in group["children"]
+            if not self._is_generated_bottom_fill(child)
+        ]
         section_id = group["section_id"]
 
         title_elements = [child for child in children if child.get("type") in {"section_title", "title_accent_block", "title_accent_line"}]
@@ -820,6 +842,19 @@ class MicroLayoutRefiner:
             rebuilt_children.append(other)
             content_bottom = max(content_bottom, other["y"] + other.get("height", 0))
 
+        if is_last_group:
+            bottom_fill = self._bottom_fill_elements(
+                group,
+                lane,
+                state,
+                params,
+                template_layout,
+                content_bottom,
+            )
+            for fill_element in bottom_fill:
+                rebuilt_children.append(fill_element)
+                content_bottom = max(content_bottom, fill_element["y"] + fill_element["height"])
+
         container["x"] = lane["x"]
         container["y"] = section_y
         container["width"] = lane["w"]
@@ -829,6 +864,403 @@ class MicroLayoutRefiner:
         )
 
         return [container] + rebuilt_children, container["y"] + container["height"]
+
+    def _is_generated_bottom_fill(self, element: Dict[str, Any]) -> bool:
+        element_id = str(element.get("id") or "")
+        return element_id.endswith("_bottom_takeaway") or "_bottom_fill_" in element_id
+
+    def _bottom_fill_elements(
+        self,
+        group: Dict[str, Any],
+        lane: Dict[str, Any],
+        state: PosterState,
+        params: Dict[str, Any],
+        template_layout: Dict[str, Any],
+        content_bottom: float,
+    ) -> List[Dict[str, Any]]:
+        cfg = self.refine_config
+        if not bool(cfg.get("bottom_takeaway_enabled", False)):
+            return []
+        if template_layout.get("layout_mode") != "template_prior":
+            return []
+
+        section_id = str(group.get("section_id") or "")
+        if not section_id:
+            return []
+
+        lane_bottom = float(lane["y"]) + float(lane["h"])
+        threshold = float(cfg.get("bottom_takeaway_threshold_inches", 0.42) or 0.42)
+        free_height = lane_bottom - content_bottom
+        if free_height < threshold:
+            edge_fill = self._bottom_edge_fill_element(group, lane, template_layout, content_bottom)
+            return [edge_fill] if edge_fill else []
+
+        large_gap_threshold = float(cfg.get("bottom_fill_large_gap_threshold_inches", 1.15) or 1.15)
+        if free_height < large_gap_threshold:
+            single = self._bottom_takeaway_element(group, lane, state, params, template_layout, content_bottom)
+            if single:
+                return [single]
+            edge_fill = self._bottom_edge_fill_element(group, lane, template_layout, content_bottom)
+            return [edge_fill] if edge_fill else []
+
+        bottom_padding = float(cfg.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06)
+        gap = float(cfg.get("bottom_takeaway_gap_inches", 0.12) or 0.12)
+        top = content_bottom + gap
+        bottom = lane_bottom - bottom_padding
+        available_height = bottom - top
+        if available_height < 0.45:
+            single = self._bottom_takeaway_element(group, lane, state, params, template_layout, content_bottom)
+            return [single] if single else []
+
+        padding = max(float(params.get("text_padding", 0.24) or 0.24), 0.18)
+        usable_width = max(float(lane["w"]) - 2 * padding, 0.5)
+        max_items = int(cfg.get("bottom_fill_max_items", 5) or 5)
+        texts = self._bottom_fill_texts(section_id, state, max_items)
+        if not texts:
+            single = self._bottom_takeaway_element(group, lane, state, params, template_layout, content_bottom)
+            return [single] if single else []
+
+        font_size = int(cfg.get("bottom_fill_font_size", cfg.get("bottom_takeaway_font_size", 36)) or 36)
+        line_spacing = float(cfg.get("bottom_fill_line_spacing", 0.9) or 0.9)
+        fill_color = str(cfg.get("bottom_takeaway_font_color", "#4A1020"))
+        font_family = self.typography_config["fonts"].get("body_text", "Arial")
+
+        wide_min = float(cfg.get("bottom_fill_wide_min_width_inches", 24) or 24)
+        if usable_width >= wide_min and len(texts) >= 2:
+            col_gap = max(padding * 1.35, 0.35)
+            col_width = max((usable_width - col_gap) / 2, 0.5)
+            split_index = (len(texts) + 1) // 2
+            columns = [texts[:split_index], texts[split_index:]]
+            elements = []
+            for index, column_texts in enumerate(columns):
+                if not column_texts:
+                    continue
+                elements.extend(
+                    self._distributed_bottom_text_elements(
+                        section_id=section_id,
+                        slot_id=str(lane.get("id") or group.get("lane_id") or ""),
+                        id_prefix=f"{section_id}_bottom_fill_{index + 1}",
+                        x=float(lane["x"]) + padding + index * (col_width + col_gap),
+                        width=col_width,
+                        top=top,
+                        bottom=bottom,
+                        texts=column_texts,
+                        font_family=font_family,
+                        font_size=font_size,
+                        font_color=fill_color,
+                        line_spacing=line_spacing,
+                        template_layout=template_layout,
+                    )
+                )
+            return elements
+
+        item_gap = float(cfg.get("bottom_fill_item_gap_inches", 0.18) or 0.18)
+        max_rows = max(1, min(max_items, len(texts)))
+        item_height = float(cfg.get("bottom_fill_item_height_inches", 1.05) or 1.05)
+        rows_that_fit = max(1, int((available_height + item_gap) // max(item_height + item_gap, 0.01)))
+        row_count = max(1, min(max_rows, rows_that_fit))
+        if row_count == 1:
+            single = self._bottom_takeaway_element(group, lane, state, params, template_layout, content_bottom)
+            return [single] if single else []
+
+        elements = []
+        elements.extend(
+            self._distributed_bottom_text_elements(
+                section_id=section_id,
+                slot_id=str(lane.get("id") or group.get("lane_id") or ""),
+                id_prefix=f"{section_id}_bottom_fill",
+                x=float(lane["x"]) + padding,
+                width=usable_width,
+                top=top,
+                bottom=bottom,
+                texts=texts[:row_count],
+                font_family=font_family,
+                font_size=font_size,
+                font_color=fill_color,
+                line_spacing=line_spacing,
+                template_layout=template_layout,
+            )
+        )
+        return elements
+
+    def _bottom_edge_fill_element(
+        self,
+        group: Dict[str, Any],
+        lane: Dict[str, Any],
+        template_layout: Dict[str, Any],
+        content_bottom: float,
+    ) -> Optional[Dict[str, Any]]:
+        if template_layout.get("layout_mode") != "template_prior":
+            return None
+        cfg = self.refine_config
+        lane_bottom = float(lane["y"]) + float(lane["h"])
+        free_height = lane_bottom - content_bottom
+        min_gap = float(cfg.get("bottom_edge_fill_min_gap_inches", 0.18) or 0.18)
+        if free_height < min_gap:
+            return None
+        edge_height = min(float(cfg.get("bottom_edge_fill_height_inches", 0.08) or 0.08), max(free_height * 0.45, 0.04))
+        bottom_padding = min(float(cfg.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06), max(free_height - edge_height, 0.0))
+        section_id = str(group.get("section_id") or "")
+        slot_id = str(lane.get("id") or group.get("lane_id") or "")
+        return {
+            "type": "title_accent_block",
+            "id": f"{section_id}_bottom_edge_fill",
+            "section_id": section_id,
+            "lane_id": slot_id,
+            "slot_id": slot_id,
+            "x": float(lane["x"]),
+            "y": lane_bottom - bottom_padding - edge_height,
+            "width": float(lane["w"]),
+            "height": edge_height,
+            "color": str((self.config.get("color_scheme") or {}).get("theme") or "#5A1420"),
+            "fill_color": "#5A1420",
+            "priority": 0.49,
+        }
+
+    def _distributed_bottom_text_elements(
+        self,
+        *,
+        section_id: str,
+        slot_id: str,
+        id_prefix: str,
+        x: float,
+        width: float,
+        top: float,
+        bottom: float,
+        texts: List[str],
+        font_family: str,
+        font_size: int,
+        font_color: str,
+        line_spacing: float,
+        template_layout: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        if not texts:
+            return []
+        measured_heights = [
+            min(
+                max(
+                    self._bottom_fill_text_height(text, width, font_family, font_size, line_spacing, template_layout),
+                    0.42,
+                ),
+                1.45,
+            )
+            for text in texts
+        ]
+        elements = []
+        count = len(texts)
+        for index, (text, height) in enumerate(zip(texts, measured_heights)):
+            if count == 1:
+                y = bottom - height
+            else:
+                y = top + (bottom - top - height) * index / max(count - 1, 1)
+            elements.append(
+                {
+                    "type": "text",
+                    "id": f"{id_prefix}_{index + 1}",
+                    "section_id": section_id,
+                    "lane_id": slot_id,
+                    "slot_id": slot_id,
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                    "content": text,
+                    "font_family": font_family,
+                    "font_size": font_size,
+                    "font_color": font_color,
+                    "line_spacing": line_spacing,
+                    "priority": 0.5,
+                }
+            )
+        return elements
+
+    def _bottom_fill_text_height(
+        self,
+        text: str,
+        width: float,
+        font_family: str,
+        font_size: int,
+        line_spacing: float,
+        template_layout: Dict[str, Any],
+    ) -> float:
+        measured = self._measure_text_height_for_refinement(
+            text_content=self._strip_markup_for_measurement(text),
+            width_inches=max(width, 0.5),
+            font_name=font_family,
+            font_size=font_size,
+            line_spacing=line_spacing,
+            template_layout=template_layout,
+        )
+        return (
+            float(measured["optimal_height"]) * self.refine_config.get("text_height_safety_factor", 1.0)
+            + self.refine_config.get("text_height_safety_padding", 0.05)
+        )
+
+    def _bottom_takeaway_element(
+        self,
+        group: Dict[str, Any],
+        lane: Dict[str, Any],
+        state: PosterState,
+        params: Dict[str, Any],
+        template_layout: Dict[str, Any],
+        content_bottom: float,
+    ) -> Optional[Dict[str, Any]]:
+        cfg = self.refine_config
+        if not bool(cfg.get("bottom_takeaway_enabled", False)):
+            return None
+        if template_layout.get("layout_mode") != "template_prior":
+            return None
+
+        section_id = str(group.get("section_id") or "")
+        if not section_id:
+            return None
+
+        lane_bottom = float(lane["y"]) + float(lane["h"])
+        threshold = float(cfg.get("bottom_takeaway_threshold_inches", 0.42) or 0.42)
+        if lane_bottom - content_bottom < threshold:
+            return None
+
+        height = float(cfg.get("bottom_takeaway_height_inches", 0.52) or 0.52)
+        bottom_padding = float(cfg.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06)
+        gap = float(cfg.get("bottom_takeaway_gap_inches", 0.12) or 0.12)
+        y = lane_bottom - bottom_padding - height
+        if y < content_bottom + gap:
+            return None
+
+        text = self._bottom_takeaway_text(section_id, state)
+        if not text:
+            return None
+
+        padding = max(float(params.get("text_padding", 0.24) or 0.24), 0.18)
+        slot_id = str(lane.get("id") or group.get("lane_id") or "")
+        return {
+            "type": "text",
+            "id": f"{section_id}_bottom_takeaway",
+            "section_id": section_id,
+            "lane_id": slot_id,
+            "slot_id": slot_id,
+            "x": float(lane["x"]) + padding,
+            "y": y,
+            "width": max(float(lane["w"]) - 2 * padding, 0.5),
+            "height": height,
+            "content": text,
+            "font_family": self.typography_config["fonts"].get("body_text", "Arial"),
+            "font_size": int(cfg.get("bottom_takeaway_font_size", 36) or 36),
+            "font_color": str(cfg.get("bottom_takeaway_font_color", "#4A1020")),
+            "line_spacing": 0.85,
+            "priority": 0.52,
+        }
+
+    def _bottom_takeaway_text(self, section_id: str, state: PosterState) -> str:
+        max_chars = int(self.refine_config.get("bottom_takeaway_max_chars", 92) or 92)
+        section = self._story_section_by_id(state, section_id)
+        title = str(section.get("section_title") or "").lower()
+        role = str(section.get("content_role") or "").lower()
+
+        if "hierarchy" in title or "hags" in title:
+            text = "Key benefit: city-scale search without a flat action space."
+        elif "result" in title or role == "results":
+            text = "Operational takeaway: prioritize regions first, then parcels."
+        elif "problem" in title or "search" in title or role in {"foundation", "motivation"}:
+            text = "Adaptive routing turns each visit into new evidence."
+        elif "method" in role or "ags" in title:
+            text = "Mechanism: predict risk, query parcel, update route."
+        else:
+            text = self._last_text_sentence(section)
+        return self._truncate_takeaway(text, max_chars)
+
+    def _bottom_fill_texts(self, section_id: str, state: PosterState, max_items: int) -> List[str]:
+        section = self._story_section_by_id(state, section_id)
+        title = str(section.get("section_title") or "").lower()
+        role = str(section.get("content_role") or "").lower()
+        candidates: List[str] = []
+
+        if "result" in title or role == "results":
+            candidates.extend(
+                [
+                    "<color:#7A1F2B>HAGS</color> stays strongest across the displayed query budgets.",
+                    "The hierarchy matters most when outreach visits are scarce.",
+                    "Region-first search avoids spending budget in low-yield areas.",
+                    "Parcel-level updates exploit each new observation immediately.",
+                    "Travel-aware settings amplify the gains over greedy baselines.",
+                ]
+            )
+        elif "hierarchy" in title or "hags" in title:
+            candidates.extend(
+                [
+                    "<color:#7A1F2B>HAGS</color> turns a city-scale search into reusable local decisions.",
+                    "The high-level policy selects regions before parcels.",
+                    "The shared predictor transfers evidence across neighborhoods.",
+                ]
+            )
+        elif "method" in role or "ags" in title:
+            candidates.extend(
+                [
+                    "Predict risk, query a parcel, then update the route.",
+                    "Each observation changes both the classifier and the search policy.",
+                    "Adaptive search balances exploration with immediate outreach yield.",
+                ]
+            )
+        elif "problem" in title or "search" in title or role in {"foundation", "motivation"}:
+            candidates.extend(
+                [
+                    "Outreach teams must choose visits under time and travel limits.",
+                    "Risk information is partial, local, and quickly changing.",
+                    "Adaptive routing turns each visit into new evidence.",
+                ]
+            )
+
+        candidates.extend(self._section_sentence_candidates(section))
+        deduped = []
+        seen = set()
+        for candidate in candidates:
+            text = self._truncate_takeaway(candidate, int(self.refine_config.get("bottom_takeaway_max_chars", 92) or 92))
+            key = self._strip_markup_for_measurement(text).lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(text)
+            if len(deduped) >= max_items:
+                break
+        return deduped
+
+    def _section_sentence_candidates(self, section: Dict[str, Any]) -> List[str]:
+        candidates: List[str] = []
+        for item in section.get("text_content") or []:
+            text = self._strip_markup_for_measurement(str(item or "")).strip()
+            if not text:
+                continue
+            for piece in re.split(r"(?<=[.!?])\s+", text):
+                piece = piece.strip(" -\t\n")
+                if len(piece) >= 28:
+                    candidates.append(piece)
+        return candidates
+
+    def _story_section_by_id(self, state: PosterState, section_id: str) -> Dict[str, Any]:
+        sections = ((state.get("story_board") or {}).get("spatial_content_plan") or {}).get("sections") or []
+        for section in sections:
+            if str(section.get("section_id") or "") == section_id:
+                return section
+        return {}
+
+    def _last_text_sentence(self, section: Dict[str, Any]) -> str:
+        for item in reversed(section.get("text_content") or []):
+            text = self._strip_markup_for_measurement(str(item or "")).strip()
+            if not text:
+                continue
+            pieces = re.split(r"(?<=[.!?])\s+", text)
+            for piece in reversed(pieces):
+                piece = piece.strip(" -\t\n")
+                if len(piece) >= 18:
+                    return piece
+        return "Takeaway: focus attention on the strongest poster claim."
+
+    def _truncate_takeaway(self, text: str, max_chars: int) -> str:
+        text = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(text) <= max_chars:
+            return text
+        candidate = text[: max_chars + 1].rsplit(" ", 1)[0].strip(" ,;:")
+        return candidate.rstrip(".") + "."
 
     def _layout_portrait_split_visual_text(
         self,
@@ -901,14 +1333,23 @@ class MicroLayoutRefiner:
             text_x = content_left
             visual_x = text_x + text_width + gap
 
+        vertical_alignment = str(cfg.get("portrait_split_vertical_alignment", "bottom") or "bottom").lower()
+        if vertical_alignment == "center":
+            visual_y = current_y + max((available_height - scaled_height) / 2, 0.0)
+            text_y = current_y + max((available_height - total_text_height) / 2, 0.0)
+        else:
+            content_bottom = lane_bottom - bottom_padding
+            visual_y = max(current_y, content_bottom - scaled_height)
+            text_y = max(current_y, content_bottom - total_text_height)
+
         visual["x"] = visual_x
-        visual["y"] = current_y + max((available_height - scaled_height) / 2, 0.0)
+        visual["y"] = visual_y
         visual["width"] = scaled_width
         visual["height"] = scaled_height
         visual["visual_footprint"] = footprint_report
         visual["portrait_split_layout"] = "image_left_text_right" if visual_on_left else "text_left_image_right"
 
-        y = current_y + max((available_height - total_text_height) / 2, 0.0)
+        y = text_y
         tail: List[Dict[str, Any]] = [visual]
         content_bottom = visual["y"] + visual["height"]
         for text_element, text_height, font_size in measured_text:

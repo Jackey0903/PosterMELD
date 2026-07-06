@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -53,6 +54,7 @@ class BlockOccupancyAnalyzer:
         lanes = template.get("lanes") or []
         if not lanes:
             raise ValueError("layout_template_metadata.lanes is required for block occupancy analysis")
+        self._analysis_orientation = str(template.get("orientation") or "").lower()
 
         lane_map = {str(lane.get("id")): lane for lane in lanes if lane.get("id")}
         sections = self._story_sections_by_id(state.get("story_board") or {})
@@ -139,6 +141,7 @@ class BlockOccupancyAnalyzer:
         target_extra_chars = min(target_extra_chars, settings["max_extra_chars_per_block"])
         if target_extra_chars < settings["min_extra_chars"]:
             target_extra_chars = 0
+        text_box_slack = self._text_box_slack(text_items)
 
         if utilization > settings["hard_max"]:
             action = "reduce"
@@ -170,6 +173,8 @@ class BlockOccupancyAnalyzer:
             "target_extra_chars": target_extra_chars,
             "current_text_chars": len(current_text),
             "text_item_count": len(text_items),
+            "max_text_box_slack_ratio": text_box_slack["max_ratio"],
+            "max_text_box_slack_inches": text_box_slack["max_inches"],
             "visual_count": len(visual_items),
             "action": action,
             "reason": reason,
@@ -211,6 +216,8 @@ class BlockOccupancyAnalyzer:
             h = float(child.get("height", child.get("h", 0.0)) or 0.0)
             if w <= 0 or h <= 0:
                 continue
+            if child_type == "text":
+                h = self._visible_text_height(child, h)
             right = x + w
             bottom = y + h
             if right < lane_x - 0.2 or x > lane_right + 0.2 or bottom < lane_y - 0.2 or y > lane_bottom + 0.2:
@@ -236,7 +243,54 @@ class BlockOccupancyAnalyzer:
             "min_extra_chars": int(self.block_config.get("min_extra_chars", 40)),
             "min_missing_height_for_expand": float(self.block_config.get("min_missing_height_for_expand", 0.25)),
             "max_extra_chars_per_block": int(self.block_config.get("max_extra_chars_per_block", 700)),
+            "max_text_box_slack_ratio": float(self.block_config.get("max_text_box_slack_ratio", 2.2)),
+            "max_text_box_slack_inches": float(self.block_config.get("max_text_box_slack_inches", 2.0)),
         }
+
+    def _visible_text_height(self, item: Dict[str, Any], box_height: float) -> float:
+        measured = self._estimated_text_height(item)
+        if measured <= 0:
+            return min(box_height, 0.1)
+        settings = self._settings()
+        max_by_ratio = measured * max(settings["max_text_box_slack_ratio"], 1.0)
+        max_by_inches = measured + max(settings["max_text_box_slack_inches"], 0.0)
+        allowed = max(measured, min(max_by_ratio, max_by_inches))
+        return min(box_height, allowed)
+
+    def _text_box_slack(self, text_items: List[Dict[str, Any]]) -> Dict[str, float]:
+        max_ratio = 1.0
+        max_inches = 0.0
+        for item in text_items:
+            box_height = float(item.get("height", 0.0) or 0.0)
+            measured = self._estimated_text_height(item)
+            if box_height <= 0 or measured <= 0:
+                continue
+            max_ratio = max(max_ratio, box_height / measured)
+            max_inches = max(max_inches, box_height - measured)
+        return {"max_ratio": round(max_ratio, 3), "max_inches": round(max_inches, 4)}
+
+    def _estimated_text_height(self, item: Dict[str, Any]) -> float:
+        text = self._strip_markup(str(item.get("content") or ""))
+        width = max(float(item.get("width", 0.0) or 0.0), 0.5)
+        font_size = int(item.get("font_size") or self.config["typography"]["sizes"]["body_text"])
+        line_spacing = float(item.get("line_spacing") or self.config["typography"].get("line_spacing", 1.0))
+        chars_per_line = self._chars_per_line(width, font_size)
+        line_count = 0
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            line_count += max(1, math.ceil(len(line) / max(chars_per_line, 1)))
+        if line_count <= 0:
+            return 0.0
+        return line_count * self._line_height(font_size, line_spacing) + max(line_count - 1, 0) * 0.04 + 0.12
+
+    def _strip_markup(self, content: str) -> str:
+        text = re.sub(r"<color:[^>]+>", "", content)
+        text = text.replace("</color>", "")
+        text = text.replace("**", "")
+        text = text.replace("*", "")
+        return text
 
     def _section_containers(self, layout: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return [
@@ -297,12 +351,21 @@ class BlockOccupancyAnalyzer:
         return (font_size / 72) * max(line_spacing, 0.9) * 1.15
 
     def _chars_per_line(self, width_inches: float, font_size: int) -> int:
-        chars_per_inch = float(
-            self.block_config.get(
-                "ppt_chars_per_inch_at_44pt",
-                self.config.get("micro_layout_refinement", {}).get("ppt_chars_per_inch_at_44pt", 4.2),
+        micro_config = self.config.get("micro_layout_refinement", {})
+        if getattr(self, "_analysis_orientation", "") == "portrait":
+            chars_per_inch = float(
+                self.block_config.get(
+                    "portrait_ppt_chars_per_inch_at_44pt",
+                    micro_config.get("portrait_ppt_chars_per_inch_at_44pt", 3.25),
+                )
             )
-        )
+        else:
+            chars_per_inch = float(
+                self.block_config.get(
+                    "ppt_chars_per_inch_at_44pt",
+                    micro_config.get("ppt_chars_per_inch_at_44pt", 4.2),
+                )
+            )
         return max(int(width_inches * chars_per_inch * (44 / max(font_size, 1))), 18)
 
     def _title_from_children(self, title_items: List[Dict[str, Any]]) -> str:
