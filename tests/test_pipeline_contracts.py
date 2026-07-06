@@ -16,6 +16,7 @@ from src.agents.block_vlm_reviewer import BlockVLMReviewer
 from src.agents.curator import StoryBoardCurator
 from src.agents.font_agent import FontAgent
 from src.agents.generated_teaser_agent import GeneratedTeaserAgent
+from src.agents.header_block_reviewer import HeaderBlockReviewer
 from src.agents.header_planner import HeaderPlanner
 from src.agents.layout_agent import LayoutAgent
 from src.agents.micro_layout_refiner import MicroLayoutRefiner
@@ -1182,6 +1183,225 @@ def test_header_planner_shortens_subtitle_to_complete_clause():
     )
 
     assert subtitle == "Eviction-prevention outreach faces a sequential search problem"
+
+
+def test_header_planner_uses_readable_portrait_subtitle_size(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    aff_path = tmp_path / "affiliation.png"
+    Image.new("RGBA", (1200, 360), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (900, 900), (150, 20, 35, 255)).save(aff_path)
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_13_portrait",
+        width=36,
+        height=50.88,
+        logo_path=str(conf_path),
+        aff_logo_path=str(aff_path),
+        header_route="split_logos",
+        header_subtitle_policy="always",
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Active Geospatial Search for Efficient Tenant Eviction Outreach",
+            "authors": "A. Sarkar, A. DiChristofano, S. Das, P.J. Fowler, N. Jacobs, Y. Vorobeychik",
+        }
+    }
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Search Problem",
+                    "content_role": "foundation",
+                    "text_content": [
+                        "Eviction-prevention outreach faces a sequential search problem: canvassers have limited budget, uncertain current risk labels, and travel costs."
+                    ],
+                }
+            ]
+        }
+    }
+
+    plan = HeaderPlanner()(state)["header_plan"]
+
+    assert plan["subtitle"]["text"] == "Eviction-prevention outreach faces a sequential search problem"
+    assert plan["subtitle"]["font_size"] >= plan["title"]["font_size"] * 0.58
+    expected_author_gap = load_config()["header_planner"]["portrait_title_author_gap_inches"]
+    assert plan["authors"]["top_gap_inches"] == pytest.approx(expected_author_gap)
+
+
+def test_header_planner_compacts_long_portrait_subtitle(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    aff_path = tmp_path / "affiliation.png"
+    Image.new("RGBA", (1200, 360), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (900, 900), (150, 20, 35, 255)).save(aff_path)
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_13_portrait",
+        width=36,
+        height=50.88,
+        logo_path=str(conf_path),
+        aff_logo_path=str(aff_path),
+        header_route="split_logos",
+        header_subtitle_policy="always",
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Active Geospatial Search for Efficient Tenant Eviction Outreach",
+            "authors": "A. Sarkar, A. DiChristofano, S. Das, P.J. Fowler, N. Jacobs, Y. Vorobeychik",
+        }
+    }
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Search Problem",
+                    "content_role": "foundation",
+                    "text_content": [
+                        "Tenant eviction outreach is budget-limited and must sequentially decide which properties to canvas without knowing current eviction risk in advance."
+                    ],
+                }
+            ]
+        }
+    }
+
+    plan = HeaderPlanner()(state)["header_plan"]
+
+    assert plan["subtitle"]["text"] == "Tenant eviction outreach is budget-limited"
+    assert plan["subtitle"]["font_size"] >= 42
+
+
+def test_header_planner_balances_wrapped_author_lines(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    aff_path = tmp_path / "affiliation.png"
+    Image.new("RGBA", (1200, 360), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (900, 900), (150, 20, 35, 255)).save(aff_path)
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_13_portrait",
+        width=36,
+        height=50.88,
+        logo_path=str(conf_path),
+        aff_logo_path=str(aff_path),
+        header_route="split_logos",
+        header_subtitle_policy="always",
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "Active Geospatial Search for Efficient Tenant Eviction Outreach",
+            "authors": "A. Sarkar, A. DiChristofano, S. Das, P.J. Fowler, N. Jacobs, Y. Vorobeychik",
+        }
+    }
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Search Problem",
+                    "content_role": "foundation",
+                    "text_content": ["Tenant eviction outreach is budget-limited and must sequentially decide which properties to canvas."],
+                }
+            ]
+        }
+    }
+
+    plan = HeaderPlanner()(state)["header_plan"]
+    author_lines = plan["authors"]["text"].splitlines()
+
+    assert len(author_lines) == 2
+    assert abs(len(author_lines[0]) - len(author_lines[1])) < 16
+    assert not author_lines[1].strip().startswith("Y. Vorobeychik")
+
+
+def test_header_block_reviewer_repairs_small_subtitle_and_author_gap(tmp_path):
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_13_portrait",
+        width=36,
+        height=50.88,
+    )
+    state["output_dir"] = str(tmp_path / "output")
+    state["styled_layout"] = [
+        {
+            "type": "title",
+            "x": 7.2,
+            "y": 2.15,
+            "width": 19.55,
+            "height": 7.0,
+            "title_text": "Active Geospatial Search for\nEfficient Tenant Eviction Outreach",
+            "subtitle_text": "Eviction-prevention outreach faces a sequential search problem",
+            "authors_text": "A. Sarkar, A. DiChristofano, S. Das",
+            "content": "Active Geospatial Search for\nEfficient Tenant Eviction Outreach\nEviction-prevention outreach faces a sequential search problem\nA. Sarkar, A. DiChristofano, S. Das",
+            "font_size": 67,
+            "subtitle_font_size": 29,
+            "subtitle_box_height": 0.45,
+            "title_box_height": 1.96,
+            "title_to_subtitle_gap_inches": 0.08,
+            "author_font_size": 56,
+            "author_box_height": 1.62,
+            "author_top_gap_inches": 0.18,
+        }
+    ]
+
+    result = HeaderBlockReviewer()(state)
+    title = result["styled_layout"][0]
+
+    assert result["header_block_patch_applied"] is True
+    assert title["subtitle_font_size"] > 38
+    assert title["subtitle_box_height"] > 0.60
+    expected_author_gap = load_config()["header_planner"]["portrait_title_author_gap_inches"]
+    assert title["author_top_gap_inches"] == pytest.approx(expected_author_gap)
+    assert Path(state["output_dir"], "content", "header_block_review.json").exists()
+
+
+def test_header_block_reviewer_applies_vlm_author_spacing_patch(tmp_path, monkeypatch):
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_13_portrait",
+        width=36,
+        height=50.88,
+    )
+    state["output_dir"] = str(tmp_path / "output")
+    initial_gap = load_config()["header_planner"]["portrait_title_author_gap_inches"]
+    state["styled_layout"] = [
+        {
+            "type": "title",
+            "x": 7.2,
+            "y": 2.15,
+            "width": 19.55,
+            "height": 7.0,
+            "title_text": "Active Geospatial Search for\nEfficient Tenant Eviction Outreach",
+            "subtitle_text": "Eviction-prevention outreach faces a sequential search problem",
+            "authors_text": "A. Sarkar, A. DiChristofano, S. Das",
+            "content": "Active Geospatial Search for\nEfficient Tenant Eviction Outreach\nEviction-prevention outreach faces a sequential search problem\nA. Sarkar, A. DiChristofano, S. Das",
+            "font_size": 67,
+            "subtitle_font_size": 42,
+            "subtitle_box_height": 0.66,
+            "title_box_height": 1.96,
+            "title_to_subtitle_gap_inches": 0.10,
+            "author_font_size": 56,
+            "author_box_height": 1.62,
+            "author_top_gap_inches": initial_gap,
+        }
+    ]
+
+    monkeypatch.setattr(
+        HeaderBlockReviewer,
+        "_review_with_vlm",
+        lambda self, state, crop_path: {
+            "status": "ok",
+            "issues": [{"severity": "medium", "category": "author_spacing", "description": "authors too close"}],
+            "recommendations": [{"target": "authors", "action": "move_down", "reason": "increase separation"}],
+        },
+    )
+
+    result = HeaderBlockReviewer()(state)
+    title = result["styled_layout"][0]
+
+    assert result["header_block_patch_applied"] is True
+    assert title["author_top_gap_inches"] > initial_gap
+    assert title["author_top_gap_inches"] <= load_config()["header_block_review"]["max_author_gap_inches"]
+    assert any(patch.get("source") == "vlm_header_review" for patch in result["header_block_review"]["patch"])
 
 
 def test_layout_agent_uses_header_plan_for_title_and_logo_elements(tmp_path):
@@ -5529,6 +5749,17 @@ def test_block_content_refiner_allows_near_one_line_bottom_whitespace():
     )
 
     assert safe_extra_chars == 86
+
+
+def test_block_content_refiner_resets_header_review_before_relayout():
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_13_portrait", width=36, height=50.88)
+    state["header_block_review"] = {"accepted": True}
+    state["header_block_patch_applied"] = True
+
+    BlockContentRefiner()._reset_downstream_state(state)
+
+    assert state["header_block_review"] is None
+    assert state["header_block_patch_applied"] is False
 
 
 def test_block_content_refiner_reduces_crowded_block_without_changing_refs(tmp_path):

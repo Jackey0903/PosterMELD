@@ -551,6 +551,8 @@ Blocks:
         state["column_analysis"] = None
         state["design_layout"] = None
         state["styled_layout"] = None
+        state["header_block_review"] = None
+        state["header_block_patch_applied"] = False
         state["visual_legibility_review"] = None
         state["vlm_layout_review"] = None
         state["vlm_layout_patch"] = None
@@ -755,6 +757,8 @@ def block_content_refiner_node(state: PosterState) -> Dict[str, Any]:
         "column_analysis": result.get("column_analysis"),
         "design_layout": result.get("design_layout"),
         "styled_layout": result.get("styled_layout"),
+        "header_block_review": result.get("header_block_review"),
+        "header_block_patch_applied": result.get("header_block_patch_applied", False),
         "visual_legibility_review": result.get("visual_legibility_review"),
         "vlm_layout_review": result.get("vlm_layout_review"),
         "vlm_layout_patch": result.get("vlm_layout_patch"),

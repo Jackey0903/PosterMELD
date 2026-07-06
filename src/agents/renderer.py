@@ -473,7 +473,15 @@ class Renderer:
         if not clean_text or width_inches <= 0:
             return desired_size
         header_config = self.config.get("header_planner", {})
-        avg_char_width = float(header_config.get("title_fit_avg_char_width_em", 0.56))
+        if min_key == "subtitle_single_line_min_font_size":
+            avg_char_width = float(
+                header_config.get(
+                    "portrait_subtitle_fit_avg_char_width_em",
+                    header_config.get("subtitle_fit_avg_char_width_em", header_config.get("title_fit_avg_char_width_em", 0.56)),
+                )
+            )
+        else:
+            avg_char_width = float(header_config.get("title_fit_avg_char_width_em", 0.56))
         width_safety = float(header_config.get("title_fit_width_safety", 0.94))
         usable_width = max(width_inches * width_safety, 0.1)
         estimated_size = (usable_width * 72) / max(len(clean_text) * avg_char_width, 1)

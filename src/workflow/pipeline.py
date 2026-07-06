@@ -95,6 +95,8 @@ def create_timing_wrapper(node_func: Callable, component_name: str) -> Callable:
             result["timing_metrics"].color_agent_time = elapsed
         elif component_name == "header_planner":
             result["timing_metrics"].header_planner_time = elapsed
+        elif component_name == "header_block_reviewer":
+            result["timing_metrics"].header_block_reviewer_time = elapsed
         elif component_name == "font_agent":
             result["timing_metrics"].font_agent_time = elapsed
         elif component_name == "micro_layout_refiner":
@@ -151,6 +153,11 @@ def _route_after_renderer(state: PosterState) -> str:
     if state.get("render_stage") == "final" or state.get("final_poster_accepted", False):
         return "end"
     if (
+        load_config().get("header_block_review", {}).get("enabled", True)
+        and not state.get("header_block_review")
+    ):
+        return "header_block_reviewer"
+    if (
         state.get("enable_block_vlm_review", False)
         and state.get("block_refinement_count", 0) < _block_refinement_max_iterations(state)
         and not state.get("block_vlm_review")
@@ -164,6 +171,12 @@ def _route_after_renderer(state: PosterState) -> str:
     if state.get("enable_vlm_layout_review", False):
         return "vlm_layout_reviewer"
     return "prepare_final_render"
+
+
+def _route_after_header_block_reviewer(state: PosterState) -> str:
+    if state.get("header_block_patch_applied", False):
+        return "renderer"
+    return _route_after_renderer(state)
 
 
 def _route_after_visual_legibility_reviewer(state: PosterState) -> str:
@@ -486,6 +499,7 @@ def create_workflow_graph():
     from src.agents.curator import curator_node
     from src.agents.font_agent import font_agent_node
     from src.agents.generated_teaser_agent import generated_teaser_agent_node
+    from src.agents.header_block_reviewer import header_block_reviewer_node
     from src.agents.header_planner import header_planner_node
     from src.agents.layout_with_balancer import layout_with_balancer_node as layout_optimizer_node
     from src.agents.micro_layout_refiner import micro_layout_refiner_node
@@ -519,6 +533,7 @@ def create_workflow_graph():
     graph.add_node("micro_layout_refiner", create_timing_wrapper(micro_layout_refiner_node, "micro_layout_refiner"))
     graph.add_node("visual_asset_agent", create_timing_wrapper(visual_asset_agent_node, "visual_asset_agent"))
     graph.add_node("renderer", create_timing_wrapper(renderer_node, "renderer"))
+    graph.add_node("header_block_reviewer", create_timing_wrapper(header_block_reviewer_node, "header_block_reviewer"))
     graph.add_node("block_occupancy_analyzer", create_timing_wrapper(block_occupancy_analyzer_node, "block_occupancy_analyzer"))
     graph.add_node("block_vlm_reviewer", create_timing_wrapper(block_vlm_reviewer_node, "block_vlm_reviewer"))
     graph.add_node("block_content_refiner", create_timing_wrapper(block_content_refiner_node, "block_content_refiner"))
@@ -564,6 +579,19 @@ def create_workflow_graph():
         "renderer",
         _route_after_renderer,
         {
+            "block_occupancy_analyzer": "block_occupancy_analyzer",
+            "header_block_reviewer": "header_block_reviewer",
+            "visual_legibility_reviewer": "visual_legibility_reviewer",
+            "vlm_layout_reviewer": "vlm_layout_reviewer",
+            "prepare_final_render": "prepare_final_render",
+            "end": END,
+        },
+    )
+    graph.add_conditional_edges(
+        "header_block_reviewer",
+        _route_after_header_block_reviewer,
+        {
+            "renderer": "renderer",
             "block_occupancy_analyzer": "block_occupancy_analyzer",
             "visual_legibility_reviewer": "visual_legibility_reviewer",
             "vlm_layout_reviewer": "vlm_layout_reviewer",
@@ -695,6 +723,10 @@ def save_timing_log(state: PosterState):
             "header_planner": {
                 "time_seconds": round(metrics.header_planner_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.header_planner_time)
+            },
+            "header_block_reviewer": {
+                "time_seconds": round(metrics.header_block_reviewer_time, 2),
+                "percentage": metrics.get_component_percentage(metrics.header_block_reviewer_time)
             },
             "font_agent": {
                 "time_seconds": round(metrics.font_agent_time, 2),

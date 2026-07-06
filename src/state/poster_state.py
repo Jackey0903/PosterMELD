@@ -50,6 +50,7 @@ class TimingMetrics:
     layout_optimizer_time: float = 0.0
     color_agent_time: float = 0.0
     header_planner_time: float = 0.0
+    header_block_reviewer_time: float = 0.0
     font_agent_time: float = 0.0
     micro_layout_refiner_time: float = 0.0
     title_designer_time: float = 0.0
@@ -133,6 +134,8 @@ class PosterState(TypedDict):
     template_block_plan: Optional[Dict[str, Any]]
     layout_intent: Optional[Dict[str, Any]]
     header_plan: Optional[Dict[str, Any]]
+    header_block_review: Optional[Dict[str, Any]]
+    header_block_patch_applied: bool
     template_prior_source_story_board: Optional[Dict[str, Any]]
     template_fast_mode: bool
     fast_block_contract: Optional[Dict[str, Any]]
@@ -301,6 +304,8 @@ def create_state(
         template_block_plan=None,
         layout_intent=None,
         header_plan=None,
+        header_block_review=None,
+        header_block_patch_applied=False,
         template_prior_source_story_board=None,
         template_fast_mode=False,
         fast_block_contract=None,

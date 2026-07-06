@@ -48,6 +48,7 @@ header_planner:
   short_title_max_chars: 82
   short_title_max_words: 11
   subtitle_max_chars: 86
+  portrait_subtitle_max_chars: 62
   title_logo_gap_inches: 0.46
   min_title_logo_gap_inches: 0.20
   min_title_width_fraction: 0.42
@@ -61,8 +62,10 @@ header_planner:
   conservative_logo_scale: 0.82
   subtitle_title_scale: 0.94
   subtitle_font_scale: 0.58
-  portrait_subtitle_font_scale: 0.72
-  title_subtitle_gap_inches: 0.08
+  portrait_subtitle_font_scale: 0.78
+  subtitle_fit_avg_char_width_em: 0.50
+  portrait_subtitle_fit_avg_char_width_em: 0.52
+  title_subtitle_gap_inches: 0.10
   title_wrap_policy: "auto"
   force_single_line_title: true
   title_fit_avg_char_width_em: 0.56
@@ -81,7 +84,7 @@ header_planner:
   large_landscape_author_font_size: 50
   portrait_title_font_size: 72
   portrait_author_font_size: 56
-  portrait_title_author_gap_inches: 0.18
+  portrait_title_author_gap_inches: 0.42
   portrait_title_line_height_em: 1.00
   portrait_author_line_height_em: 1.04
   portrait_author_max_lines: 2
@@ -103,9 +106,22 @@ header_planner:
   portrait_split_wide_conference_side_width_fraction: 0.22
   portrait_split_logo_min_side_width_inches: 4.0
   portrait_split_title_logo_gap_inches: 0.34
-  portrait_split_title_vertical_offset_inches: 0.42
+  portrait_split_title_vertical_offset_inches: 0.55
   manual_affiliation_logo_overrides_auto: true
   stable_random_by_default: false
+
+header_block_review:
+  enabled: true
+  crop_margin_inches: 0.18
+  target_subtitle_title_ratio: 0.64
+  min_subtitle_title_ratio: 0.54
+  max_subtitle_title_ratio: 0.74
+  subtitle_box_line_height: 1.12
+  title_subtitle_gap_inches: 0.10
+  use_header_author_gap: true
+  vlm_enabled: true
+  vlm_author_gap_increment_inches: 0.10
+  max_author_gap_inches: 0.50
 
 default_poster_style: "navy_serif"
 poster_style_presets:

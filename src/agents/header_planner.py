@@ -258,10 +258,10 @@ class HeaderPlanner:
         return self._generate_subtitle(state, title)
 
     def _generate_subtitle(self, state: PosterState, title: str) -> str:
-        max_chars = int(self.header_config.get("subtitle_max_chars", 86))
+        max_chars = self._subtitle_max_chars(state)
         candidates = self._subtitle_candidates_from_state(state)
         for candidate in candidates:
-            cleaned = self._clean_subtitle(candidate)
+            cleaned = self._clean_subtitle(candidate, max_chars)
             if 18 <= len(cleaned) <= max_chars:
                 return cleaned
 
@@ -277,6 +277,15 @@ class HeaderPlanner:
             phrase = " ".join(keywords) if keywords else "the paper's main idea"
             candidate = f"Motivation, method, and evidence for {phrase}"
         return self._shorten_subtitle(candidate, max_chars)
+
+    def _subtitle_max_chars(self, state: PosterState) -> int:
+        default = int(self.header_config.get("subtitle_max_chars", 86))
+        width = float(state.get("poster_width") or 0.0)
+        height = float(state.get("poster_height") or 0.0)
+        template_name = str(state.get("layout_template") or state.get("resolved_layout_template") or "")
+        if height > width or template_name.endswith("_portrait"):
+            return int(self.header_config.get("portrait_subtitle_max_chars", default))
+        return default
 
     def _subtitle_candidates_from_state(self, state: PosterState) -> List[str]:
         candidates: List[str] = []
@@ -299,14 +308,37 @@ class HeaderPlanner:
             candidates.append(abstract_match.group(1))
         return candidates
 
-    def _clean_subtitle(self, text: str) -> str:
+    def _clean_subtitle(self, text: str, max_chars: Optional[int] = None) -> str:
         text = normalize_text_for_poster(text)
         text = re.sub(r"^[\-\u2022\u25e6\*\s]+", "", text)
         text = re.sub(r"\[[^\]]+\]", "", text)
         text = re.sub(r"\([^)]{0,24}\d{2,4}[^)]{0,24}\)", "", text)
         text = re.sub(r"\s+", " ", text).strip(" .;:-")
         first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
-        return self._shorten_subtitle(first_sentence or text, int(self.header_config.get("subtitle_max_chars", 86)))
+        limit = int(max_chars or self.header_config.get("subtitle_max_chars", 86))
+        compact = self._compact_subtitle(first_sentence or text, limit)
+        return self._shorten_subtitle(compact, limit)
+
+    def _compact_subtitle(self, text: str, max_chars: int) -> str:
+        text = re.sub(r"\s+", " ", str(text or "")).strip(" .;:-")
+        if len(text) <= max_chars:
+            return text
+        if ":" in text:
+            prefix = text.split(":", 1)[0].strip(" .;:-")
+            if 18 <= len(prefix) <= max_chars:
+                return prefix
+        clause_patterns = [
+            r"^(.{18,}?\b(?:is|are)\s+[^.;:]{4,42}?)\s+and\s+(?:must|can|will|should|requires?|needs?|uses?)\b",
+            r"^(.{18,}?\b(?:faces|solves|addresses|studies)\s+[^.;:]{4,42}?)\s+(?:while|without|under|using|to)\b",
+            r"^(.{18,}?\b(?:requires|uses|introduces)\s+[^.;:]{4,42}?)\s+(?:while|without|under|using|to|and)\b",
+        ]
+        for pattern in clause_patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                candidate = match.group(1).strip(" .;:-")
+                if 18 <= len(candidate) <= max_chars:
+                    return candidate
+        return text
 
     def _shorten_subtitle(self, text: str, max_chars: int) -> str:
         text = re.sub(r"\s+", " ", text).strip()
@@ -334,6 +366,9 @@ class HeaderPlanner:
             "or",
             "the",
             "to",
+            "must",
+            "which",
+            "that",
             "using",
             "with",
         }
@@ -414,6 +449,7 @@ class HeaderPlanner:
             template_layout,
             physical_route,
         )
+        display_authors = self._display_author_text(authors, author_line_count)
         title_line_count = max(1, len([line for line in str(display_title or title).splitlines() if line.strip()]))
         title_metrics = self._title_metrics(
             title_box["h"],
@@ -457,7 +493,8 @@ class HeaderPlanner:
                 "single_line": bool(self.header_config.get("force_single_line_title", True)),
             },
             "authors": {
-                "text": authors,
+                "text": display_authors,
+                "original_text": authors,
                 "font_size": author_font_size,
                 "x": author_box["x"],
                 "w": author_box["w"],
@@ -473,6 +510,29 @@ class HeaderPlanner:
         plan["validation"] = self._validate_plan(plan, header)
         return plan
 
+    def _display_author_text(self, authors: str, line_count: int) -> str:
+        clean = re.sub(r"\s+", " ", str(authors or "")).strip()
+        if line_count <= 1 or not clean or "," not in clean:
+            return clean
+        parts = [part.strip() for part in clean.split(",") if part.strip()]
+        if len(parts) < 3:
+            return clean
+        target_lines = min(max(line_count, 1), 2)
+        if target_lines != 2:
+            return clean
+        best_index = 1
+        best_score = float("inf")
+        for index in range(1, len(parts)):
+            left = ", ".join(parts[:index])
+            right = ", ".join(parts[index:])
+            score = abs(len(left) - len(right))
+            if len(right.split()) <= 2:
+                score += 30
+            if score < best_score:
+                best_score = score
+                best_index = index
+        return f"{', '.join(parts[:best_index])},\n{', '.join(parts[best_index:])}"
+
     def _fit_single_line_font_size(
         self,
         text: str,
@@ -487,7 +547,20 @@ class HeaderPlanner:
         clean_text = re.sub(r"\s+", " ", str(text or "")).strip()
         if not clean_text or width_inches <= 0:
             return int(desired_size)
-        avg_char_width = float(self.header_config.get("title_fit_avg_char_width_em", 0.56))
+        if min_key == "subtitle_single_line_min_font_size":
+            avg_key = (
+                "portrait_subtitle_fit_avg_char_width_em"
+                if template_layout.get("orientation") == "portrait"
+                else "subtitle_fit_avg_char_width_em"
+            )
+            avg_char_width = float(
+                self.header_config.get(
+                    avg_key,
+                    self.header_config.get("subtitle_fit_avg_char_width_em", self.header_config.get("title_fit_avg_char_width_em", 0.56)),
+                )
+            )
+        else:
+            avg_char_width = float(self.header_config.get("title_fit_avg_char_width_em", 0.56))
         width_safety = float(self.header_config.get("title_fit_width_safety", 0.94))
         usable_width = max(width_inches * width_safety, 0.1)
         estimated_size = int((usable_width * 72) / max(len(clean_text) * avg_char_width, 1))
