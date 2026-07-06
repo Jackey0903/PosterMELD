@@ -309,6 +309,7 @@ def repair_truncated_sentence_end(line: str) -> str:
             line,
             flags=re.IGNORECASE,
         )
+        line = re.sub(r",\s+even\s+though\s+[^.;:]{1,120}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
             r"[,;:]\s+[^.;:]{1,120}\s+(?:may|can|could|would|should|will|must|is|are|was|were|be|been|being|with\s+[A-Z])\.$",
             ".",
@@ -316,6 +317,7 @@ def repair_truncated_sentence_end(line: str) -> str:
             flags=re.IGNORECASE,
         )
         line = re.sub(r"\s+as\s+(?:a|an|the)\s+[A-Za-z-]{2,28}\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+as\s+new\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
             r"\s+(?:creates?|created|creating|causes?|caused|causing|forms?|formed|forming|poses?|posed|posing|injects?|injected|injecting|includes?|included|including)\s+(?:a|an|the)?\s*[A-Za-z-]{0,28}\.$",
             ".",
@@ -323,13 +325,24 @@ def repair_truncated_sentence_end(line: str) -> str:
             flags=re.IGNORECASE,
         )
         line = re.sub(r"\s+and\s+(?:reducing|increasing|improving|decreasing)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+and\s+(?:reduce|increase|improve|decrease|support)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+to\s+find\s+and\s+support\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+with\s+(?:especially|particularly|notably)\s+[A-Za-z-]{2,28}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
-            r"\s+to\s+(?:update|learn|scale|adapt|improve|reach|select|query|discover|estimate|predict)\.$",
+            r",\s+where\s+[^.;:]{1,160}\s+and\s+(?:statistically|computationally|operationally|empirically)\.$",
             ".",
             line,
             flags=re.IGNORECASE,
         )
+        line = re.sub(
+            r"\s+to\s+(?:update|learn|scale|adapt|improve|reach|select|query|discover|estimate|predict|visit)\.$",
+            ".",
+            line,
+            flags=re.IGNORECASE,
+        )
+        line = re.sub(r"\s+for\s+large\s+urban\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+by\s+average\s+(?:number|numbe)\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+within\s+a\s+[A-Za-z-]{2,16}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
             r"[;:]\s+(?:performance|results?|evaluation|analysis|target|targets?|policy|method)\.$",
             ".",
@@ -339,6 +352,8 @@ def repair_truncated_sentence_end(line: str) -> str:
         line = re.sub(r"[,;:]\s+and\s+the\s+average\s+number\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"[,;:]\s+(?:measuring|testing|reporting)\s+[^.;:]{1,72}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+and\s+lower\s+eviction\s+pr\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+to\s+handle\s+tens\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s*[-–]\s*multimodal\s+parcel\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
             r"\s+(?:large-area|small-area|city-scale|region-level|parcel-level|query-cost|travel-aware|budget-constrained|non-hierarchical|within-region)\.$",
             ".",

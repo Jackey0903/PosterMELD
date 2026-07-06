@@ -1393,7 +1393,7 @@ class MicroLayoutRefiner:
             return True
         if re.search(r"\b(evicted:\s+poverty|using machine learning to help vulnerable tenants|legal representation on tenant outcomes)\b", lowered):
             return True
-        if re.search(r"\bperfo\.?$", lowered):
+        if re.search(r"\b(perfo|handle tens|multimodal parcel)\.?$", lowered):
             return True
         if any(token in lowered for token in ("http://", "https://", "www.", "doi:", "arxiv", "isbn")):
             return True
@@ -1931,6 +1931,12 @@ class MicroLayoutRefiner:
         if text_width < float(cfg.get("portrait_split_min_text_width_inches", 8.0) or 8.0):
             return None
 
+        allowed_bottom_gap = self._final_bottom_whitespace_limit(lane)
+        target_margin = float(self.refine_config.get("portrait_split_bottom_target_margin_inches", 0.06) or 0.06)
+        target_text_height = max(
+            available_height - max(allowed_bottom_gap - bottom_padding - target_margin, 0.0),
+            0.2,
+        )
         expanded_text_elements = self._expand_portrait_split_text_to_fill(
             text_elements,
             section_id,
@@ -1939,6 +1945,7 @@ class MicroLayoutRefiner:
             available_height,
             params,
             template_layout,
+            min(target_text_height, available_height),
         )
 
         laid_out_text = self._measure_split_text_elements(
@@ -1947,6 +1954,7 @@ class MicroLayoutRefiner:
             available_height,
             params,
             template_layout,
+            min(target_text_height, available_height),
         )
         if laid_out_text is None:
             return None
@@ -1968,7 +1976,7 @@ class MicroLayoutRefiner:
             visual_y = current_y + max((available_height - scaled_height) / 2, 0.0)
             text_y = current_y + max((available_height - total_text_height) / 2, 0.0)
         elif vertical_alignment == "top":
-            visual_y = current_y + max((available_height - scaled_height) / 2, 0.0)
+            visual_y = current_y
             text_y = current_y
         else:
             content_bottom = lane_bottom - bottom_padding
@@ -1985,20 +1993,32 @@ class MicroLayoutRefiner:
         y = text_y
         tail: List[Dict[str, Any]] = [visual]
         content_bottom = visual["y"] + visual["height"]
-        for text_element, text_height, font_size in measured_text:
+        for text_element, text_height, font_size, line_spacing in measured_text:
             item = deepcopy(text_element)
             item["x"] = text_x
             item["y"] = y
             item["width"] = text_width
             item["height"] = text_height
             item["font_size"] = font_size
+            item["line_spacing"] = line_spacing
             item["portrait_split_layout"] = visual["portrait_split_layout"]
             tail.append(item)
             y += text_height
             content_bottom = max(content_bottom, item["y"] + item["height"])
 
-        current_y = max(content_bottom, lane_bottom - bottom_padding)
-        return tail, current_y, max(content_bottom, current_y)
+        fill_element = self._portrait_split_bottom_fill_element(
+            section_id,
+            lane,
+            state,
+            params,
+            template_layout,
+            content_bottom,
+        )
+        if fill_element:
+            tail.append(fill_element)
+            content_bottom = max(content_bottom, fill_element["y"] + fill_element["height"])
+
+        return tail, content_bottom, content_bottom
 
     def _expand_portrait_split_text_to_fill(
         self,
@@ -2009,6 +2029,7 @@ class MicroLayoutRefiner:
         available_height: float,
         params: Dict[str, Any],
         template_layout: Dict[str, Any],
+        target_height_override: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         expanded_text_elements = [deepcopy(text_element) for text_element in text_elements]
         if not expanded_text_elements or not self._real_content_fill_enabled(template_layout):
@@ -2051,6 +2072,8 @@ class MicroLayoutRefiner:
         target_fraction = float(self.refine_config.get("portrait_split_text_min_fill_fraction", 0.92) or 0.92)
         target_fraction = min(max(target_fraction, 0.50), 0.98)
         target_height = max(available_height * target_fraction, 0.2)
+        if target_height_override is not None:
+            target_height = max(target_height, min(max(float(target_height_override), 0.2), available_height))
         threshold = self._real_content_fill_threshold(template_layout)
         height_tolerance = self._real_content_fill_height_tolerance(template_layout)
         measured = self._text_height_for_width(
@@ -2092,6 +2115,77 @@ class MicroLayoutRefiner:
         working["line_spacing"] = line_spacing
         working["portrait_split_text_fill_ratio"] = round(measured / max(available_height, 0.01), 4)
         return [working]
+
+    def _portrait_split_bottom_fill_element(
+        self,
+        section_id: str,
+        lane: Dict[str, Any],
+        state: PosterState,
+        params: Dict[str, Any],
+        template_layout: Dict[str, Any],
+        content_bottom: float,
+    ) -> Optional[Dict[str, Any]]:
+        if not self._real_content_fill_enabled(template_layout):
+            return None
+        lane_bottom = float(lane["y"]) + float(lane["h"])
+        allowed_gap = self._final_bottom_whitespace_limit(lane)
+        if lane_bottom - content_bottom <= allowed_gap:
+            return None
+
+        cfg = self.refine_config
+        bottom_padding = float(cfg.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06)
+        gap = min(float(cfg.get("bottom_takeaway_gap_inches", 0.04) or 0.04), 0.04)
+        y = content_bottom + gap
+        bottom = lane_bottom - bottom_padding
+        available_height = bottom - y
+        if available_height < 0.50:
+            return None
+
+        text = self._bottom_takeaway_text(section_id, state)
+        if not text:
+            return None
+
+        padding = max(float(params.get("text_padding", 0.24) or 0.24), 0.18)
+        width = max(float(lane["w"]) - 2 * padding, 0.5)
+        font_family = self.typography_config["fonts"].get("body_text", "Arial")
+        line_spacing = 0.85
+        max_font_size = min(int(cfg.get("bottom_takeaway_font_size", 36) or 36), 32)
+        min_font_size = max(18, self._min_body_font_size(template_layout) - 12)
+        chosen_font_size = min_font_size
+        measured_height = available_height
+        for font_size in range(max_font_size, min_font_size - 1, -2):
+            trial_height = self._bottom_fill_text_height(
+                text,
+                width,
+                font_family,
+                font_size,
+                line_spacing,
+                template_layout,
+            )
+            if trial_height <= available_height + 0.02:
+                chosen_font_size = font_size
+                measured_height = min(trial_height, available_height)
+                break
+
+        slot_id = str(lane.get("id") or "")
+        return {
+            "type": "text",
+            "id": f"{section_id}_portrait_split_bottom_takeaway",
+            "section_id": section_id,
+            "lane_id": slot_id,
+            "slot_id": slot_id,
+            "x": float(lane["x"]) + padding,
+            "y": bottom - measured_height,
+            "width": width,
+            "height": measured_height,
+            "content": text,
+            "font_family": font_family,
+            "font_size": chosen_font_size,
+            "font_color": str(cfg.get("bottom_takeaway_font_color", "#4A1020")),
+            "line_spacing": line_spacing,
+            "priority": 0.5,
+            "portrait_split_layout": "bottom_takeaway",
+        }
 
     def _add_short_split_fill_lines(
         self,
@@ -2262,6 +2356,8 @@ class MicroLayoutRefiner:
         visual_id = str(visual_elements[0].get("visual_id") or visual_elements[0].get("id") or "")
         if visual_id.startswith("table_"):
             return False
+        if visual_id.startswith("generated_teaser"):
+            return False
 
         cfg = visual_footprint_config(self.config)
         width = float(lane.get("w", 0.0) or 0.0)
@@ -2279,16 +2375,58 @@ class MicroLayoutRefiner:
         available_height: float,
         params: Dict[str, Any],
         template_layout: Dict[str, Any],
-    ) -> Optional[tuple[List[tuple[Dict[str, Any], float, int]], float]]:
+        target_total_height: Optional[float] = None,
+    ) -> Optional[tuple[List[tuple[Dict[str, Any], float, int, float]], float]]:
         base_size = int(text_elements[0].get("font_size", self.typography_config["sizes"]["body_text"]))
         preferred = max(
             self._min_body_font_size(template_layout),
             base_size - int(params.get("body_font_reduction", 0)) + int(params.get("body_font_boost", 0)),
         )
         min_size = self._min_body_font_size(template_layout)
+        base_line_spacing = max(float(text_element.get("line_spacing", 1.0) or 1.0) for text_element in text_elements)
+        max_line_spacing = float(self.refine_config.get("real_content_fill_max_line_spacing", 1.08) or 1.08)
+        spacing_step = self._real_content_fill_spacing_step(template_layout)
+        spacing_values = [base_line_spacing]
+        trial_spacing = base_line_spacing
+        while trial_spacing + spacing_step <= max_line_spacing + 1e-9:
+            trial_spacing = round(trial_spacing + spacing_step, 3)
+            spacing_values.append(trial_spacing)
+
+        height_tolerance = self._real_content_fill_height_tolerance(template_layout)
+        target_height = min(float(target_total_height or available_height), available_height)
+        best: Optional[tuple[tuple[float, float, int], List[tuple[Dict[str, Any], float, int, float]], float]] = None
 
         for font_size in range(preferred, min_size - 1, -2):
-            measured: List[tuple[Dict[str, Any], float, int]] = []
+            for line_spacing in spacing_values:
+                measured: List[tuple[Dict[str, Any], float, int, float]] = []
+                total_height = 0.0
+                for text_element in text_elements:
+                    plain_text = self._strip_markup_for_measurement(text_element.get("content", ""))
+                    result = self._measure_text_height_for_refinement(
+                        text_content=plain_text,
+                        width_inches=text_width,
+                        font_name=text_element.get("font_family", self.typography_config["fonts"]["body_text"]),
+                        font_size=font_size,
+                        line_spacing=line_spacing,
+                        template_layout=template_layout,
+                    )
+                    text_height = (
+                        result["optimal_height"] * self.refine_config.get("text_height_safety_factor", 1.0)
+                        + self.refine_config.get("text_height_safety_padding", 0.05)
+                    )
+                    measured.append((text_element, text_height, font_size, line_spacing))
+                    total_height += text_height
+                if total_height > available_height + height_tolerance:
+                    continue
+                score = (abs(target_height - total_height), -font_size, -line_spacing)
+                if best is None or score < best[0]:
+                    best = (score, measured, total_height)
+
+        if best is not None:
+            return best[1], best[2]
+
+        for font_size in range(preferred, min_size - 1, -2):
+            measured = []
             total_height = 0.0
             for text_element in text_elements:
                 plain_text = self._strip_markup_for_measurement(text_element.get("content", ""))
@@ -2304,7 +2442,7 @@ class MicroLayoutRefiner:
                     result["optimal_height"] * self.refine_config.get("text_height_safety_factor", 1.0)
                     + self.refine_config.get("text_height_safety_padding", 0.05)
                 )
-                measured.append((text_element, text_height, font_size))
+                measured.append((text_element, text_height, font_size, base_line_spacing))
                 total_height += text_height
             if total_height <= available_height + 0.05:
                 return measured, total_height

@@ -885,10 +885,10 @@ visual_footprint:
   portrait_table_min_slot_width_inches: 20.0
   portrait_table_min_slot_height_inches: 5.0
   portrait_table_min_slot_area_inches: 180.0
-  portrait_split_min_aspect: 2.35
+  portrait_split_min_aspect: 2.15
   portrait_split_min_width_inches: 18.0
   portrait_split_min_height_inches: 4.0
-  portrait_split_visual_width_fraction: 0.48
+  portrait_split_visual_width_fraction: 0.72
   portrait_split_gap_inches: 0.45
   portrait_split_min_text_width_inches: 8.0
   portrait_split_bottom_padding_inches: 0.03
@@ -1041,6 +1041,7 @@ micro_layout_refinement:
   portrait_split_text_max_fill_sentences: 16
   portrait_split_text_max_candidate_chars: 170
   portrait_split_text_min_candidate_chars: 42
+  portrait_split_bottom_target_margin_inches: 0.06
   wide_text_columns_min_width_inches: 24
   wide_text_columns_gap_inches: 0.42
   wide_text_columns_min_height_inches: 2.2

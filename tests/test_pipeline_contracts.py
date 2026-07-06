@@ -4625,6 +4625,200 @@ def test_micro_layout_refiner_uses_portrait_split_for_wide_shallow_figure_block(
     assert visual["visual_footprint"]["ok"] is True
 
 
+def test_micro_layout_refiner_uses_portrait_split_for_moderately_wide_portrait_block():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_8_portrait", width=36, height=50.88)
+    state["template_fast_mode"] = True
+    state["visual_assets"] = {"figure_2": {"asset_type": "figure", "aspect": 2.84}}
+    lane = {"id": "slot_3", "x": 1.0, "y": 21.088, "w": 34.0, "h": 15.2493}
+    group = {
+        "section_id": "sec_hags",
+        "container": {
+            "type": "section_container",
+            "section_id": "sec_hags",
+            "lane_id": "slot_3",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": lane["h"],
+            "importance_level": 1,
+        },
+        "children": [
+            {
+                "type": "title_accent_block",
+                "section_id": "sec_hags",
+                "lane_id": "slot_3",
+                "x": lane["x"],
+                "y": lane["y"],
+                "width": lane["w"],
+                "height": 0.78,
+            },
+            {
+                "type": "section_title",
+                "section_id": "sec_hags",
+                "lane_id": "slot_3",
+                "x": lane["x"] + 0.28,
+                "y": lane["y"] + 0.04,
+                "width": lane["w"] - 0.56,
+                "height": 0.7,
+                "font_size": 48,
+            },
+            {
+                "type": "visual",
+                "id": "sec_hags_figure_2",
+                "visual_id": "figure_2",
+                "section_id": "sec_hags",
+                "lane_id": "slot_3",
+                "x": lane["x"] + 5.1,
+                "y": lane["y"] + 1.1,
+                "width": 23.8,
+                "height": 8.38,
+            },
+            {
+                "type": "text",
+                "id": "sec_hags_text",
+                "section_id": "sec_hags",
+                "lane_id": "slot_3",
+                "x": lane["x"] + 0.24,
+                "y": lane["y"] + 9.8,
+                "width": lane["w"] - 0.48,
+                "height": 2.0,
+                "font_size": 44,
+                "content": (
+                    "HAGS first chooses a region and then selects a parcel within that region.\n"
+                    "The hierarchy shares predictors across regions and reduces city-scale search complexity."
+                ),
+            },
+        ],
+    }
+    params = {
+        "section_gap": 0.5,
+        "title_to_content_gap": 0.25,
+        "visual_gap": 0.18,
+        "text_padding": 0.24,
+        "body_font_reduction": 0,
+        "title_font_reduction": 0,
+        "body_font_boost": 0,
+        "title_font_boost": 0,
+        "visual_scale": 0.95,
+    }
+
+    elements, _ = refiner._layout_section(
+        group,
+        lane,
+        lane["y"],
+        state,
+        params,
+        {"template_name": "cluster_8_portrait", "orientation": "portrait", "layout_mode": "template_prior"},
+    )
+
+    visual = next(element for element in elements if element.get("type") == "visual")
+    text = next(element for element in elements if element.get("type") == "text")
+    assert visual["portrait_split_layout"] == "image_left_text_right"
+    assert visual["x"] <= lane["x"] + 0.31
+    assert visual["y"] < lane["y"] + 1.5
+    assert visual["width"] >= 23.0
+    assert text["x"] > visual["x"] + visual["width"]
+    assert visual["visual_footprint"]["ok"] is True
+    content_bottom = max(
+        element.get("y", 0) + element.get("height", 0)
+        for element in elements
+        if element.get("type") in {"section_title", "title_accent_block", "text", "visual"}
+    )
+    assert lane["y"] + lane["h"] - content_bottom <= refiner._final_bottom_whitespace_limit(lane) + 0.03
+
+
+def test_micro_layout_refiner_keeps_generated_teaser_as_banner_in_portrait_block():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_8_portrait", width=36, height=50.88)
+    state["template_fast_mode"] = True
+    state["visual_assets"] = {"generated_teaser_1": {"asset_type": "figure", "aspect": 6.66}}
+    lane = {"id": "slot_1", "x": 1.0, "y": 7.46, "w": 34.0, "h": 7.8612}
+    group = {
+        "section_id": "sec_problem",
+        "container": {
+            "type": "section_container",
+            "section_id": "sec_problem",
+            "lane_id": "slot_1",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": lane["h"],
+            "importance_level": 1,
+        },
+        "children": [
+            {
+                "type": "title_accent_block",
+                "section_id": "sec_problem",
+                "lane_id": "slot_1",
+                "x": lane["x"],
+                "y": lane["y"],
+                "width": lane["w"],
+                "height": 0.78,
+            },
+            {
+                "type": "section_title",
+                "section_id": "sec_problem",
+                "lane_id": "slot_1",
+                "x": lane["x"] + 0.28,
+                "y": lane["y"] + 0.04,
+                "width": lane["w"] - 0.56,
+                "height": 0.7,
+                "font_size": 48,
+            },
+            {
+                "type": "visual",
+                "id": "sec_problem_generated_teaser_1",
+                "visual_id": "generated_teaser_1",
+                "section_id": "sec_problem",
+                "lane_id": "slot_1",
+                "x": lane["x"] + 1.0,
+                "y": lane["y"] + 1.1,
+                "width": 31.73,
+                "height": 4.76,
+            },
+            {
+                "type": "text",
+                "id": "sec_problem_text",
+                "section_id": "sec_problem",
+                "lane_id": "slot_1",
+                "x": lane["x"] + 0.24,
+                "y": lane["y"] + 6.0,
+                "width": lane["w"] - 0.48,
+                "height": 0.8,
+                "font_size": 44,
+                "content": "Eviction outreach must identify at-risk properties quickly under a limited budget.",
+            },
+        ],
+    }
+    params = {
+        "section_gap": 0.5,
+        "title_to_content_gap": 0.25,
+        "visual_gap": 0.18,
+        "text_padding": 0.24,
+        "body_font_reduction": 0,
+        "title_font_reduction": 0,
+        "body_font_boost": 0,
+        "title_font_boost": 0,
+        "visual_scale": 0.95,
+    }
+
+    elements, _ = refiner._layout_section(
+        group,
+        lane,
+        lane["y"],
+        state,
+        params,
+        {"template_name": "cluster_8_portrait", "orientation": "portrait", "layout_mode": "template_prior"},
+    )
+
+    visual = next(element for element in elements if element.get("type") == "visual")
+    text = next(element for element in elements if element.get("type") == "text")
+    assert "portrait_split_layout" not in visual
+    assert visual["width"] >= 30.0
+    assert text["y"] > visual["y"] + visual["height"]
+
+
 def test_micro_layout_refiner_fills_portrait_split_text_column_from_source():
     refiner = MicroLayoutRefiner()
     state = create_state("/tmp/paper.pdf", layout_template="cluster_8_portrait", width=36, height=50.88)
@@ -6003,6 +6197,17 @@ def test_truncation_removes_dangling_connector_suffixes():
     assert normalize_text_for_poster("HAGS finds more targets found, especially.").endswith("found.")
     assert normalize_text_for_poster("Multi-modal representations combining tabular and imagery features further.").endswith("features.")
     assert normalize_text_for_poster("Construct multimodal parcel features by combining rich tabular data (eviction histories, ownership, property.").endswith("data.")
+    assert normalize_text_for_poster("HAGS shares locality as inductive bias to handle tens.").endswith("bias.")
+    assert "Multimodal parcel" not in normalize_text_for_poster("Overall findings: - HAGS is strongest. - Multimodal parcel.")
+    assert normalize_text_for_poster("The hierarchy matters with thousands of parcels, where flat action spaces become computationally and statistically.").endswith("parcels.")
+    assert normalize_text_for_poster("The policy balances exploration with exploitation to visit.").endswith("exploitation.")
+    assert normalize_text_for_poster("Parameter sharing acts as inductive bias for large urban.").endswith("bias.")
+    assert normalize_text_for_poster("Performance is measured by average numbe.").endswith("measured.")
+    assert normalize_text_for_poster("Outreach chooses visits under limited budgets, even though true near-term eviction risk.").endswith("budgets.")
+    assert normalize_text_for_poster("Exploration improves predictions as new.").endswith("predictions.")
+    assert normalize_text_for_poster("Canvassers choose properties to visit to find and support.").endswith("visit.")
+    assert normalize_text_for_poster("Geospatial locality reduces complexity and improve.").endswith("complexity.")
+    assert normalize_text_for_poster("Targets found within a searc.").endswith("found.")
     assert normalize_text_for_poster("Next, we describe in detail the data we use, as well as the baseline methods, before presenting our results.") == ""
     assert normalize_text_for_poster("HAGS finds 5-17% more at‑risk properties.") == "HAGS finds 5-17% more at-risk properties."
     assert normalize_text_for_poster("Our focus here is on large-area search; we defer most results involving small-area search to the Supplement.") == ""
