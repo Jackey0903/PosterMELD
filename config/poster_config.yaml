@@ -81,7 +81,7 @@ header_planner:
   large_landscape_author_font_size: 50
   portrait_title_font_size: 72
   portrait_author_font_size: 56
-  portrait_title_author_gap_inches: 0.10
+  portrait_title_author_gap_inches: 0.18
   portrait_title_line_height_em: 1.00
   portrait_author_line_height_em: 1.04
   portrait_author_max_lines: 2
