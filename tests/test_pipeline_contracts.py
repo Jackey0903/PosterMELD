@@ -4716,9 +4716,12 @@ def test_micro_layout_refiner_uses_portrait_split_for_moderately_wide_portrait_b
     text = next(element for element in elements if element.get("type") == "text")
     assert visual["portrait_split_layout"] == "image_left_text_right"
     assert visual["x"] <= lane["x"] + 0.31
-    assert visual["y"] < lane["y"] + 1.5
     assert visual["width"] >= 23.0
     assert text["x"] > visual["x"] + visual["width"]
+    top_gap = visual["y"] - text["y"]
+    bottom_gap = lane["y"] + lane["h"] - 0.03 - (visual["y"] + visual["height"])
+    assert top_gap > 1.0
+    assert abs(top_gap - bottom_gap) <= 0.05
     assert visual["visual_footprint"]["ok"] is True
     content_bottom = max(
         element.get("y", 0) + element.get("height", 0)

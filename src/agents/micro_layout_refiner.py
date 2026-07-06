@@ -1976,7 +1976,7 @@ class MicroLayoutRefiner:
             visual_y = current_y + max((available_height - scaled_height) / 2, 0.0)
             text_y = current_y + max((available_height - total_text_height) / 2, 0.0)
         elif vertical_alignment == "top":
-            visual_y = current_y
+            visual_y = current_y + max((available_height - scaled_height) / 2, 0.0)
             text_y = current_y
         else:
             content_bottom = lane_bottom - bottom_padding
