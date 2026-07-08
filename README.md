@@ -135,11 +135,10 @@ draft poster PNG
       cluster_22_portrait, cluster_25_portrait, cluster_27_portrait, cluster_29_portrait
 ```
 
-当前建议：
+当前建议（详见 [docs/adr/0002](docs/adr/0002-user-specified-variants-with-standard-default.md)、[docs/adr/0008](docs/adr/0008-user-requested-templates-are-not-silently-replaced.md)）：
 
-- 默认使用 `auto`。
-- 多图表、内容密度较高的论文优先使用 `cluster_104_landscape` 横版。
-- 需要 6 个内容 block 的横版可手动使用 `cluster_43_landscape`。
+- **不指定模板时默认走 `auto`，稳定落到 `cluster_43_landscape` 标准横版**（Default Standard Variant）。
+- **模板多样性靠显式指定**：从 `模版-横向/`、`模版-竖向/` 里挑任意标准模板作为一个可复现的 Poster Variant，例如多图表密集论文用 `cluster_104_landscape`。用户显式请求的模板不会被系统悄悄替换。
 - 如果模板限制太强，可以使用 `adaptive_auto` 无模板自适应模式。
 - 竖版模板目前只作为实验能力保留，不建议作为默认展示效果。
 
@@ -363,7 +362,7 @@ PYTHONPATH=. .venv/bin/python -m pytest tests/test_pipeline_contracts.py
 当前本地结果：
 
 ```text
-106 passed, 2 warnings
+222 passed, 2 warnings
 ```
 
 ## 目录结构
@@ -386,9 +385,10 @@ paper2poster/
 │   ├── tools/               # image / layout / pptx 封装
 │   ├── utils/               # 文本清洗和 logo 工具
 │   └── workflow/            # pipeline 入口
-├── template/
-│   ├── json/                # cluster 模板结构
-│   └── picture/             # cluster 模板预览图
+├── 模版-横向/                # 横版标准模板 (cluster_*_template.json + 预览图)
+├── 模版-竖向/                # 竖版标准模板 (cluster_*_template.json + 预览图)
+├── CONTEXT.md               # 领域术语表 (设计事实来源)
+├── docs/adr/                # 架构决策记录 (ADR 0001-0008)
 ├── tests/
 ├── utils/
 ├── requirements.txt
