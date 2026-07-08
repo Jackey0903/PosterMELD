@@ -785,10 +785,6 @@ class LayoutAgent:
             title_font_size = 58
             author_font_size = 34
             author_top_gap_inches = self.config["typography"].get("title_author_gap_points", 16) / 72
-        elif template_layout.get("template_name") == "cluster_72":
-            title_font_size = 108
-            author_font_size = 50
-            author_top_gap_inches = 0.30
         else:
             title_font_size = 100
             author_font_size = 72
@@ -863,9 +859,6 @@ class LayoutAgent:
             return self._layout_aff_only(aff_logos, region, logo_config)
 
         # both conf + aff: split region
-        if template_layout.get("template_name") == "cluster_72":
-            logo_config = dict(logo_config)
-            logo_config["max_logo_height"] = max(float(logo_config.get("max_logo_height", 1.95)), 2.65)
         return self._layout_combined(state["logo_path"], aff_logos, region, logo_config)
 
     def _manual_affiliation_logo_entry(self, state: PosterState) -> Dict[str, Any] | None:
@@ -1092,14 +1085,7 @@ class LayoutAgent:
             title_box = {"x": x0, "y": y0, "w": min(title_w, w), "h": max(h - 0.15, 0.8)}
             return title_box, logo_box
 
-        if template_layout.get("template_name") == "cluster_72":
-            if has_conf and aff_count:
-                reserve_frac = 0.34
-            elif aff_count >= 3:
-                reserve_frac = 0.32
-            else:
-                reserve_frac = 0.28
-        elif template_layout.get("layout_mode") == "template_prior":
+        if template_layout.get("layout_mode") == "template_prior":
             if has_conf and aff_count:
                 reserve_frac = 0.36
             elif aff_count >= 3:
@@ -1114,10 +1100,7 @@ class LayoutAgent:
 
         min_logo_w = 2.8 if template_layout.get("orientation") == "portrait" else 4.0
         logo_w = min(max(w * reserve_frac, min_logo_w), w * 0.38)
-        if template_layout.get("template_name") == "cluster_72":
-            min_title_w = w * 0.60
-        else:
-            min_title_w = w * (0.58 if template_layout.get("orientation") == "portrait" else 0.55)
+        min_title_w = w * (0.58 if template_layout.get("orientation") == "portrait" else 0.55)
         if w - logo_w - gap < min_title_w:
             logo_w = max(w - min_title_w - gap, min_logo_w)
 
@@ -1593,15 +1576,7 @@ class LayoutAgent:
         
         # check if shrinking is needed
         scale_factor = 1.0
-        if available_height and state.get("resolved_layout_template") == "cluster_72":
-            max_visual_height = available_height * 0.95
-            if original_height > max_visual_height:
-                scale_factor = max_visual_height / max(original_height, 0.01)
-                log_agent_info(
-                    self.name,
-                    f"visual {visual_id} capped for cluster_72 ({original_height:.2f}\" > 95% of {available_height:.2f}\"), scale={scale_factor:.2f}",
-                )
-        elif available_height:
+        if available_height:
             max_fraction = self._max_visual_height_fraction(visual_id, state)
             max_visual_height = available_height * max_fraction
             if original_height > max_visual_height:

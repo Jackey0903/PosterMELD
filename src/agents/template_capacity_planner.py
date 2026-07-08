@@ -86,11 +86,7 @@ class TemplateCapacityPlanner:
             for region in template_layout.get("regions") or []
         }
         slot_specs = self._slot_specs_for_template(template_layout, template_name, regions)
-        if template_name == "cluster_72":
-            preferred_order = ["slot_1", "slot_2", "slot_3", "slot_6", "slot_5", "slot_4"]
-            slot_order = [slot_id for slot_id in preferred_order if slot_id in regions]
-        else:
-            slot_order = [str(slot_id) for slot_id in template_layout.get("slot_order") or [] if str(slot_id) in regions]
+        slot_order = [str(slot_id) for slot_id in template_layout.get("slot_order") or [] if str(slot_id) in regions]
         slot_order.extend(
             slot_id
             for slot_id in sorted(regions, key=lambda sid: (float(regions[sid].get("y", 0.0)), float(regions[sid].get("x", 0.0))))
@@ -423,8 +419,6 @@ class TemplateCapacityPlanner:
         by_template = (self.fast_config.get("template_slot_contracts") or {}).get(template_name)
         if by_template:
             return by_template
-        if template_name == "cluster_72":
-            return self.fast_config.get("slot_contracts") or self._default_slot_specs()
 
         slot_order = [str(slot_id) for slot_id in template_layout.get("slot_order") or [] if str(slot_id) in regions]
         if not slot_order:

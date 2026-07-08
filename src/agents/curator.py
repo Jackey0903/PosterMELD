@@ -829,9 +829,7 @@ class StoryBoardCurator:
 
             section = deepcopy(source)
             template_defaults = {}
-            if template_name == "cluster_72":
-                template_defaults = self._cluster_72_group_defaults(index, title, role, texts)
-            elif self._template_uses_grouped_keypoints(template_name):
+            if self._template_uses_grouped_keypoints(template_name):
                 template_defaults = self._standard_group_defaults(index, title, role, texts, visual_context)
             title = template_defaults.get("section_title", title)
             role = template_defaults.get("content_type", role)
@@ -894,9 +892,7 @@ class StoryBoardCurator:
             )
             aligned.append(section)
 
-        if template_name == "cluster_72":
-            self._ensure_cluster_72_grouped_visuals(aligned, classified_visuals, visual_context)
-        elif template_name in self._standard_template_ids():
+        if template_name in self._standard_template_ids():
             self._normalize_standard_grouped_section_titles(aligned)
             self._ensure_standard_template_grouped_visuals(aligned, classified_visuals, visual_context)
         else:
@@ -1302,59 +1298,6 @@ class StoryBoardCurator:
                 holder["vertical_priority"] = holder.get("vertical_priority") if holder.get("vertical_priority") in {"middle", "bottom"} else "bottom"
                 holder["importance_level"] = min(int(holder.get("importance_level") or 2), 2)
 
-    def _cluster_72_group_defaults(
-        self,
-        index: int,
-        current_title: str,
-        current_role: str,
-        keypoint_texts: List[str],
-    ) -> Dict[str, Any]:
-        slot_order = ["slot_1", "slot_2", "slot_3", "slot_6", "slot_5", "slot_4"]
-        joined = " ".join(keypoint_texts)
-        title = current_title
-        role = current_role
-
-        if index == 0:
-            title = "Why It Matters"
-            role = "foundation"
-        elif index == 1:
-            if re.search(r"\belo\b|stable|estimation", joined, re.I):
-                title = "Stable Estimation"
-            elif re.search(r"phish|webpage|detection", joined, re.I):
-                title = "Detection Setup"
-            else:
-                title = "Core Setup"
-            role = "method"
-        elif index == 2:
-            if re.search(r"agent|workflow|pipeline|architecture", joined, re.I):
-                title = "Agent Workflow"
-            elif re.search(r"arena|setting|diagram", joined, re.I):
-                title = "Arena Setting"
-            else:
-                title = "Method Diagram"
-            role = "method"
-        elif index == 3:
-            title = "Annotator-Aware ELO" if re.search(r"annotator|am[- ]?elo", joined, re.I) else "Method Details"
-            role = "method"
-        elif index == 4:
-            title = "Robustness Tests" if re.search(r"robust|dataset|table|perturb|ablation", joined, re.I) else "Evaluation Setup"
-            role = "results"
-        elif index == 5:
-            title = "Main Results"
-            role = "results"
-
-        return {
-            "section_title": title,
-            "content_type": role,
-            "preferred_slot_id": slot_order[index] if index < len(slot_order) else None,
-            "column_assignment": ["left", "middle", "middle", "left", "middle", "right"][index]
-            if index < 6 else "middle",
-            "vertical_priority": ["top", "top", "top", "bottom", "bottom", "bottom"][index]
-            if index < 6 else "middle",
-            "expected_content_density": "high" if index in {3, 4, 5} else "medium",
-            "spatial_rationale": "Cluster 72 grouped-keypoint mapping keeps ten paper points in six balanced visual blocks.",
-        }
-
     def _standard_group_defaults(
         self,
         index: int,
@@ -1520,60 +1463,6 @@ class StoryBoardCurator:
             )
         self._dedupe_grouped_section_titles(sections)
 
-    def _ensure_cluster_72_grouped_visuals(
-        self,
-        sections: List[Dict[str, Any]],
-        classified_visuals: Dict[str, Any],
-        visual_context: Dict[str, Any],
-    ) -> None:
-        valid_ids = set((visual_context or {}).get("valid_visual_ids") or [])
-        if not valid_ids or not sections:
-            return
-        for section in sections:
-            section["visual_assets"] = []
-
-        slot_map = {str(section.get("preferred_slot_id") or ""): section for section in sections}
-        figure_candidates = self._cluster_72_figure_candidates(classified_visuals or {}, valid_ids, visual_context)
-        table_candidates = self._cluster_72_table_candidates(classified_visuals or {}, valid_ids, visual_context)
-
-        method_visual = figure_candidates[0] if figure_candidates else None
-        result_visual = next((visual_id for visual_id in figure_candidates if visual_id != method_visual), None)
-        fast_visual_policy = (visual_context or {}).get("fast_visual_policy") or {}
-        configured_table_slots = list(fast_visual_policy.get("table_slots") or [])
-        selected_table = self._cluster_72_preferred_table(
-            table_candidates,
-            classified_visuals or {},
-            visual_context,
-            preferred_bucket="main_results",
-        )
-        table_target_slot = configured_table_slots[0] if configured_table_slots else "slot_4"
-        if selected_table is None:
-            selected_table = self._cluster_72_preferred_table(
-                table_candidates,
-                classified_visuals or {},
-                visual_context,
-                preferred_bucket="comparative_results",
-            )
-            table_target_slot = configured_table_slots[0] if configured_table_slots else "slot_5"
-        if selected_table is None and table_candidates:
-            selected_table = table_candidates[0]
-            table_target_slot = "slot_4" if slot_map.get("slot_4") else "slot_5"
-
-        if result_visual and slot_map.get("slot_2"):
-            holder = slot_map["slot_2"]
-            self._set_single_visual(holder, result_visual, "Stable-estimation or quantitative result visual")
-            holder["importance_level"] = 1
-
-        if method_visual and slot_map.get("slot_3"):
-            holder = slot_map["slot_3"]
-            self._set_single_visual(holder, method_visual, "Primary arena or method diagram")
-            holder["importance_level"] = 1
-
-        if selected_table and slot_map.get(table_target_slot):
-            holder = slot_map[table_target_slot]
-            self._set_single_visual(holder, selected_table, "Most readable quantitative result table")
-            holder["importance_level"] = min(int(holder.get("importance_level") or 2), 2)
-
     def _ensure_standard_template_grouped_visuals(
         self,
         sections: List[Dict[str, Any]],
@@ -1604,8 +1493,8 @@ class StoryBoardCurator:
         table_slots = [str(slot_id) for slot_id in fast_visual_policy.get("table_slots") or []]
         figure_slot_set = set(figure_slots)
         table_slot_set = set(table_slots)
-        figure_candidates = self._cluster_72_figure_candidates(classified_visuals or {}, valid_ids, visual_context)
-        table_candidates = self._cluster_72_table_candidates(classified_visuals or {}, valid_ids, visual_context)
+        figure_candidates = self._grouped_figure_candidates(classified_visuals or {}, valid_ids, visual_context)
+        table_candidates = self._grouped_table_candidates(classified_visuals or {}, valid_ids, visual_context)
 
         is_portrait = self._is_portrait_or_vertical_template(visual_context)
         figure_count = int(fast_visual_policy.get("figure_count") or 2)
@@ -1831,7 +1720,7 @@ class StoryBoardCurator:
                 return visual_id
         return None
 
-    def _cluster_72_figure_candidates(
+    def _grouped_figure_candidates(
         self,
         classified_visuals: Dict[str, Any],
         valid_ids: set[str],
@@ -1851,7 +1740,7 @@ class StoryBoardCurator:
         ]
         return self._rank_readable_visuals(candidates, visual_context, prefer_existing_order=True)
 
-    def _cluster_72_table_candidates(
+    def _grouped_table_candidates(
         self,
         classified_visuals: Dict[str, Any],
         valid_ids: set[str],
@@ -1867,33 +1756,6 @@ class StoryBoardCurator:
             if visual_id in valid_ids and visual_id.startswith("table_")
         ]
         return self._rank_readable_visuals(candidates, visual_context, prefer_existing_order=False)
-
-    def _cluster_72_preferred_table(
-        self,
-        candidates: List[str],
-        classified_visuals: Dict[str, Any],
-        visual_context: Dict[str, Any],
-        *,
-        preferred_bucket: str,
-        exclude: set[str] | None = None,
-    ) -> str | None:
-        exclude = exclude or set()
-        bucket_ids = [
-            str(visual_id or "")
-            for visual_id in (classified_visuals or {}).get(preferred_bucket) or []
-            if str(visual_id or "").startswith("table_")
-        ]
-        preferred = [
-            visual_id
-            for visual_id in candidates
-            if visual_id in bucket_ids and visual_id not in exclude
-        ]
-        if preferred:
-            return self._rank_readable_visuals(preferred, visual_context, prefer_existing_order=False)[0]
-        for visual_id in candidates:
-            if visual_id not in exclude:
-                return visual_id
-        return None
 
     def _rank_readable_visuals(
         self,
@@ -2018,17 +1880,6 @@ class StoryBoardCurator:
     ) -> List[List[Dict[str, Any]]]:
         if target_count <= 0 or len(keypoints) <= target_count:
             return [[keypoint] for keypoint in keypoints]
-        if str(template_name or "") == "cluster_72" and target_count == 6:
-            slices = [(0, 2), (2, 3), (3, 4), (4, 6), (6, 8), (8, 10)]
-            groups = [
-                keypoints[start:min(end, len(keypoints))]
-                for start, end in slices
-                if start < len(keypoints)
-            ]
-            assigned = sum(len(group) for group in groups)
-            if assigned < len(keypoints):
-                groups[-1].extend(keypoints[assigned:])
-            return [group for group in groups if group]
         if str(template_name or "") in self._standard_template_ids():
             if target_count == 4:
                 slices = [(0, 2), (2, 5), (5, 7), (7, 10)]
@@ -2075,7 +1926,7 @@ class StoryBoardCurator:
         return slug[:32] or "section"
 
     def _template_uses_grouped_keypoints(self, template_name: str) -> bool:
-        return str(template_name or "") in {"cluster_72", "cluster_93"} | self._standard_template_ids()
+        return str(template_name or "") in self._standard_template_ids()
 
     def _standard_template_ids(self) -> set[str]:
         return set((self.config.get("standard_template_policy") or {}).get("auto_templates") or [])
@@ -2101,8 +1952,6 @@ class StoryBoardCurator:
             return 0
         if not self._template_uses_grouped_keypoints(template_name):
             return keypoint_count
-        if str(template_name or "") == "cluster_72":
-            return min(6, keypoint_count)
         content_slots = int(layout.get("slot_count") or len(layout.get("regions") or []) or 0)
         if content_slots <= 0:
             content_slots = 7

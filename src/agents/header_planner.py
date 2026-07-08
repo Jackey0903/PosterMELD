@@ -796,13 +796,9 @@ class HeaderPlanner:
 
     def _font_sizes(self, template_layout: Dict[str, Any], has_subtitle: bool) -> Tuple[int, int, int]:
         orientation = template_layout.get("orientation")
-        template_name = template_layout.get("template_name")
         if orientation == "portrait":
             title_size = int(self.header_config.get("portrait_title_font_size", 58))
             author_size = int(self.header_config.get("portrait_author_font_size", 34))
-        elif template_name == "cluster_72":
-            title_size = int(self.header_config.get("large_landscape_title_font_size", 108))
-            author_size = int(self.header_config.get("large_landscape_author_font_size", 50))
         else:
             title_size = int(self.header_config.get("landscape_title_font_size", 100))
             author_size = int(self.header_config.get("landscape_author_font_size", 72))

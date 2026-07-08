@@ -339,13 +339,9 @@ class TemplatePriorPlanner:
             preferred_slot_id = str(item.get("preferred_slot_id") or "")
             if preserve_order and preferred_slot_id:
                 region = deepcopy(region_map[preferred_slot_id]) if preferred_slot_id in region_map and preferred_slot_id not in used_region_ids else None
-                if region is None and template_id == "cluster_72":
-                    region = self._cluster_72_region_for_section(item, regions, used_region_ids, index)
-                elif region is None:
+                if region is None:
                     later_visual_count = sum(1 for later in sections[index + 1:] if later.get("visual_assets"))
                     region = self._region_for_ordered_section(item, regions, used_region_ids, later_visual_count)
-            elif preserve_order and template_id == "cluster_72":
-                region = self._cluster_72_region_for_section(item, regions, used_region_ids, index)
             elif preserve_order:
                 later_visual_count = sum(1 for later in sections[index + 1:] if later.get("visual_assets"))
                 region = self._region_for_ordered_section(item, regions, used_region_ids, later_visual_count)
@@ -365,51 +361,6 @@ class TemplatePriorPlanner:
             item["text_content"] = self._clean_bullets(item["text_content"])
             assigned.append(item)
         return assigned
-
-    def _cluster_72_region_for_section(
-        self,
-        section: Dict[str, Any],
-        regions: List[Dict[str, Any]],
-        used_region_ids: set[str],
-        index: int,
-    ) -> Dict[str, Any]:
-        region_map = {str(region.get("region_id")): region for region in regions}
-        ordered_slots = ["slot_1", "slot_2", "slot_3", "slot_6", "slot_5", "slot_4"]
-        candidates = []
-
-        preferred = str(section.get("preferred_slot_id") or "")
-        if preferred:
-            candidates.append(preferred)
-
-        text = " ".join(
-            [
-                str(section.get("section_title") or ""),
-                str(section.get("section_id") or ""),
-                str(section.get("content_role") or ""),
-                " ".join(str(item) for item in section.get("source_keypoint_ids") or []),
-            ]
-        ).lower()
-        if "main result" in text or "takeaway" in text:
-            candidates.append("slot_4")
-        if any(token in text for token in ["robust", "dataset", "table", "evaluation setup"]):
-            candidates.append("slot_5")
-        if any(token in text for token in ["annotator", "am-elo", "method details"]):
-            candidates.append("slot_6")
-        if any(token in text for token in ["arena", "setting", "diagram", "framework"]):
-            candidates.append("slot_3")
-        if any(token in text for token in ["stable", "m-elo", "estimation"]):
-            candidates.append("slot_2")
-
-        if index < len(ordered_slots):
-            candidates.append(ordered_slots[index])
-        candidates.extend(ordered_slots)
-
-        for slot_id in candidates:
-            if slot_id in region_map and slot_id not in used_region_ids:
-                return deepcopy(region_map[slot_id])
-
-        available = [region for region in regions if str(region.get("region_id")) not in used_region_ids]
-        return deepcopy(available[0] if available else regions[-1])
 
     def _region_for_ordered_section(
         self,
@@ -564,7 +515,7 @@ class TemplatePriorPlanner:
 
     def _allows_low_density_visual(self, section: Dict[str, Any], region: Dict[str, Any]) -> bool:
         region_id = str(region.get("region_id") or "")
-        if region_id == "slot_3" and self._allows_cluster_72_low_density_visual(section):
+        if region_id == "slot_3" and self._allows_slot3_method_low_density_visual(section):
             return True
         preferred_slot = str(section.get("preferred_slot_id") or section.get("slot_id") or "")
         visual_policy = str((section.get("capacity_budget") or {}).get("visual_policy") or "")
@@ -576,7 +527,7 @@ class TemplatePriorPlanner:
             return any(str(visual.get("visual_id") or "").startswith("figure_") for visual in section.get("visual_assets") or [])
         return False
 
-    def _allows_cluster_72_low_density_visual(self, section: Dict[str, Any]) -> bool:
+    def _allows_slot3_method_low_density_visual(self, section: Dict[str, Any]) -> bool:
         text = " ".join(
             [
                 str(section.get("section_title") or ""),
