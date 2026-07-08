@@ -28,10 +28,25 @@ def _status_code_from_exception(exc: Exception) -> Optional[int]:
 
 
 def is_non_retryable_model_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    # Multi-channel relay/proxy deployments intermittently route a request to an
+    # unavailable upstream channel and return a 400/500 such as "operation not
+    # allowed in this deployment" or "channel ... does not exist / 可用渠道不存在".
+    # These are transient (a retry usually lands on a healthy channel), so they must
+    # stay retryable even though they carry a 4xx status code.
+    transient_relay_tokens = (
+        "operation is not allowed in this deployment",
+        "operation not allowed in this deployment",
+        "get_channel_failed",
+        "channel_failed",
+        "可用渠道不存在",
+        "渠道",
+    )
+    if any(token in message for token in transient_relay_tokens):
+        return False
     status_code = _status_code_from_exception(exc)
     if status_code in {400, 401, 403, 404}:
         return True
-    message = str(exc).lower()
     return any(
         token in message
         for token in (
@@ -193,10 +208,12 @@ class ResponsesAPIModel:
             "model": self.config.model_name,
             "store": False,
             "stream": True,
-            "temperature": self.config.temperature,
             "max_output_tokens": self.config.max_tokens,
             "input": [self._convert_message(message) for message in messages],
         }
+        # reasoning models (gpt-5 / o-series) only accept the default temperature
+        if not str(self.config.model_name).startswith(("gpt-5", "o1", "o3", "o4")):
+            payload["temperature"] = self.config.temperature
         response = requests.post(
             self.endpoint,
             headers={
@@ -282,8 +299,8 @@ class LangGraphAgent:
         self.history = [SystemMessage(content=self.system_msg)]
     
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception(is_retryable_model_error),
     )
     def step(self, message: str) -> 'AgentResponse':
