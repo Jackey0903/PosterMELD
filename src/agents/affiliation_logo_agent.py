@@ -76,19 +76,28 @@ class AffiliationLogoAgent:
         return state
 
     def _get_affiliations(self, state: PosterState) -> List[str]:
-        # If DOI is available, try OpenAlex to get authoritative institution names
+        # Prefer authoritative institution names from OpenAlex (by DOI, else by title).
+        # The parser's raw affiliation strings are often garbled ("Technology Beijing
+        # Institute"), which breaks every downstream logo lookup; OpenAlex returns
+        # canonical names ("Beijing Institute of Technology").
+        openalex_insts: List[str] = []
         doi = state.get("doi")
         if doi:
             openalex_insts = self._try_openalex_institutions(doi)
-            if openalex_insts:
-                log_agent_info(self.name, f"OpenAlex returned {len(openalex_insts)} institutions for DOI {doi}")
-                # Merge: OpenAlex names take precedence, then any parser-extracted extras
-                seen = {n.lower() for n in openalex_insts}
-                for name in (state.get("affiliations") or []):
-                    if name.lower() not in seen:
-                        openalex_insts.append(name)
-                        seen.add(name.lower())
-                return openalex_insts[:6]
+            source = f"DOI {doi}"
+        if not openalex_insts:
+            title = self._paper_title(state)
+            if title:
+                openalex_insts = self._try_openalex_by_title(title)
+                source = "title search"
+        if openalex_insts:
+            log_agent_info(self.name, f"OpenAlex returned {len(openalex_insts)} institutions ({source})")
+            seen = {n.lower() for n in openalex_insts}
+            for name in (state.get("affiliations") or []):
+                if name.lower() not in seen:
+                    openalex_insts.append(name)
+                    seen.add(name.lower())
+            return openalex_insts[:6]
 
         affiliations = state.get("affiliations") or []
         if not affiliations:
@@ -132,6 +141,106 @@ class AffiliationLogoAgent:
         except Exception:
             return []
 
+    def _paper_title(self, state: PosterState) -> Optional[str]:
+        title = state.get("title") or state.get("paper_title")
+        if not title:
+            narrative = state.get("narrative_content") or {}
+            title = (narrative.get("meta") or {}).get("title")
+        title = str(title or "").strip()
+        return title or None
+
+    def _try_openalex_by_title(self, title: str) -> List[str]:
+        """Look up authoritative institution names by paper title (works for arXiv
+        papers that have no DOI)."""
+        try:
+            resp = requests.get(
+                "https://api.openalex.org/works",
+                params={"filter": f"title.search:{title}", "per-page": 1},
+                timeout=self.timeout,
+                headers={"User-Agent": "Paper2Poster/1.0 (mailto:noreply@example.com)"},
+            )
+            results = resp.json().get("results", []) if resp.status_code == 200 else []
+        except Exception as exc:
+            log_agent_warning(self.name, f"OpenAlex title lookup failed: {exc}")
+            return []
+        if not results:
+            return []
+        names: List[str] = []
+        seen: set[str] = set()
+        for authorship in results[0].get("authorships", []):
+            for inst in authorship.get("institutions", []):
+                name = inst.get("display_name")
+                if not name or name.lower() in seen:
+                    continue
+                names.append(name)
+                seen.add(name.lower())
+                ids = inst.get("ids") if isinstance(inst.get("ids"), dict) else {}
+                wikidata = (ids or {}).get("wikidata") or inst.get("wikidata")
+                if wikidata:
+                    self._openalex_wikidata_cache[name] = wikidata
+        return names
+
+    def _lookup_domain_via_autocomplete(self, institution: str) -> Optional[str]:
+        """Resolve an institution name to its real web domain via Clearbit's free
+        autocomplete API — far more reliable than guessing a domain from initials."""
+        cache = getattr(self, "_domain_autocomplete_cache", None)
+        if cache is None:
+            cache = {}
+            self._domain_autocomplete_cache = cache
+        key = institution.lower().strip()
+        if key in cache:
+            return cache[key]
+        domain: Optional[str] = None
+        try:
+            resp = requests.get(
+                "https://autocomplete.clearbit.com/v1/companies/suggest",
+                params={"query": institution},
+                timeout=self.timeout,
+                headers={"User-Agent": "Paper2Poster/1.0"},
+            )
+            hits = resp.json() if resp.status_code == 200 else []
+            academic = [h for h in hits if any(t in (h.get("domain") or "") for t in (".edu", ".ac."))]
+            chosen = academic[0] if academic else (hits[0] if hits else None)
+            if chosen:
+                domain = chosen.get("domain")
+        except Exception:
+            domain = None
+        cache[key] = domain
+        return domain
+
+    def _download_favicon_logo(self, domain: str, output_path: Path) -> Optional[str]:
+        """Last-resort, license-safe logo: the site's high-res favicon. Lower quality
+        than a real logo but reliable when no logo asset can be found."""
+        if not domain:
+            return None
+        from io import BytesIO
+        for url in (
+            f"https://www.google.com/s2/favicons?domain={domain}&sz=256",
+            f"https://icons.duckduckgo.com/ip3/{domain}.ico",
+        ):
+            try:
+                resp = requests.get(url, timeout=self.timeout, headers={"User-Agent": "Mozilla/5.0 Paper2Poster/1.0"})
+            except Exception:
+                continue
+            if resp.status_code != 200 or "image" not in resp.headers.get("content-type", "") or len(resp.content) < 1500:
+                continue
+            try:
+                with Image.open(BytesIO(resp.content)) as img:
+                    img = img.convert("RGBA")
+                    long_edge = max(img.size)
+                    target = max(self.min_logo_long_edge + 192, 512)
+                    if long_edge < target:
+                        scale = target / max(long_edge, 1)
+                        img = img.resize((round(img.size[0] * scale), round(img.size[1] * scale)), Image.LANCZOS)
+                    img.save(output_path, "PNG")
+                if self._normalize_image_file(output_path):
+                    return str(output_path)
+                output_path.unlink(missing_ok=True)
+            except Exception:
+                output_path.unlink(missing_ok=True)
+                continue
+        return None
+
     def _resolve_logo(self, institution: str, logo_dir: Path) -> Optional[Dict[str, Any]]:
         institution = self._canonical_institution_name(institution)
         domain = self._resolve_domain(institution)
@@ -160,6 +269,9 @@ class AffiliationLogoAgent:
             downloaded = self._download_clearbit_logo(domain, output_path)
             if downloaded:
                 return self._make_logo_entry(institution, domain, downloaded, "clearbit", "resolved")
+            favicon = self._download_favicon_logo(domain, output_path)
+            if favicon:
+                return self._make_logo_entry(institution, domain, favicon, "favicon", "resolved")
             log_agent_warning(self.name, f"logo download failed for {institution} ({domain})")
 
         if self.config.get("include_placeholders", True):
@@ -177,6 +289,10 @@ class AffiliationLogoAgent:
         for known_name, domain in self.known_domains.items():
             if lowered == known_name.lower() or lowered in known_name.lower() or known_name.lower() in lowered:
                 return domain
+
+        autocompleted = self._lookup_domain_via_autocomplete(institution)
+        if autocompleted:
+            return autocompleted
 
         return self._guess_domain(institution)
 

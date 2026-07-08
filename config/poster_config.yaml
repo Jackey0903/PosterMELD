@@ -782,10 +782,12 @@ template_fast_mode:
       keypoint_ids: [5, 6]
 
 affiliation_logos:
-  enabled: false
-  max_logos: 5
+  enabled: true
+  max_logos: 3
   request_timeout_seconds: 8
-  include_placeholders: true
+  # Skip institutions with no resolvable logo instead of drawing an ugly placeholder
+  # box; the agent then moves on and fills up to max_logos with real logos only.
+  include_placeholders: false
   clearbit_base_url: "https://logo.clearbit.com"
   min_logo_long_edge: 320
   normalized_max_size: [1800, 720]
