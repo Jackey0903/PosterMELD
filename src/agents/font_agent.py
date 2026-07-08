@@ -41,6 +41,7 @@ class FontAgent:
             
             # identify keywords to highlight
             keywords = self._identify_keywords(story_board, state)
+            keywords = self._normalize_keyword_section_ids(keywords, story_board)
             
             # apply styling to layout
             styled_layout = self._apply_styling(design_layout, color_scheme, keywords, state)
@@ -97,6 +98,65 @@ class FontAgent:
         except Exception as exc:
             log_agent_warning(self.name, f"keyword extraction unavailable; using heuristic fallback: {exc}")
             return self._fallback_keywords(story_board)
+
+    def _normalize_keyword_section_ids(self, keywords: Dict[str, Any], story_board: Dict) -> Dict[str, Any]:
+        """Map LLM-friendly section labels back to exact layout section ids."""
+        section_keywords = keywords.get("section_keywords") if isinstance(keywords, dict) else None
+        if not isinstance(section_keywords, dict):
+            return keywords
+
+        sections = (story_board.get("spatial_content_plan") or {}).get("sections") or []
+        alias_to_section: Dict[str, str] = {}
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            section_id = str(section.get("section_id") or "").strip()
+            if not section_id:
+                continue
+            aliases = {
+                section_id,
+                section_id.removeprefix("sec_"),
+                str(section.get("content_role") or "").strip(),
+                str(section.get("slot_id") or "").strip(),
+                str(section.get("column_assignment") or "").strip(),
+            }
+            for part in section_id.removeprefix("sec_").split("_"):
+                if len(part) >= 4:
+                    aliases.add(part)
+            title_alias = re.sub(r"[^a-z0-9]+", "_", str(section.get("section_title") or "").lower()).strip("_")
+            if title_alias:
+                aliases.add(title_alias)
+            for alias in aliases:
+                alias_key = self._keyword_section_alias(alias)
+                if alias_key:
+                    alias_to_section.setdefault(alias_key, section_id)
+
+        normalized: Dict[str, Dict[str, List[str]]] = {}
+        for raw_key, value in section_keywords.items():
+            raw_key_str = str(raw_key or "")
+            exact_key = raw_key_str if raw_key_str in alias_to_section.values() else ""
+            target_id = exact_key or alias_to_section.get(self._keyword_section_alias(raw_key_str))
+            if not target_id:
+                target_id = raw_key_str
+            target_bucket = normalized.setdefault(target_id, {"bold_contrast": [], "bold": [], "italic": []})
+            if isinstance(value, dict):
+                for style_name in ("bold_contrast", "bold", "italic"):
+                    existing = target_bucket.setdefault(style_name, [])
+                    for item in value.get(style_name) or []:
+                        text = str(item or "").strip()
+                        if text and text not in existing:
+                            existing.append(text)
+
+        result = dict(keywords)
+        result["section_keywords"] = normalized
+        return result
+
+    def _keyword_section_alias(self, value: str) -> str:
+        value = str(value or "").strip().lower()
+        if not value:
+            return ""
+        value = value.removeprefix("sec_")
+        return re.sub(r"[^a-z0-9]+", "_", value).strip("_")
 
     def _fallback_keywords(self, story_board: Dict) -> Dict[str, Any]:
         section_keywords: Dict[str, Dict[str, List[str]]] = {}

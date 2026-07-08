@@ -65,7 +65,7 @@ class BlockContentRefiner:
             if section.get("section_id")
         }
         expand_actions = [action for action in actions if action["action"] == "expand"]
-        expansion_patches = self._generate_expansion_patches(state, expand_actions, section_by_id)
+        rewrite_patches = self._generate_expansion_patches(state, expand_actions, section_by_id)
 
         applied_patches: List[Dict[str, Any]] = []
         history = deepcopy(state.get("block_refinement_history") or {})
@@ -77,8 +77,11 @@ class BlockContentRefiner:
             after = list(before)
 
             if action["action"] == "expand":
-                patch = expansion_patches.get(action["section_id"]) or {}
-                after = self._apply_expansion(before, patch.get("new_bullets") or [], action)
+                patch = rewrite_patches.get(action["section_id"]) or {}
+                rewritten = patch.get("rewritten_bullets")
+                if rewritten is None and patch.get("new_bullets") is not None:
+                    rewritten = self._fallback_rewritten_bullets(before, patch.get("new_bullets") or [], action)
+                after = self._apply_rewrite(before, rewritten or [], action)
             elif action["action"] == "reduce":
                 if state.get("template_fast_mode"):
                     after = self._reduce_bullets_fast(before, action, section)
@@ -179,12 +182,14 @@ class BlockContentRefiner:
                 and utilization < acceptable_min
             )
             geometry_expand_requested = block.get("action") == "expand" and target_extra_chars > 0
+            bottom_gap_forces_rewrite = self._bottom_whitespace_exceeds_final_limit(block)
+            final_gate_repair = bool(block.get("final_gate_repair"))
             visual_too_small = (
                 status == "visual_too_small"
                 and severity in {"medium", "high"}
                 and int(block.get("visual_count") or 0) > 0
             )
-            if visual_too_small and (block.get("action") == "expand" or utilization < acceptable_min):
+            if visual_too_small and utilization < acceptable_min:
                 action = "expand"
                 if target_extra_chars <= 0:
                     target_extra_chars = int(self.block_config.get("vlm_underfilled_min_extra_chars", 120))
@@ -216,6 +221,11 @@ class BlockContentRefiner:
                     target_extra_chars = max(
                         target_extra_chars,
                         int(self.block_config.get("underfilled_min_extra_chars", 70)),
+                    )
+                if bottom_gap_forces_rewrite and not teaser_protected:
+                    target_extra_chars = max(
+                        target_extra_chars,
+                        int(self.block_config.get("near_line_rewrite_extra_chars", 80)),
                     )
                 reason = vlm.get("description") or reason or "block is underfilled"
 
@@ -269,8 +279,22 @@ class BlockContentRefiner:
 
             if action == "expand":
                 safe_extra_chars = self._safe_extra_chars_for_block(block)
-                if safe_extra_chars is not None:
-                    target_extra_chars = min(target_extra_chars, safe_extra_chars)
+                if final_gate_repair and bottom_gap_forces_rewrite:
+                    target_extra_chars = max(
+                        target_extra_chars,
+                        int(self.block_config.get("near_line_rewrite_extra_chars", 80)),
+                    )
+                elif safe_extra_chars is not None:
+                    if safe_extra_chars > 0:
+                        target_extra_chars = min(target_extra_chars, safe_extra_chars)
+                    elif bottom_gap_forces_rewrite:
+                        target_extra_chars = min(
+                            max(
+                                target_extra_chars,
+                                int(self.block_config.get("near_line_rewrite_extra_chars", 80)),
+                            ),
+                            int(self.block_config.get("near_line_rewrite_extra_chars", 80)),
+                        )
                     if target_extra_chars < int(self.block_config.get("min_extra_chars", 10)):
                         action = "keep"
                         reason = "geometry-safe extra budget is below minimum"
@@ -288,6 +312,27 @@ class BlockContentRefiner:
                 })
 
         return actions
+
+    def _bottom_whitespace_exceeds_final_limit(self, block: Dict[str, Any]) -> bool:
+        bottom_whitespace = float(block.get("bottom_whitespace") or 0.0)
+        available_height = float(block.get("available_height") or 0.0)
+        if bottom_whitespace <= 0 or available_height <= 0:
+            return False
+        max_inches = float(self.block_config.get("final_max_bottom_whitespace_inches", 0.18) or 0.18)
+        max_fraction = float(self.block_config.get("final_max_bottom_whitespace_fraction", 0.012) or 0.012)
+        line_fraction = float(self.block_config.get("final_max_bottom_whitespace_line_fraction", 0.0) or 0.0)
+        allowed = min(
+            value
+            for value in (
+                max_inches,
+                available_height * max_fraction if max_fraction > 0 else max_inches,
+            )
+            if value > 0
+        )
+        line_height = float(block.get("line_height") or 0.0)
+        if line_height > 0 and line_fraction > 0:
+            allowed = max(allowed, line_height * line_fraction)
+        return bottom_whitespace > allowed
 
     def _safe_extra_chars_for_block(self, block: Dict[str, Any]) -> Optional[int]:
         available_height = float(block.get("available_height") or 0.0)
@@ -424,17 +469,28 @@ class BlockContentRefiner:
                     continue
                 section_id = str(patch.get("section_id") or "")
                 if section_id in section_by_id:
+                    rewritten = patch.get("rewritten_bullets")
+                    if rewritten is None and patch.get("new_bullets") is not None:
+                        rewritten = self._fallback_rewritten_bullets(
+                            section_by_id.get(section_id, {}).get("text_content") or [],
+                            self._clean_bullets(patch.get("new_bullets") or []),
+                            next((action for action in actions if action["section_id"] == section_id), {}),
+                        )
                     normalized[section_id] = {
-                        "new_bullets": self._clean_bullets(patch.get("new_bullets") or []),
+                        "rewritten_bullets": self._clean_bullets(rewritten or []),
                     }
             for action in actions:
                 section_id = action["section_id"]
-                if normalized.get(section_id, {}).get("new_bullets"):
+                if normalized.get(section_id, {}).get("rewritten_bullets"):
                     continue
                 normalized[section_id] = {
-                    "new_bullets": self._fallback_new_bullets(
-                        self._source_context_for_section(state, section_by_id.get(section_id, {}), action),
+                    "rewritten_bullets": self._fallback_rewritten_bullets(
                         section_by_id.get(section_id, {}).get("text_content") or [],
+                        self._fallback_new_bullets(
+                            self._source_context_for_section(state, section_by_id.get(section_id, {}), action),
+                            section_by_id.get(section_id, {}).get("text_content") or [],
+                            action,
+                        ),
                         action,
                     )
                 }
@@ -443,9 +499,13 @@ class BlockContentRefiner:
             log_agent_warning(self.name, f"LLM expansion unavailable; using source sentence fallback: {exc}")
             return {
                 action["section_id"]: {
-                    "new_bullets": self._fallback_new_bullets(
-                        self._source_context_for_section(state, section_by_id.get(action["section_id"], {}), action),
+                    "rewritten_bullets": self._fallback_rewritten_bullets(
                         section_by_id.get(action["section_id"], {}).get("text_content") or [],
+                        self._fallback_new_bullets(
+                            self._source_context_for_section(state, section_by_id.get(action["section_id"], {}), action),
+                            section_by_id.get(action["section_id"], {}).get("text_content") or [],
+                            action,
+                        ),
                         action,
                     )
                 }
@@ -454,15 +514,17 @@ class BlockContentRefiner:
 
     def _build_expansion_prompt(self, blocks: List[Dict[str, Any]]) -> str:
         return f"""
-Expand selected academic poster blocks with concise bullets.
+Rewrite selected academic poster blocks with concise bullets.
 
 Rules:
 - Use only facts present in source_context.
 - Do not invent experimental results, numbers, datasets, claims, or citations.
-- Do not modify section_id, slot_id, titles, visuals, or existing bullets.
-- Add only new_bullets for each block.
-- Keep total added characters near target_extra_chars but never exceed target_extra_chars * 1.15.
-- Prefer 1-5 compact poster text items. Each item should be self-contained, complete, and 8-22 words.
+- Do not modify section_id, slot_id, titles, or visuals.
+- Return the complete rewritten_bullets list for the block, not only added text.
+- Rewrite and rebalance the existing bullets; do not simply append a visibly separate final note.
+- Keep all important facts from current_bullets unless they are redundant or low-value.
+- Target final length should be close to current length plus target_extra_chars, but never exceed that by more than 15%.
+- Prefer compact poster text items. Each item should be self-contained, complete, and 8-22 words.
 - Do not include literal bullet symbols, nested bullets, ordered-list prefixes, empty strings, or multiline items.
 - Keep new items parallel with existing block style; use bold lead-ins only when they improve scanability.
 - Do not mention table or figure numbers such as "Table 2" or "Figure 3"; summarize the finding directly.
@@ -475,7 +537,7 @@ Return strict JSON only:
     {{
       "section_id": "same id",
       "slot_id": "same slot",
-      "new_bullets": ["fact-grounded bullet", "..."]
+      "rewritten_bullets": ["complete rewritten poster text item", "..."]
     }}
   ]
 }}
@@ -484,36 +546,81 @@ Blocks:
 {json.dumps(blocks, ensure_ascii=False, indent=2)}
 """
 
-    def _apply_expansion(self, current: List[Any], new_bullets: List[str], action: Dict[str, Any]) -> List[str]:
+    def _apply_rewrite(self, current: List[Any], rewritten_bullets: List[str], action: Dict[str, Any]) -> List[str]:
         cleaned_current = self._clean_bullets(current)
-        cleaned_new = self._clean_bullets(new_bullets)
-        if not cleaned_new:
+        cleaned_rewrite = self._clean_bullets(rewritten_bullets)
+        if not cleaned_rewrite:
             return cleaned_current
 
-        target = int(action.get("target_extra_chars") or 0)
-        max_added_chars = max(int(target * 1.15), target)
-        max_bullets = self._max_new_bullets(target)
-        existing_keys = {self._dedupe_key(item) for item in cleaned_current}
-        added: List[str] = []
-        added_chars = 0
+        target_extra = int(action.get("target_extra_chars") or 0)
+        current_chars = self._bullet_chars(cleaned_current)
+        max_final_chars = current_chars + max(int(target_extra * 1.15), target_extra)
+        if max_final_chars <= current_chars:
+            max_final_chars = max(current_chars, self._bullet_chars(cleaned_rewrite))
 
-        for bullet in cleaned_new:
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for bullet in cleaned_rewrite:
             key = self._dedupe_key(bullet)
-            if not key or key in existing_keys:
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(bullet)
+
+        if not deduped:
+            return cleaned_current
+
+        while self._bullet_chars(deduped) > max_final_chars and deduped:
+            idx = max(range(len(deduped)), key=lambda index: len(deduped[index]))
+            overage = self._bullet_chars(deduped) - max_final_chars
+            target_len = max(55, len(deduped[idx]) - max(18, overage))
+            shortened = self._truncate_on_word_boundary(deduped[idx], target_len)
+            if shortened == deduped[idx]:
+                if len(deduped) > 1:
+                    deduped.pop(idx)
+                    continue
+                break
+            deduped[idx] = shortened
+
+        if self._bullet_chars(deduped) <= self._bullet_chars(cleaned_current) and target_extra > 0:
+            return cleaned_current
+        return deduped
+
+    def _fallback_rewritten_bullets(
+        self,
+        current: List[Any],
+        extra_bullets: List[str],
+        action: Dict[str, Any],
+    ) -> List[str]:
+        cleaned_current = self._clean_bullets(current)
+        cleaned_extra = self._clean_bullets(extra_bullets)
+        if not cleaned_extra:
+            return cleaned_current
+
+        target_extra = int(action.get("target_extra_chars") or 0)
+        max_added_chars = max(target_extra, int(target_extra * 1.05))
+        if max_added_chars <= 0:
+            max_added_chars = int(self.block_config.get("near_line_rewrite_extra_chars", 80))
+
+        result = list(cleaned_current)
+        seen = {self._dedupe_key(item) for item in result}
+        added_chars = 0
+        for bullet in cleaned_extra:
+            key = self._dedupe_key(bullet)
+            if not key or key in seen:
                 continue
             remaining = max_added_chars - added_chars
-            if remaining <= 0 or len(added) >= max_bullets:
+            if remaining <= 0:
                 break
             candidate = bullet
             if len(candidate) > remaining:
-                if remaining < 45:
+                if remaining < 30:
                     break
                 candidate = self._truncate_on_word_boundary(candidate, remaining)
-            added.append(candidate)
-            existing_keys.add(key)
+            result.append(candidate)
+            seen.add(key)
             added_chars += len(candidate)
-
-        return cleaned_current + added if added else cleaned_current
+        return result
 
     def _reduce_bullets(self, current: List[Any], action: Dict[str, Any]) -> List[str]:
         bullets = self._clean_bullets(current)
@@ -611,6 +718,8 @@ Blocks:
             if not cleaned:
                 continue
             candidate = cleaned[0]
+            if self._is_weak_expansion_bullet(candidate):
+                continue
             if len(candidate) < 40:
                 continue
             if len(candidate) > 190:
@@ -619,17 +728,21 @@ Blocks:
                 if not cleaned:
                     continue
                 candidate = cleaned[0]
+                if self._is_weak_expansion_bullet(candidate):
+                    continue
             key = self._dedupe_key(candidate)
             if key in existing_keys:
                 continue
             if used_chars + len(candidate) > max_added_chars:
                 remaining = max_added_chars - used_chars
-                if remaining >= 60:
+                if remaining >= int(self.block_config.get("fallback_min_truncated_extra_chars", 42)):
                     candidate = self._truncate_on_word_boundary(candidate, remaining)
                     cleaned = self._clean_bullets([candidate])
                     if not cleaned:
                         continue
                     candidate = cleaned[0]
+                    if self._is_weak_expansion_bullet(candidate):
+                        continue
                 else:
                     break
             bullets.append(candidate)
@@ -638,6 +751,15 @@ Blocks:
             if len(bullets) >= self._max_new_bullets(target):
                 break
         return bullets
+
+    def _is_weak_expansion_bullet(self, text: str) -> bool:
+        plain = re.sub(r"<color:[^>]+>|</color>|\*\*", "", str(text or "")).strip()
+        lowered = plain.lower()
+        if re.search(r"\b(?:the|this|that)\s+(?:method|approach|model|policy|framework|paper)\.$", lowered):
+            return True
+        if re.search(r"\b(?:main|key|central)\s+reason\.$", lowered):
+            return True
+        return len(self._terms(plain)) < 5
 
     def _stringify_source(self, value: Any) -> str:
         if value is None:

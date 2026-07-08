@@ -94,6 +94,7 @@ class PosterKeypointSelector:
     def _build_prompt(self, raw_text: str, fast_block_contract: Dict[str, Any] | None = None) -> str:
         fast_guidance = ""
         if fast_block_contract:
+            block_count = len(fast_block_contract.get("blocks") or [])
             blocks = []
             for block in fast_block_contract.get("blocks") or []:
                 blocks.append({
@@ -106,8 +107,8 @@ class PosterKeypointSelector:
             fast_guidance = f"""
 
 Fast template-first capacity context:
-- The selected poster template is {fast_block_contract.get("template_id")} with 6 visual blocks.
-- Downstream curator will group the 10 keypoints into these 6 blocks, usually 1-2 keypoints per block.
+- The selected poster template is {fast_block_contract.get("template_id")} with {block_count} visual blocks.
+- Downstream curator will group the 10 keypoints into these {block_count} blocks, usually 1-3 keypoints per block depending on slot count.
 - Ensure the 10 keypoints cover motivation, method/architecture, retrieval or system flow when present, main results, and robustness/evaluation.
 - Prefer facts that can support 2 figure blocks, 1-2 table/results blocks, and 2-3 text-heavy blocks.
 - Slot capacity summary:

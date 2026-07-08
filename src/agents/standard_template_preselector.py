@@ -50,6 +50,7 @@ class StandardTemplatePreselector:
         state["layout_template_metadata"] = self._resolve_layout(state, selected)
         state["template_selection_report"] = selection_report
         state["standard_template_selection_report"] = selection_report
+        self._update_poster_variant(state, selected, selection_report)
         state["current_agent"] = self.name
         self._save_report(state, selection_report)
         log_agent_success(self.name, f"selected {selected}")
@@ -90,11 +91,34 @@ class StandardTemplatePreselector:
             col_gap=self.config["layout"]["column_spacing"],
         ).get_template(selected, header_height=header_height)
 
+    def _update_poster_variant(self, state: PosterState, selected: str, selection_report: Dict[str, Any]) -> None:
+        variant = dict(state.get("poster_variant") or {})
+        variant.update(
+            {
+                "requested_template": state.get("layout_template"),
+                "resolved_template": selected,
+                "selection_mode": selection_report.get("selection_mode"),
+                "style_profile": state.get("poster_style_preset"),
+                "visual_density": state.get("visual_density"),
+                "generated_teaser": {"enabled": bool(state.get("enable_generated_teaser", False))},
+                "generated_background": {
+                    "enabled": bool(state.get("enable_generated_background", False)),
+                    "palette": state.get("background_palette"),
+                    "style": state.get("background_style"),
+                },
+            }
+        )
+        if state.get("layout_template") == "auto" and selected == "cluster_43_landscape":
+            variant["variant_id"] = "default_standard"
+        state["poster_variant"] = variant
+
     def _save_report(self, state: PosterState, report: Dict[str, Any]) -> None:
         output_dir = Path(state["output_dir"]) / "content"
         output_dir.mkdir(parents=True, exist_ok=True)
         with open(output_dir / "standard_template_selection_report.json", "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
+        with open(output_dir / "poster_variant.json", "w", encoding="utf-8") as f:
+            json.dump(state.get("poster_variant") or {}, f, indent=2)
 
 
 def standard_template_preselector_node(state: PosterState) -> Dict[str, Any]:
@@ -105,6 +129,7 @@ def standard_template_preselector_node(state: PosterState) -> Dict[str, Any]:
         "layout_template_metadata": result.get("layout_template_metadata"),
         "template_selection_report": result.get("template_selection_report"),
         "standard_template_selection_report": result.get("standard_template_selection_report"),
+        "poster_variant": result.get("poster_variant"),
         "poster_width": result.get("poster_width", state.get("poster_width")),
         "poster_height": result.get("poster_height", state.get("poster_height")),
         "enable_visual_legibility_review": result.get("enable_visual_legibility_review", False),

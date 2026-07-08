@@ -311,9 +311,7 @@ def _apply_soft_gap_absorption(
         "absorptions": [],
         "edge_expansions": [],
     }
-    if template_id not in SOFT_GEOMETRY_TEMPLATES and not (
-        str(template_id).endswith("_landscape") or str(template_id).endswith("_portrait")
-    ):
+    if template_id not in SOFT_GEOMETRY_TEMPLATES and not _soft_geometry_enabled_for_template(template_id):
         return slots, report
 
     min_size = 0.25
@@ -599,6 +597,22 @@ def _apply_soft_gap_absorption(
     report["area_after"] = round(area_after, 4)
     report["total_area_gain"] = round(area_after - area_before, 4)
     return ordered_slots, report
+
+
+def _soft_geometry_enabled_for_template(template_id: str) -> bool:
+    try:
+        from src.config.poster_config import load_config
+
+        soft_config = load_config().get("soft_geometry") or {}
+    except Exception:
+        soft_config = {}
+    if soft_config:
+        if not bool(soft_config.get("enabled", False)):
+            return False
+        configured_templates = {str(item) for item in (soft_config.get("templates") or [])}
+        if configured_templates:
+            return str(template_id) in configured_templates
+    return str(template_id).endswith("_landscape") or str(template_id).endswith("_portrait")
 
 
 def _template_aspect_ratio(raw: Dict[str, Any], template_id: str) -> float:

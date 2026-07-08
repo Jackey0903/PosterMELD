@@ -43,6 +43,7 @@ class TimingMetrics:
     pipeline_start: float = 0.0
     pipeline_end: float = 0.0
     parser_time: float = 0.0
+    standard_template_preselector_time: float = 0.0
     template_capacity_planner_time: float = 0.0
     poster_keypoint_selector_time: float = 0.0
     curator_time: float = 0.0
@@ -60,7 +61,9 @@ class TimingMetrics:
     vlm_layout_reviewer_time: float = 0.0
     visual_legibility_reviewer_time: float = 0.0
     generated_teaser_agent_time: float = 0.0
+    background_image_agent_time: float = 0.0
     adaptive_column_relayout_time: float = 0.0
+    template_region_relayout_time: float = 0.0
     block_occupancy_analyzer_time: float = 0.0
     block_vlm_reviewer_time: float = 0.0
     block_content_refiner_time: float = 0.0
@@ -125,6 +128,7 @@ class PosterState(TypedDict):
     poster_width: int
     poster_height: int
     layout_template: str
+    poster_variant: Optional[Dict[str, Any]]
     resolved_layout_template: Optional[str]
     layout_template_metadata: Optional[Dict[str, Any]]
     template_selection_report: Optional[Dict[str, Any]]
@@ -216,6 +220,7 @@ class PosterState(TypedDict):
     # metadata
     tokens: TokenUsage
     timing_metrics: TimingMetrics
+    degraded_quality_states: List[Dict[str, Any]]
     current_agent: str
     errors: List[str]
 
@@ -295,6 +300,20 @@ def create_state(
         poster_width=width,
         poster_height=height,
         layout_template=layout_template,
+        poster_variant={
+            "variant_id": "default_standard" if layout_template == "auto" else "manual",
+            "requested_template": layout_template,
+            "resolved_template": None,
+            "style_profile": poster_style_preset,
+            "visual_density": visual_density,
+            "generated_teaser": {"enabled": enable_generated_teaser},
+            "generated_background": {
+                "enabled": enable_generated_background,
+                "palette": background_palette,
+                "style": background_style,
+            },
+            "seed": None,
+        },
         resolved_layout_template=None,
         layout_template_metadata=None,
         template_selection_report=None,
@@ -381,6 +400,7 @@ def create_state(
         block_refinement_count=0,
         tokens=TokenUsage(),
         timing_metrics=TimingMetrics(),
+        degraded_quality_states=[],
         current_agent="init",
         errors=[]
     )

@@ -19,6 +19,7 @@ from pptx.dml.color import RGBColor
 from src.state.poster_state import PosterState
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error
 from src.config.poster_config import load_config
+from src.utils.text_cleanup import repair_possessive_title_apostrophe
 from src.utils.style_options import resolve_poster_visual_style, resolve_typography_config
 
 
@@ -492,7 +493,7 @@ class Renderer:
         """render section title with enhanced styling"""
         x, y, w, h = (float(element[k]) for k in ["x", "y", "width", "height"])
         
-        section_title = element.get("section_title", "").strip()
+        section_title = repair_possessive_title_apostrophe(element.get("section_title", "").strip())
         if not section_title:
             return
         
@@ -823,7 +824,7 @@ class Renderer:
         
         body_text_font_size = self.styling_interfaces.get("font_sizes", {}).get("body_text", 40)
         effective_font_size = font_size if font_size != 40 else body_text_font_size
-        base_font_size = Pt(max(effective_font_size, 36))  # minimum 36pt
+        base_font_size = Pt(max(effective_font_size, 1))
         base_color = self._parse_color(font_color)
         
         # split by single newlines only (treat as simple line breaks)
@@ -854,6 +855,8 @@ class Renderer:
             # set paragraph properties - force 1.0 line spacing
             p.alignment = PP_ALIGN.LEFT
             p.line_spacing = line_spacing
+            p.space_before = Pt(0)
+            p.space_after = Pt(0)
 
     def _add_formatted_runs(self, paragraph, text: str, font_family: str, 
                           base_font_size, base_color):
@@ -1066,6 +1069,7 @@ class Renderer:
             )
         except Exception as e:
             log_agent_error(self.name, f"failed to render visual slot {slot_id}: {e}")
+            state.setdefault("errors", []).append(f"{self.name}: failed to render visual slot {slot_id}: {e}")
 
     def _render_logo_with_aspect_ratio(self, slide, element: Dict, image_path: str):
         """render logo with proper aspect ratio preservation"""

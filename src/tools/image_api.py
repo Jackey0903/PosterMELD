@@ -36,6 +36,7 @@ class ImageTools:
         self.model = self.models[0] if self.models else "gemini-2.5-flash-image"
         self.retry_attempts = max(1, int(retry_attempts if retry_attempts is not None else os.getenv("IMAGE_RETRY_ATTEMPTS", "5")))
         self.retry_delay = max(0.0, float(retry_delay if retry_delay is not None else os.getenv("IMAGE_RETRY_DELAY_SECONDS", "6")))
+        self.request_timeout = max(1.0, float(os.getenv("IMAGE_REQUEST_TIMEOUT_SECONDS", "45")))
 
     def _resolve_models(self, model: Optional[str], fallback_models: Optional[List[str]]) -> List[str]:
         if os.getenv("IMAGE_MODELS"):
@@ -125,6 +126,9 @@ class ImageTools:
             "no access to model",
             "this token has no access",
             "model not found",
+            "requested operation is unsupported",
+            "operation is unsupported",
+            "unsupported operation",
         ]
         return any(marker in text for marker in markers)
 
@@ -163,10 +167,7 @@ class ImageTools:
                 )
         except Exception as e:
             print(f"生成图像失败，可能因为网络或者服务接口变更错误: {e}")
-            print("回退生成灰色占位图...")
-            img = Image.new("RGB", (width, height), color=(200, 200, 200))
-            img.save(output_path)
-            return output_path
+            raise RuntimeError(f"image generation failed: {e}") from e
 
     def _generate_with_images_endpoint(self, prompt: str, width: int, height: int, output_path: str, headers: dict, base_url: str) -> str:
         url = f"{base_url.rstrip('/')}/images/generations"
@@ -177,7 +178,7 @@ class ImageTools:
         }
         if not self._is_gpt_image_model():
             payload["response_format"] = "b64_json"
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = requests.post(url, headers=headers, json=payload, timeout=self.request_timeout)
         self._raise_for_status_with_body(response)
         data = response.json()
         return self._write_image_response(data, output_path)
@@ -204,7 +205,7 @@ class ImageTools:
             return output_path
 
         if item.get("url"):
-            image_response = requests.get(item["url"], timeout=120)
+            image_response = requests.get(item["url"], timeout=self.request_timeout)
             image_response.raise_for_status()
             with open(output_path, "wb") as f:
                 f.write(image_response.content)
@@ -219,7 +220,7 @@ class ImageTools:
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}]
         }
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = requests.post(url, headers=headers, json=payload, timeout=self.request_timeout)
         self._raise_for_status_with_body(response)
 
         data = response.json()
@@ -275,7 +276,7 @@ class ImageTools:
             }
             if not self._is_gpt_image_model():
                 data["response_format"] = "b64_json"
-            response = requests.post(url, headers=self._headers(json_content=False), data=data, files=files, timeout=180)
+            response = requests.post(url, headers=self._headers(json_content=False), data=data, files=files, timeout=self.request_timeout)
         self._raise_for_status_with_body(response)
         return self._write_image_response(response.json(), output_path)
 
@@ -304,7 +305,7 @@ class ImageTools:
             ]
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=90)
+        response = requests.post(url, headers=headers, json=payload, timeout=self.request_timeout)
         self._raise_for_status_with_body(response)
 
         data = response.json()
@@ -347,4 +348,38 @@ class ImageTools:
             img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
             img.save(output_path)
             
+        return output_path
+
+    def fit_and_resize(
+        self,
+        image_path: str,
+        target_width: int,
+        target_height: int,
+        output_path: str,
+        background: Tuple[int, int, int] = (255, 255, 255),
+    ) -> str:
+        """
+        Resize the full image into the target box without cropping.
+
+        This is the safer default for tables because row labels, column headers,
+        and border rules are semantically important and should not be center-cropped.
+        """
+        with Image.open(image_path) as img:
+            if img.mode in {"RGBA", "LA"} or (img.mode == "P" and "transparency" in img.info):
+                canvas = Image.new("RGBA", img.size, (*background, 255))
+                img = Image.alpha_composite(canvas, img.convert("RGBA")).convert("RGB")
+            else:
+                img = img.convert("RGB")
+
+            scale = min(target_width / img.width, target_height / img.height)
+            resized_width = max(1, int(round(img.width * scale)))
+            resized_height = max(1, int(round(img.height * scale)))
+            resized = img.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
+
+            canvas = Image.new("RGB", (target_width, target_height), background)
+            left = max((target_width - resized_width) // 2, 0)
+            top = max((target_height - resized_height) // 2, 0)
+            canvas.paste(resized, (left, top))
+            canvas.save(output_path)
+
         return output_path

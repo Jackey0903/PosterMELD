@@ -21,10 +21,12 @@ class LayoutWithBalancerAgent:
         log_agent_info(self.name, "starting 3-phase layout optimization")
         
         try:
+            prior_errors = list(state.get("errors") or [])
+
             # phase 1: initial layout generation
             log_agent_info(self.name, "phase 1: generating initial layout")
             initial_state = self.layout_agent(state, mode="initial")
-            if initial_state.get("errors"):
+            if self._new_errors(initial_state, prior_errors):
                 return initial_state
 
             if initial_state.get("template_layout_mode") == "template_prior":
@@ -68,8 +70,9 @@ class LayoutWithBalancerAgent:
             
             # phase 3: final layout generation
             log_agent_info(self.name, "phase 3: generating final layout")
+            before_final_errors = list(initial_state.get("errors") or [])
             final_state = self.layout_agent(initial_state, mode="final")
-            if final_state.get("errors"):
+            if self._new_errors(final_state, before_final_errors):
                 return final_state
             
             # update token counts
@@ -84,6 +87,20 @@ class LayoutWithBalancerAgent:
         except Exception as e:
             log_agent_error(self.name, f"3-phase optimization error: {e}")
             return {**state, "errors": state.get("errors", []) + [f"{self.name}: {e}"]}
+
+    def _new_errors(self, state: PosterState, prior_errors: list[str]) -> list[str]:
+        prior_counts: Dict[str, int] = {}
+        for error in prior_errors:
+            prior_counts[str(error)] = prior_counts.get(str(error), 0) + 1
+
+        new_errors: list[str] = []
+        seen_counts: Dict[str, int] = {}
+        for error in state.get("errors") or []:
+            key = str(error)
+            seen_counts[key] = seen_counts.get(key, 0) + 1
+            if seen_counts[key] > prior_counts.get(key, 0):
+                new_errors.append(key)
+        return new_errors
 
     def _save_balancer_output(self, balancer_result: Dict, state: PosterState):
         """save balancer optimization results"""

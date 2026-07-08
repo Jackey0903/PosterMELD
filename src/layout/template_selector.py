@@ -44,6 +44,8 @@ DEFAULT_STANDARD_TEMPLATES = [
     "cluster_8_portrait",
 ]
 
+DEFAULT_STANDARD_LANDSCAPE_TEMPLATE = "cluster_43_landscape"
+
 
 class TemplateSelector:
     def __init__(self, config: Dict[str, Any]):
@@ -134,15 +136,11 @@ class TemplateSelector:
                 if dense
                 else policy.get("default_light_portrait_template", "cluster_8_portrait")
             )
-        elif dense:
-            selected = policy.get("default_dense_landscape_template", "cluster_104_landscape")
-        elif visual_count >= 2 or figure_count >= 2:
-            selected = policy.get("default_visual_landscape_template", "cluster_43_landscape")
         else:
-            selected = policy.get("default_light_landscape_template", "cluster_2_landscape")
+            selected = policy.get("default_standard_landscape_template", DEFAULT_STANDARD_LANDSCAPE_TEMPLATE)
 
         if selected not in enabled_templates:
-            selected = enabled_templates[0]
+            selected = self._fallback_enabled_template(enabled_templates, portrait_requested)
 
         candidates = []
         for template_id in enabled_templates:
@@ -181,8 +179,20 @@ class TemplateSelector:
                 "has_table": has_table,
                 "dense": dense,
                 "portrait_requested": portrait_requested,
+                "default_standard_landscape_template": policy.get(
+                    "default_standard_landscape_template",
+                    DEFAULT_STANDARD_LANDSCAPE_TEMPLATE,
+                ),
             },
         }
+
+    def _fallback_enabled_template(self, enabled_templates: List[str], portrait_requested: bool) -> str:
+        requested_orientation = "portrait" if portrait_requested else "landscape"
+        for template_id in enabled_templates:
+            info = get_block_template_info(template_id) or {}
+            if info.get("orientation") == requested_orientation:
+                return template_id
+        return enabled_templates[0] if enabled_templates else DEFAULT_STANDARD_LANDSCAPE_TEMPLATE
 
     def _select_keypoint_block_template(self, state: Dict[str, Any]) -> Dict[str, Any] | None:
         keypoints = state.get("paper_poster_keypoints") or []

@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
+from src.config.poster_config import load_config
 from src.state.poster_state import PosterState
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_warning
 
@@ -17,6 +18,7 @@ from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent
 class TemplateRegionRelayoutAgent:
     def __init__(self):
         self.name = "template_region_relayout"
+        self.max_repairs = int(load_config().get("vlm_layout_review", {}).get("template_prior_max_repairs", 1))
 
     def __call__(self, state: PosterState) -> PosterState:
         if state.get("template_layout_mode") != "template_prior":
@@ -24,7 +26,7 @@ class TemplateRegionRelayoutAgent:
         if not state.get("template_repair_required", False):
             return state
 
-        if state.get("template_repair_count", 0) >= 1:
+        if state.get("template_repair_count", 0) >= self.max_repairs:
             log_agent_warning(self.name, "template relayout skipped because max repair count was reached")
             state["draft_status"] = "rejected"
             return state

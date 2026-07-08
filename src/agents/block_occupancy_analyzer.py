@@ -251,11 +251,7 @@ class BlockOccupancyAnalyzer:
         measured = self._estimated_text_height(item)
         if measured <= 0:
             return min(box_height, 0.1)
-        settings = self._settings()
-        max_by_ratio = measured * max(settings["max_text_box_slack_ratio"], 1.0)
-        max_by_inches = measured + max(settings["max_text_box_slack_inches"], 0.0)
-        allowed = max(measured, min(max_by_ratio, max_by_inches))
-        return min(box_height, allowed)
+        return min(box_height, measured)
 
     def _text_box_slack(self, text_items: List[Dict[str, Any]]) -> Dict[str, float]:
         max_ratio = 1.0

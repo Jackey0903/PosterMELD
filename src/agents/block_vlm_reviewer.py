@@ -38,6 +38,15 @@ class BlockVLMReviewer(VLMLayoutReviewer):
 
         try:
             review = self._review_or_fallback(state)
+            if review.get("degraded"):
+                state.setdefault("degraded_quality_states", []).append(
+                    {
+                        "component": self.name,
+                        "category": "block_vlm_review",
+                        "reason": "; ".join(str(item) for item in review.get("warnings", [])),
+                        "fallback": review.get("fallback") or "occupancy_only_block_review",
+                    }
+                )
             state["block_vlm_review"] = review
             state["current_agent"] = self.name
             self._save_outputs(state, review)
@@ -240,6 +249,8 @@ Block metadata:
         if not occupancy:
             return {
                 "source": "fallback",
+                "degraded": True,
+                "fallback": "occupancy_only_block_review",
                 "blocks": [],
                 "warnings": [warning],
             }
@@ -259,6 +270,8 @@ Block metadata:
             })
         return {
             "source": "fallback",
+            "degraded": True,
+            "fallback": "occupancy_only_block_review",
             "blocks": blocks,
             "warnings": [warning],
         }

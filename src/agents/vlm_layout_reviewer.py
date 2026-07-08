@@ -38,6 +38,15 @@ class VLMLayoutReviewer:
 
         try:
             review = self._review_or_fallback(state)
+            if review.get("degraded"):
+                state.setdefault("degraded_quality_states", []).append(
+                    {
+                        "component": self.name,
+                        "category": "vlm_layout_review",
+                        "reason": "; ".join(str(item) for item in review.get("warnings", [])),
+                        "fallback": "deterministic_acceptance",
+                    }
+                )
             fast_mode = bool(state.get("template_fast_mode"))
             if not fast_mode:
                 review = self._enforce_template_acceptance_gate(review, state)
@@ -591,6 +600,9 @@ Resolved visual assets:
         log_agent_warning(self.name, warning)
         return {
             "source": "fallback",
+            "review_available": False,
+            "degraded": True,
+            "fallback": "deterministic_acceptance",
             "overall_score": None,
             "accept": True,
             "issues": [],

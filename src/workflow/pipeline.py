@@ -32,6 +32,8 @@ from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent
 env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(env_path, override=False)
 
+DEFAULT_STANDARD_TEMPLATE = "cluster_43_landscape"
+
 
 def resolve_poster_dimensions(layout_template: str, width: float | None, height: float | None) -> tuple[float, float]:
     """Resolve canvas size from the selected template.
@@ -40,10 +42,11 @@ def resolve_poster_dimensions(layout_template: str, width: float | None, height:
     templates use their own aspect ratio and orientation, so current cluster_*
     templates default to a portrait canvas.
     """
-    if is_block_template_id(layout_template):
-        info = get_block_template_info(layout_template)
+    template_for_size = DEFAULT_STANDARD_TEMPLATE if layout_template == "auto" else layout_template
+    if is_block_template_id(template_for_size):
+        info = get_block_template_info(template_for_size)
         if not info:
-            raise ValueError(f"Unknown block template: {layout_template}")
+            raise ValueError(f"Unknown block template: {template_for_size}")
         aspect_ratio = float(info["aspect_ratio"])
         orientation = info["orientation"]
         recommended = info["recommended_canvas_size"]
@@ -63,7 +66,7 @@ def resolve_poster_dimensions(layout_template: str, width: float | None, height:
             requested_orientation = "portrait" if width < height else "landscape"
             if requested_orientation != orientation:
                 raise ValueError(
-                    f"Template {layout_template} is {orientation}, but requested canvas is {requested_orientation} "
+                    f"Template {template_for_size} is {orientation}, but requested canvas is {requested_orientation} "
                     f"({width:g} x {height:g})."
                 )
         return float(width), float(height)
@@ -81,6 +84,8 @@ def create_timing_wrapper(node_func: Callable, component_name: str) -> Callable:
 
         if component_name == "parser":
             result["timing_metrics"].parser_time = elapsed
+        elif component_name == "standard_template_preselector":
+            result["timing_metrics"].standard_template_preselector_time = elapsed
         elif component_name == "template_capacity_planner":
             result["timing_metrics"].template_capacity_planner_time = elapsed
         elif component_name == "poster_keypoint_selector":
@@ -107,6 +112,8 @@ def create_timing_wrapper(node_func: Callable, component_name: str) -> Callable:
             result["timing_metrics"].visual_asset_agent_time = elapsed
         elif component_name == "generated_teaser_agent":
             result["timing_metrics"].generated_teaser_agent_time = elapsed
+        elif component_name == "background_image_agent":
+            result["timing_metrics"].background_image_agent_time = elapsed
         elif component_name == "affiliation_logo_agent":
             result["timing_metrics"].affiliation_logo_agent_time = elapsed
         elif component_name == "renderer":
@@ -117,6 +124,8 @@ def create_timing_wrapper(node_func: Callable, component_name: str) -> Callable:
             result["timing_metrics"].visual_legibility_reviewer_time = elapsed
         elif component_name == "adaptive_column_relayout":
             result["timing_metrics"].adaptive_column_relayout_time = elapsed
+        elif component_name == "template_region_relayout":
+            result["timing_metrics"].template_region_relayout_time = elapsed
         elif component_name == "block_occupancy_analyzer":
             result["timing_metrics"].block_occupancy_analyzer_time = elapsed
         elif component_name == "block_vlm_reviewer":
@@ -135,6 +144,10 @@ def _block_refinement_max_iterations(state: PosterState | None = None) -> int:
     return int(config.get("block_refinement", {}).get("max_iterations", 2))
 
 
+def _template_region_repair_max_iterations() -> int:
+    return int(load_config().get("vlm_layout_review", {}).get("template_prior_max_repairs", 1))
+
+
 def _route_after_visual_asset_agent(state: PosterState) -> str:
     if state.get("visual_reflow_required") and state.get("visual_reflow_count", 0) <= 1:
         return "layout_optimizer"
@@ -143,7 +156,10 @@ def _route_after_visual_asset_agent(state: PosterState) -> str:
 
 def _route_after_micro_layout_refiner(state: PosterState) -> str:
     if state.get("draft_status") == "rejected":
-        if state.get("template_layout_mode") == "template_prior" and state.get("template_repair_count", 0) < 1:
+        if (
+            state.get("template_layout_mode") == "template_prior"
+            and state.get("template_repair_count", 0) < _template_region_repair_max_iterations()
+        ):
             return "template_region_relayout"
         return "end"
     return "visual_asset_agent"
@@ -242,6 +258,49 @@ def _load_content_json(state: PosterState, filename: str) -> Dict[str, Any]:
         return {}
 
 
+def _is_placeholder_image(path: str | Path) -> bool:
+    try:
+        from PIL import Image, ImageStat
+
+        with Image.open(path) as image:
+            stat = ImageStat.Stat(image.resize((32, 32)).convert("RGB"))
+        mean = sum(stat.mean) / 3
+        variance = sum(stat.var) / 3
+        return variance < 18 and 175 <= mean <= 230
+    except Exception:
+        return False
+
+
+def _final_artifact_failures(state: PosterState) -> list[Dict[str, Any]]:
+    failures: list[Dict[str, Any]] = []
+    if not state.get("pptx_output_path") and not state.get("poster_preview_path"):
+        return failures
+    for field, label in (("pptx_output_path", "pptx"), ("poster_preview_path", "png")):
+        value = state.get(field)
+        if not value or not Path(str(value)).exists():
+            failures.append({"category": "artifact", "artifact": label, "path": value or "", "reason": "missing"})
+
+    if state.get("enable_generated_background", False):
+        report = state.get("background_image_report") or {}
+        background_path = report.get("background_image_path") or state.get("background_image_path")
+        if not background_path or not Path(str(background_path)).exists():
+            failures.append({"category": "generated_asset", "asset": "background", "reason": "missing"})
+        elif _is_placeholder_image(background_path):
+            failures.append({"category": "generated_asset_placeholder", "asset": "background", "path": str(background_path)})
+
+    if state.get("enable_generated_teaser", False):
+        report = state.get("generated_teaser_report") or {}
+        if report.get("applied", True) is False:
+            return failures
+        teaser_path = report.get("teaser_path")
+        if not teaser_path or not Path(str(teaser_path)).exists():
+            failures.append({"category": "generated_asset", "asset": "teaser", "reason": "missing"})
+        elif _is_placeholder_image(teaser_path):
+            failures.append({"category": "generated_asset_placeholder", "asset": "teaser", "path": str(teaser_path)})
+
+    return failures
+
+
 def _section_geometry_issues(state: PosterState) -> list[str]:
     layout = state.get("styled_layout") or []
     template = state.get("layout_template_metadata") or {}
@@ -289,125 +348,275 @@ def _boxes_overlap(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
     )
 
 
+def _micro_layout_lane_overflow_failures(micro_report: Dict[str, Any], config: Dict[str, Any]) -> list[Dict[str, Any]]:
+    micro_config = config.get("micro_layout_refinement", {}) or {}
+    tolerance = float(micro_config.get("final_lane_overflow_tolerance_inches", 0.02) or 0.02)
+    overflows = []
+    for lane in micro_report.get("lanes") or []:
+        try:
+            final_overflow = float(lane.get("final_overflow") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if final_overflow <= tolerance:
+            continue
+        overflows.append(
+            {
+                "lane_id": lane.get("lane_id"),
+                "final_overflow": round(final_overflow, 4),
+                "tolerance": round(tolerance, 4),
+                "force_fit_used": bool(lane.get("force_fit_used")),
+            }
+        )
+    return overflows
+
+
+def _oversized_body_font_failures(state: PosterState, max_body_font_size: float) -> list[Dict[str, Any]]:
+    if max_body_font_size <= 0:
+        return []
+    oversized = []
+    for element in state.get("styled_layout") or []:
+        if element.get("type") != "text":
+            continue
+        try:
+            font_size = float(element.get("font_size") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if font_size <= max_body_font_size:
+            continue
+        oversized.append(
+            {
+                "slot_id": element.get("slot_id") or element.get("lane_id"),
+                "section_id": element.get("section_id"),
+                "element_id": element.get("id"),
+                "font_size": round(font_size, 2),
+                "max_font_size": round(max_body_font_size, 2),
+            }
+        )
+    return oversized
+
+
+def _dedupe_degraded_quality_states(items: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    deduped = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = (
+            str(item.get("component") or ""),
+            str(item.get("category") or ""),
+            str(item.get("fallback") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _logo_degraded_quality_states(state: PosterState) -> list[Dict[str, Any]]:
+    degraded: list[Dict[str, Any]] = []
+    if state.get("enable_affiliation_logos"):
+        affiliations = state.get("affiliations") or []
+        logos = [
+            logo for logo in (state.get("affiliation_logos") or [])
+            if logo.get("logo_path") and Path(logo["logo_path"]).exists()
+        ]
+        placeholder_logos = [
+            logo for logo in logos
+            if str(logo.get("status") or "").lower() == "placeholder"
+            or str(logo.get("source") or "").lower() == "placeholder"
+        ]
+        if affiliations and not logos:
+            degraded.append(
+                {
+                    "component": "affiliation_logo_agent",
+                    "category": "affiliation_logo_resolution",
+                    "reason": "affiliation logo generation was enabled but no institution logo asset was resolved",
+                    "fallback": "no_affiliation_logo",
+                }
+            )
+        elif placeholder_logos:
+            degraded.append(
+                {
+                    "component": "affiliation_logo_agent",
+                    "category": "affiliation_logo_resolution",
+                    "reason": f"{len(placeholder_logos)} institution logo(s) used generated placeholder artwork",
+                    "fallback": "placeholder_affiliation_logo",
+                }
+            )
+
+    if state.get("conference_name") and not (state.get("logo_path") and Path(state["logo_path"]).exists()):
+        degraded.append(
+            {
+                "component": "conference_logo_resolver",
+                "category": "conference_logo_resolution",
+                "reason": f"conference logo was requested for {state.get('conference_name')} but no local asset was resolved",
+                "fallback": "no_conference_logo",
+            }
+        )
+    return degraded
+
+
 def _run_final_quality_gate(state: PosterState) -> PosterState:
     from src.agents.block_occupancy_analyzer import BlockOccupancyAnalyzer
     from src.utils.visual_footprint import evaluate_visual_footprints
 
-    if state.get("template_layout_mode") != "template_prior":
-        state["final_quality_gate"] = {"accepted": True, "reason": "not a template-prior poster"}
-        return state
-
     config = load_config()
+    is_template_prior = state.get("template_layout_mode") == "template_prior"
     block_settings = config.get("block_refinement", {})
     min_utilization = float(block_settings.get("final_min_utilization", 0.88))
     min_mean_utilization = float(block_settings.get("final_mean_utilization", min_utilization))
     max_bottom_whitespace_inches = float(block_settings.get("final_max_bottom_whitespace_inches", 0.0) or 0.0)
     max_bottom_whitespace_fraction = float(block_settings.get("final_max_bottom_whitespace_fraction", 0.0) or 0.0)
+    max_bottom_whitespace_line_fraction = float(
+        block_settings.get("final_max_bottom_whitespace_line_fraction", 0.0) or 0.0
+    )
+    max_body_font_size = float(
+        block_settings.get(
+            "final_max_body_font_size",
+            (config.get("micro_layout_refinement", {}) or {}).get("max_body_font_size", 0.0),
+        )
+        or 0.0
+    )
     gate: Dict[str, Any] = {
         "source": "deterministic_final_gate",
         "accepted": True,
         "min_utilization": min_utilization,
         "min_mean_utilization": min_mean_utilization,
+        "max_body_font_size": max_body_font_size,
         "max_bottom_whitespace_inches": max_bottom_whitespace_inches,
         "max_bottom_whitespace_fraction": max_bottom_whitespace_fraction,
+        "template_layout_mode": state.get("template_layout_mode"),
+        "degraded_quality_states": _dedupe_degraded_quality_states(
+            list(state.get("degraded_quality_states") or []) + _logo_degraded_quality_states(state)
+        ),
         "failures": [],
     }
+    gate["failures"].extend(_final_artifact_failures(state))
 
-    try:
-        occupancy_report = BlockOccupancyAnalyzer().analyze(state)
-        state["final_block_occupancy_report"] = occupancy_report
-        gate["occupancy_summary"] = occupancy_report.get("summary")
-        gate["blocks"] = [
-            {
-                "slot_id": block.get("slot_id"),
-                "section_id": block.get("section_id"),
-                "section_title": block.get("section_title"),
-                "utilization": block.get("utilization"),
-                "bottom_whitespace": block.get("bottom_whitespace"),
-                "action": block.get("action"),
-                "visual_count": block.get("visual_count"),
-            }
-            for block in occupancy_report.get("blocks", [])
-        ]
-        low_blocks = [
-            {
-                "slot_id": block.get("slot_id"),
-                "section_id": block.get("section_id"),
-                "section_title": block.get("section_title"),
-                "utilization": block.get("utilization"),
-            }
-            for block in occupancy_report.get("blocks", [])
-            if float(block.get("utilization") or 0.0) < min_utilization
-        ]
-        whitespace_blocks = []
-        for block in occupancy_report.get("blocks", []):
-            available_height = float(block.get("available_height") or 0.0)
-            bottom_whitespace = float(block.get("bottom_whitespace") or 0.0)
-            allowed_values = [
-                value
-                for value in (
-                    max_bottom_whitespace_inches,
-                    available_height * max_bottom_whitespace_fraction if max_bottom_whitespace_fraction > 0 else 0.0,
-                )
-                if value > 0
+    if is_template_prior:
+        try:
+            occupancy_report = BlockOccupancyAnalyzer().analyze(state)
+            state["final_block_occupancy_report"] = occupancy_report
+            gate["occupancy_summary"] = occupancy_report.get("summary")
+            gate["blocks"] = [
+                {
+                    "slot_id": block.get("slot_id"),
+                    "section_id": block.get("section_id"),
+                    "section_title": block.get("section_title"),
+                    "utilization": block.get("utilization"),
+                    "bottom_whitespace": block.get("bottom_whitespace"),
+                    "action": block.get("action"),
+                    "visual_count": block.get("visual_count"),
+                }
+                for block in occupancy_report.get("blocks", [])
             ]
-            if not allowed_values:
-                continue
-            allowed_whitespace = min(allowed_values)
-            if bottom_whitespace > allowed_whitespace + 1e-6:
-                whitespace_blocks.append(
+            whitespace_blocks = []
+            allowed_whitespace_by_block: Dict[tuple[str, str], float] = {}
+            for block in occupancy_report.get("blocks", []):
+                available_height = float(block.get("available_height") or 0.0)
+                bottom_whitespace = float(block.get("bottom_whitespace") or 0.0)
+                allowed_values = [
+                    value
+                    for value in (
+                        max_bottom_whitespace_inches,
+                        available_height * max_bottom_whitespace_fraction if max_bottom_whitespace_fraction > 0 else 0.0,
+                    )
+                    if value > 0
+                ]
+                if not allowed_values:
+                    continue
+                allowed_whitespace = min(allowed_values)
+                line_height = float(block.get("line_height") or 0.0)
+                if line_height > 0 and max_bottom_whitespace_line_fraction > 0:
+                    allowed_whitespace = max(
+                        allowed_whitespace,
+                        line_height * max_bottom_whitespace_line_fraction,
+                    )
+                allowed_whitespace_by_block[
+                    (str(block.get("slot_id") or ""), str(block.get("section_id") or ""))
+                ] = allowed_whitespace
+                gap_tolerance = max(min(line_height * 0.04, 0.03), 0.005) if line_height > 0 else 0.005
+                if bottom_whitespace > allowed_whitespace + gap_tolerance:
+                    whitespace_blocks.append(
+                        {
+                            "slot_id": block.get("slot_id"),
+                            "section_id": block.get("section_id"),
+                            "section_title": block.get("section_title"),
+                            "bottom_whitespace": block.get("bottom_whitespace"),
+                            "allowed": round(allowed_whitespace, 4),
+                        }
+                    )
+            low_blocks = []
+            for block in occupancy_report.get("blocks", []):
+                utilization = float(block.get("utilization") or 0.0)
+                if utilization >= min_utilization:
+                    continue
+                key = (str(block.get("slot_id") or ""), str(block.get("section_id") or ""))
+                allowed_whitespace = allowed_whitespace_by_block.get(key, 0.0)
+                bottom_whitespace = float(block.get("bottom_whitespace") or 0.0)
+                if allowed_whitespace > 0 and bottom_whitespace <= allowed_whitespace + 1e-6:
+                    continue
+                low_blocks.append(
                     {
                         "slot_id": block.get("slot_id"),
                         "section_id": block.get("section_id"),
                         "section_title": block.get("section_title"),
-                        "bottom_whitespace": block.get("bottom_whitespace"),
-                        "allowed": round(allowed_whitespace, 4),
+                        "utilization": block.get("utilization"),
                     }
                 )
-        if not occupancy_report.get("blocks"):
-            gate["failures"].append({"category": "occupancy", "reason": "no content blocks measured"})
-        if low_blocks:
-            gate["failures"].append({"category": "occupancy", "low_blocks": low_blocks})
-        if whitespace_blocks:
-            gate["failures"].append({"category": "bottom_whitespace", "blocks": whitespace_blocks})
-        mean_utilization = float((occupancy_report.get("summary") or {}).get("mean_utilization") or 0.0)
-        if occupancy_report.get("blocks") and mean_utilization < min_mean_utilization:
-            gate["failures"].append(
-                {
-                    "category": "occupancy_mean",
-                    "mean_utilization": mean_utilization,
-                    "required": min_mean_utilization,
-                }
-            )
-    except Exception as exc:
-        gate["failures"].append({"category": "occupancy", "reason": str(exc)})
+            if not occupancy_report.get("blocks"):
+                gate["failures"].append({"category": "occupancy", "reason": "no content blocks measured"})
+            if low_blocks:
+                gate["failures"].append({"category": "occupancy", "low_blocks": low_blocks})
+            if whitespace_blocks:
+                gate["failures"].append({"category": "bottom_whitespace", "blocks": whitespace_blocks})
+            mean_utilization = float((occupancy_report.get("summary") or {}).get("mean_utilization") or 0.0)
+            if occupancy_report.get("blocks") and mean_utilization < min_mean_utilization and (low_blocks or whitespace_blocks):
+                gate["failures"].append(
+                    {
+                        "category": "occupancy_mean",
+                        "mean_utilization": mean_utilization,
+                        "required": min_mean_utilization,
+                    }
+                )
+        except Exception as exc:
+            gate["failures"].append({"category": "occupancy", "reason": str(exc)})
 
-    try:
-        visual_footprint = evaluate_visual_footprints(
-            state.get("styled_layout") or [],
-            state.get("layout_template_metadata") or {},
-            state,
-            config,
-        )
-        gate["visual_footprint"] = visual_footprint
-        if visual_footprint.get("violations"):
-            gate["failures"].append(
-                {
-                    "category": "visual_footprint",
-                    "violations": visual_footprint["violations"],
-                }
+        try:
+            visual_footprint = evaluate_visual_footprints(
+                state.get("styled_layout") or [],
+                state.get("layout_template_metadata") or {},
+                state,
+                config,
             )
-    except Exception as exc:
-        gate["failures"].append({"category": "visual_footprint", "reason": str(exc)})
+            gate["visual_footprint"] = visual_footprint
+            if visual_footprint.get("violations"):
+                gate["failures"].append(
+                    {
+                        "category": "visual_footprint",
+                        "violations": visual_footprint["violations"],
+                    }
+                )
+        except Exception as exc:
+            gate["failures"].append({"category": "visual_footprint", "reason": str(exc)})
 
     micro_report = _load_content_json(state, "micro_layout_report.json")
     micro_issues = ((micro_report.get("validation") or {}).get("issues") or [])
     if micro_issues:
         gate["failures"].append({"category": "micro_layout", "issues": micro_issues})
+    micro_lane_overflows = _micro_layout_lane_overflow_failures(micro_report, config)
+    if micro_lane_overflows:
+        gate["failures"].append({"category": "micro_layout_lane_overflow", "lanes": micro_lane_overflows})
 
-    geometry_issues = _section_geometry_issues(state)
-    if geometry_issues:
-        gate["failures"].append({"category": "section_geometry", "issues": geometry_issues})
+    if is_template_prior:
+        geometry_issues = _section_geometry_issues(state)
+        if geometry_issues:
+            gate["failures"].append({"category": "section_geometry", "issues": geometry_issues})
+
+        oversized_body_fonts = _oversized_body_font_failures(state, max_body_font_size)
+        if oversized_body_fonts:
+            gate["failures"].append({"category": "body_font_scale", "blocks": oversized_body_fonts})
 
     vlm_review = state.get("vlm_layout_review") or {}
     high_issues = [
@@ -446,6 +655,10 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
     if state.get("final_block_occupancy_report"):
         with open(output_dir / "final_block_occupancy_report.json", "w", encoding="utf-8") as f:
             json.dump(state["final_block_occupancy_report"], f, indent=2)
+    if gate["accepted"] and int(state.get("final_quality_repair_count", 0) or 0) <= 0:
+        stale_repair_report = output_dir / "final_quality_repair_report.json"
+        if stale_repair_report.exists():
+            stale_repair_report.unlink()
 
     if not gate["accepted"]:
         state["final_poster_accepted"] = False
@@ -453,6 +666,177 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
         log_agent_error("final_quality_gate", f"rejected final poster: {gate['failures']}")
     else:
         log_agent_success("final_quality_gate", "accepted final poster")
+    return state
+
+
+def _clear_final_quality_gate_errors(state: PosterState) -> None:
+    state["errors"] = [
+        error
+        for error in state.get("errors", [])
+        if not str(error).startswith("final_quality_gate:")
+    ]
+
+
+def _final_gate_refinable_block_ids(gate: Dict[str, Any]) -> set[tuple[str, str]]:
+    refinable: set[tuple[str, str]] = set()
+    for failure in gate.get("failures") or []:
+        category = str(failure.get("category") or "")
+        if category == "occupancy":
+            candidates = failure.get("low_blocks") or []
+        elif category == "bottom_whitespace":
+            candidates = failure.get("blocks") or []
+        elif category == "body_font_scale":
+            candidates = failure.get("blocks") or []
+        else:
+            continue
+        for block in candidates:
+            slot_id = str(block.get("slot_id") or "")
+            section_id = str(block.get("section_id") or "")
+            if slot_id and section_id:
+                refinable.add((slot_id, section_id))
+    return refinable
+
+
+def _build_final_gate_refinement_occupancy(state: PosterState) -> Dict[str, Any]:
+    gate = state.get("final_quality_gate") or {}
+    occupancy = state.get("final_block_occupancy_report") or {}
+    refinable_ids = _final_gate_refinable_block_ids(gate)
+    if not refinable_ids:
+        return {}
+
+    config = load_config()
+    block_settings = config.get("block_refinement", {})
+    near_line_extra = int(block_settings.get("near_line_rewrite_extra_chars", 80))
+    min_extra = int(block_settings.get("min_extra_chars", 10))
+    repaired_blocks = []
+    for block in occupancy.get("blocks") or []:
+        slot_id = str(block.get("slot_id") or "")
+        section_id = str(block.get("section_id") or "")
+        if (slot_id, section_id) not in refinable_ids:
+            continue
+        repaired = dict(block)
+        repaired["action"] = "expand"
+        repaired["target_extra_chars"] = max(
+            int(repaired.get("target_extra_chars") or 0),
+            near_line_extra,
+            min_extra,
+        )
+        repaired["final_gate_repair"] = True
+        repaired["reason"] = "final quality gate requested full block text rewrite for bottom whitespace"
+        repaired_blocks.append(repaired)
+
+    if not repaired_blocks:
+        return {}
+
+    report = dict(occupancy)
+    report["source"] = "final_quality_gate_repair"
+    report["blocks"] = repaired_blocks
+    report["summary"] = {
+        **(occupancy.get("summary") or {}),
+        "repair_block_count": len(repaired_blocks),
+    }
+    return report
+
+
+def _write_final_gate_repair_report(state: PosterState, report: Dict[str, Any]) -> None:
+    output_dir = Path(state["output_dir"]) / "content"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "final_quality_repair_report.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+
+
+def _attempt_final_gate_block_content_repair(state: PosterState) -> PosterState:
+    """Repair final-gate block whitespace by rewriting source text, then rerendering.
+
+    The repair deliberately goes through story_board -> layout -> font -> micro
+    layout again. It never creates styled text elements directly, so rewritten
+    content inherits the same fonts, colors, bars, spacing, and block styling as
+    the rest of the poster.
+    """
+    if state.get("template_layout_mode") != "template_prior":
+        return state
+    if not state.get("enable_block_vlm_review", False):
+        return state
+    if (state.get("final_quality_gate") or {}).get("accepted", True):
+        return state
+    config = load_config()
+    max_final_repairs = int(
+        (config.get("block_refinement", {}) or {}).get("final_gate_repair_max_iterations", 1)
+    )
+    if int(state.get("final_quality_repair_count", 0)) >= max_final_repairs:
+        return state
+
+    repair_occupancy = _build_final_gate_refinement_occupancy(state)
+    if not repair_occupancy.get("blocks"):
+        return state
+
+    from src.agents.background_image_agent import background_image_agent_node
+    from src.agents.block_content_refiner import BlockContentRefiner
+    from src.agents.font_agent import font_agent_node
+    from src.agents.layout_with_balancer import layout_with_balancer_node
+    from src.agents.micro_layout_refiner import micro_layout_refiner_node
+    from src.agents.renderer import renderer_node
+    from src.agents.visual_asset_agent import visual_asset_agent_node
+
+    attempt = int(state.get("final_quality_repair_count", 0)) + 1
+    state["final_quality_repair_count"] = attempt
+    state["block_occupancy_report"] = repair_occupancy
+    state["block_vlm_review"] = {"source": "final_quality_gate_repair", "blocks": []}
+    repair_report: Dict[str, Any] = {
+        "source": "final_quality_gate_repair",
+        "attempt": attempt,
+        "attempted": True,
+        "blocks": [
+            {
+                "slot_id": block.get("slot_id"),
+                "section_id": block.get("section_id"),
+                "section_title": block.get("section_title"),
+                "bottom_whitespace": block.get("bottom_whitespace"),
+                "target_extra_chars": block.get("target_extra_chars"),
+            }
+            for block in repair_occupancy.get("blocks", [])
+        ],
+        "applied": False,
+        "rerendered": False,
+    }
+
+    log_agent_info(
+        "final_quality_gate",
+        f"attempting block content repair for {len(repair_occupancy.get('blocks', []))} final-gate whitespace block(s)",
+    )
+    before_refinement = int(state.get("block_refinement_count", 0))
+    state = BlockContentRefiner()(state)
+    patch = state.get("block_content_patch") or {}
+    repair_report["block_content_patch"] = patch
+    repair_report["applied"] = bool(patch.get("applied")) and int(state.get("block_refinement_count", 0)) > before_refinement
+    if not repair_report["applied"]:
+        repair_report["reason"] = "block content refiner did not apply a rewrite"
+        _write_final_gate_repair_report(state, repair_report)
+        return state
+
+    _clear_final_quality_gate_errors(state)
+    for node in (
+        layout_with_balancer_node,
+        font_agent_node,
+        micro_layout_refiner_node,
+        visual_asset_agent_node,
+    ):
+        state = node(state)
+        if state.get("errors"):
+            repair_report["reason"] = f"downstream node failed after content rewrite: {state.get('current_agent')}"
+            _write_final_gate_repair_report(state, repair_report)
+            return state
+        if state.get("draft_status") == "rejected":
+            repair_report["reason"] = state.get("draft_rejection_reason") or "draft rejected after content rewrite"
+            _write_final_gate_repair_report(state, repair_report)
+            return state
+
+    state = _prepare_final_render_node(state)
+    state = background_image_agent_node(state)
+    if not state.get("errors"):
+        state = renderer_node(state)
+    repair_report["rerendered"] = bool(state.get("final_poster_accepted", False))
+    _write_final_gate_repair_report(state, repair_report)
     return state
 
 
@@ -539,7 +923,7 @@ def create_workflow_graph():
     graph.add_node("block_content_refiner", create_timing_wrapper(block_content_refiner_node, "block_content_refiner"))
     graph.add_node("visual_legibility_reviewer", create_timing_wrapper(visual_legibility_reviewer_node, "visual_legibility_reviewer"))
     graph.add_node("adaptive_column_relayout", create_timing_wrapper(adaptive_column_relayout_node, "adaptive_column_relayout"))
-    graph.add_node("template_region_relayout", template_region_relayout_node)
+    graph.add_node("template_region_relayout", create_timing_wrapper(template_region_relayout_node, "template_region_relayout"))
     graph.add_node("vlm_layout_reviewer", create_timing_wrapper(vlm_layout_reviewer_node, "vlm_layout_reviewer"))
     graph.add_node("prepare_final_render", _prepare_final_render_node)
     graph.add_node("background_image_agent", create_timing_wrapper(background_image_agent_node, "background_image_agent"))
@@ -696,6 +1080,10 @@ def save_timing_log(state: PosterState):
                 "time_seconds": round(metrics.parser_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.parser_time)
             },
+            "standard_template_preselector": {
+                "time_seconds": round(metrics.standard_template_preselector_time, 2),
+                "percentage": metrics.get_component_percentage(metrics.standard_template_preselector_time)
+            },
             "template_capacity_planner": {
                 "time_seconds": round(metrics.template_capacity_planner_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.template_capacity_planner_time)
@@ -748,6 +1136,10 @@ def save_timing_log(state: PosterState):
                 "time_seconds": round(metrics.generated_teaser_agent_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.generated_teaser_agent_time)
             },
+            "background_image_agent": {
+                "time_seconds": round(metrics.background_image_agent_time, 2),
+                "percentage": metrics.get_component_percentage(metrics.background_image_agent_time)
+            },
             "affiliation_logo_agent": {
                 "time_seconds": round(metrics.affiliation_logo_agent_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.affiliation_logo_agent_time)
@@ -768,6 +1160,10 @@ def save_timing_log(state: PosterState):
                 "time_seconds": round(metrics.adaptive_column_relayout_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.adaptive_column_relayout_time)
             },
+            "template_region_relayout": {
+                "time_seconds": round(metrics.template_region_relayout_time, 2),
+                "percentage": metrics.get_component_percentage(metrics.template_region_relayout_time)
+            },
             "block_occupancy_analyzer": {
                 "time_seconds": round(metrics.block_occupancy_analyzer_time, 2),
                 "percentage": metrics.get_component_percentage(metrics.block_occupancy_analyzer_time)
@@ -783,6 +1179,7 @@ def save_timing_log(state: PosterState):
         },
         "api_calls_by_agent": api_calls_by_agent,
         "model_info": {
+            "poster_variant": state.get("poster_variant"),
             "text_model": f"{state['text_model'].provider}/{state['text_model'].model_name}",
             "vision_model": f"{state['vision_model'].provider}/{state['vision_model'].model_name}",
             "vlm_layout_review": {
@@ -847,6 +1244,8 @@ def main():
     default_visual_density = normalize_visual_density(os.getenv("PAPER2POSTER_VISUAL_DENSITY"), config)
     default_background_style = normalize_background_style(os.getenv("PAPER2POSTER_BACKGROUND_STYLE"), config)
     default_background_palette = normalize_background_palette(os.getenv("PAPER2POSTER_BACKGROUND_PALETTE"), config)
+    default_generated_teaser = os.getenv("PAPER2POSTER_GENERATED_TEASER", "1").strip().lower() not in {"0", "false", "no", "off"}
+    default_generated_background = os.getenv("PAPER2POSTER_GENERATED_BACKGROUND", "1").strip().lower() not in {"0", "false", "no", "off"}
     default_section_title_numbering = str(
         os.getenv("PAPER2POSTER_SECTION_TITLE_NUMBERING")
         or config.get("section_title_numbering")
@@ -889,9 +1288,9 @@ def main():
     parser.add_argument(
         "--layout-template",
         type=str,
-        default="three_column_postergen",
+        default="auto",
         choices=LayoutTemplates.all_cli_template_choices(),
-        help="Layout template family to use for poster composition.",
+        help=f"Layout template family to use for poster composition. Defaults to auto ({DEFAULT_STANDARD_TEMPLATE}).",
     )
     parser.add_argument(
         "--list-layout-templates",
@@ -932,16 +1331,34 @@ def main():
         action="store_true",
         help="Allow one adaptive three-column width relayout when visual text is too small.",
     )
-    parser.add_argument(
+    background_group = parser.add_mutually_exclusive_group()
+    background_group.add_argument(
         "--enable-generated-background",
+        dest="enable_generated_background",
         action="store_true",
         help="Generate a low-contrast academic background image and place it behind the poster.",
     )
-    parser.add_argument(
+    background_group.add_argument(
+        "--disable-generated-background",
+        dest="enable_generated_background",
+        action="store_false",
+        help="Disable the default generated poster background.",
+    )
+    parser.set_defaults(enable_generated_background=default_generated_background)
+    teaser_group = parser.add_mutually_exclusive_group()
+    teaser_group.add_argument(
         "--enable-generated-teaser",
+        dest="enable_generated_teaser",
         action="store_true",
         help="Generate a paper-specific conceptual teaser visual for the motivation/introduction block.",
     )
+    teaser_group.add_argument(
+        "--disable-generated-teaser",
+        dest="enable_generated_teaser",
+        action="store_false",
+        help="Disable the default generated teaser visual.",
+    )
+    parser.set_defaults(enable_generated_teaser=default_generated_teaser)
     parser.add_argument(
         "--background-palette",
         choices=background_palette_choices,
@@ -1162,6 +1579,17 @@ def main():
 
         if not final_state.get("errors") and final_state.get("final_poster_accepted", False):
             final_state = _run_final_quality_gate(final_state)
+            while not (final_state.get("final_quality_gate") or {}).get("accepted", True):
+                before_repair_count = int(final_state.get("final_quality_repair_count", 0))
+                final_state = _attempt_final_gate_block_content_repair(final_state)
+                after_repair_count = int(final_state.get("final_quality_repair_count", 0))
+                if (
+                    after_repair_count <= before_repair_count
+                    or final_state.get("errors")
+                    or not final_state.get("final_poster_accepted", False)
+                ):
+                    break
+                final_state = _run_final_quality_gate(final_state)
 
         if final_state.get("errors"):
             log_agent_error("pipeline", f"Pipeline errors: {final_state['errors']}")

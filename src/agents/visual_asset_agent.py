@@ -141,13 +141,22 @@ class VisualAssetAgent:
             if action == "crop_only":
                 if not source_path:
                     raise ValueError(f"missing source path for crop-only visual slot '{slot_id}'")
-                resolved_path = image_tools.crop_and_resize(
-                    source_path,
-                    target_width,
-                    target_height,
-                    output_path,
-                )
-                provenance = "cropped"
+                if source_asset.get("asset_type") == "table":
+                    resolved_path = image_tools.fit_and_resize(
+                        source_path,
+                        target_width,
+                        target_height,
+                        output_path,
+                    )
+                    provenance = "fit_resized"
+                else:
+                    resolved_path = image_tools.crop_and_resize(
+                        source_path,
+                        target_width,
+                        target_height,
+                        output_path,
+                    )
+                    provenance = "cropped"
             elif action == "edit":
                 if not source_path:
                     raise ValueError(f"missing source path for edit visual slot '{slot_id}'")
@@ -204,7 +213,10 @@ class VisualAssetAgent:
         for section in sections:
             if section.get("section_id") == section_id or section.get("id") == section_id:
                 title = section.get("section_title") or section.get("title") or section_id
-                content = section.get("content") or section.get("key_points") or section.get("summary") or ""
+                text_content = section.get("text_content") or []
+                if isinstance(text_content, list):
+                    text_content = " ".join(str(item) for item in text_content if str(item).strip())
+                content = section.get("content") or text_content or section.get("key_points") or section.get("summary") or ""
                 return f"{title}: {content}"
         return section_id
 

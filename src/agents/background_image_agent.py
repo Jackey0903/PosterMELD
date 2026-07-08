@@ -48,12 +48,15 @@ class BackgroundImageAgent:
             reference_path = self._reference_poster_path(state)
 
             width, height = self._background_dimensions(state)
-            procedural_only = bool(self.background_config.get("procedural_only", False))
+            procedural_only = bool(self.background_config.get("procedural_only", False)) or os.getenv(
+                "PAPER2POSTER_PROCEDURAL_BACKGROUND"
+            ) == "1"
             if procedural_only:
                 self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                 used_fallback = True
                 generation_mode = "procedural_only"
                 raw_path_value = ""
+                postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "procedural_only"}
             elif reference_path:
                 try:
                     generated_path = self._run_image_call_with_timeout(
@@ -62,44 +65,56 @@ class BackgroundImageAgent:
                     if Path(generated_path).exists() and Path(generated_path) != raw_path and Path(generated_path) != reference_path:
                         shutil.copyfile(generated_path, raw_path)
                     if raw_path.exists():
-                        used_fallback = self._postprocess_background(raw_path, final_path, width, height, state, style_decision, palette_name)
+                        postprocess_report = self._postprocess_background(raw_path, final_path, width, height, state, style_decision, palette_name)
+                        used_fallback = postprocess_report["used_procedural_fallback"]
                         generation_mode = "poster_conditioned_image_api_with_procedural_fallback"
+                        if postprocess_report.get("fallback_reason") == "layout_copy_artifacts":
+                            generation_mode = "poster_conditioned_image_api_contaminated_procedural_fallback"
                         raw_path_value = str(raw_path)
                     else:
                         self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                         used_fallback = True
                         generation_mode = "poster_conditioned_image_api_failed_procedural_fallback"
                         raw_path_value = ""
+                        postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "image_api_failed"}
                 except Exception as e:
                     log_agent_error(self.name, f"image API failed; using procedural background: {e}")
                     self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                     used_fallback = True
                     generation_mode = "poster_conditioned_image_api_failed_procedural_fallback"
                     raw_path_value = ""
+                    postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "image_api_failed"}
             else:
                 try:
                     self._run_image_call_with_timeout(
                         lambda: ImageTools().generate_image(prompt, width=width, height=height, output_path=str(raw_path))
                     )
                     if raw_path.exists():
-                        used_fallback = self._postprocess_background(raw_path, final_path, width, height, state, style_decision, palette_name)
+                        postprocess_report = self._postprocess_background(raw_path, final_path, width, height, state, style_decision, palette_name)
+                        used_fallback = postprocess_report["used_procedural_fallback"]
                         generation_mode = "image_api_with_procedural_fallback"
+                        if postprocess_report.get("fallback_reason") == "layout_copy_artifacts":
+                            generation_mode = "image_api_contaminated_procedural_fallback"
                         raw_path_value = str(raw_path)
                     else:
                         self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                         used_fallback = True
                         generation_mode = "image_api_failed_procedural_fallback"
                         raw_path_value = ""
+                        postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "image_api_failed"}
                 except Exception as e:
                     log_agent_error(self.name, f"image API failed; using procedural background: {e}")
                     self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                     used_fallback = True
                     generation_mode = "image_api_failed_procedural_fallback"
                     raw_path_value = ""
+                    postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "image_api_failed"}
 
             report = {
                 "enabled": True,
                 "source": self.name,
+                "asset_source": "procedural" if used_fallback else "image_api",
+                "degraded": bool(used_fallback and not procedural_only),
                 "generation_mode": generation_mode,
                 "prompt": prompt,
                 "raw_path": raw_path_value,
@@ -114,12 +129,23 @@ class BackgroundImageAgent:
                 "palette": palette_name,
                 "resolved_palette": palette_name,
                 "used_procedural_fallback": used_fallback,
+                "postprocess": postprocess_report,
                 "safety": {
                     "background_only": True,
                     "no_text": True,
                     "low_contrast_postprocess": True,
+                    "layout_copy_artifacts_rejected": postprocess_report.get("fallback_reason") == "layout_copy_artifacts",
                 },
             }
+            if report["degraded"]:
+                state.setdefault("degraded_quality_states", []).append(
+                    {
+                        "component": self.name,
+                        "category": "generated_background",
+                        "reason": generation_mode,
+                        "fallback": "procedural",
+                    }
+                )
             state["background_image_path"] = str(final_path)
             state["background_image_report"] = report
             state["current_agent"] = self.name
@@ -256,8 +282,8 @@ class BackgroundImageAgent:
         context = self._paper_context_text(state)
         keyword_scores = {
             "cartographic": [
-                "geospatial", "spatial", "map", "mapping", "parcel", "region", "urban",
-                "tenant", "eviction", "outreach", "search", "route", "city", "property",
+                "geospatial", "spatial", "map", "mapping", "region", "urban",
+                "search", "route", "city",
             ],
             "tech_grid": [
                 "llm", "neural", "multimodal", "agent", "model", "detection", "classifier",
@@ -341,14 +367,25 @@ class BackgroundImageAgent:
         state: PosterState,
         style_decision: Dict[str, Any],
         palette_name: str,
-    ) -> bool:
+    ) -> Dict[str, Any]:
         with Image.open(raw_path) as img:
             img = img.convert("RGB")
+            fallback_reason = ""
+            copy_artifact_report = self._background_copy_artifact_report(img, state)
             used_fallback = self._is_placeholder_image(img)
+            if used_fallback:
+                fallback_reason = "placeholder"
+            elif copy_artifact_report["rejected"]:
+                used_fallback = True
+                fallback_reason = "layout_copy_artifacts"
             if used_fallback:
                 img = self._procedural_academic_background(width, height, state, style_decision, palette_name)
             self._save_light_background(img, final_path, width, height, state, style_decision)
-            return used_fallback
+            return {
+                "used_procedural_fallback": used_fallback,
+                "fallback_reason": fallback_reason,
+                "copy_artifact_report": copy_artifact_report,
+            }
 
     def _save_procedural_fallback(
         self,
@@ -535,6 +572,122 @@ class BackgroundImageAgent:
         mean = sum(stat.mean) / 3
         variance = sum(stat.var) / 3
         return variance < 18 and 175 <= mean <= 230
+
+    def _background_copy_artifact_report(self, img: Image.Image, state: PosterState) -> Dict[str, Any]:
+        """Detect generated backgrounds that copied poster text or title bars.
+
+        Prompt-only safety is not enough for image-edit models: a conditioned
+        background can redraw faint section headers and panels from the draft
+        poster. The background layer must stay decorative, so obvious dark text
+        in the header or repeated section-title bands forces procedural fallback.
+        """
+        poster_width = float(state.get("poster_width") or 0.0)
+        poster_height = float(state.get("poster_height") or 0.0)
+        if poster_width <= 0 or poster_height <= 0:
+            return {
+                "rejected": False,
+                "reason": "",
+                "header": {},
+                "contaminated_title_regions": 0,
+                "title_regions": [],
+            }
+
+        sample = img.convert("RGB")
+        header_height = max(1, int(round(sample.height * 0.20)))
+        header_metrics = self._crop_darkness_metrics(sample.crop((0, 0, sample.width, header_height)))
+        layout = state.get("styled_layout") or []
+        title_regions = []
+        contaminated_regions = 0
+        for element in layout:
+            if element.get("type") not in {"section_title", "title_accent_block"}:
+                continue
+            crop = self._layout_element_crop(sample, element, poster_width, poster_height, expand_y=0.18)
+            if crop is None:
+                continue
+            metrics = self._crop_darkness_metrics(crop)
+            contaminated = metrics["dark_fraction"] >= 0.020 and metrics["stddev"] >= 12.0
+            if contaminated:
+                contaminated_regions += 1
+            title_regions.append(
+                {
+                    "section_id": element.get("section_id"),
+                    "type": element.get("type"),
+                    "dark_fraction": round(metrics["dark_fraction"], 4),
+                    "very_dark_fraction": round(metrics["very_dark_fraction"], 4),
+                    "stddev": round(metrics["stddev"], 2),
+                    "contaminated": contaminated,
+                }
+            )
+
+        header_contaminated = (
+            header_metrics["dark_fraction"] >= 0.030
+            and header_metrics["very_dark_fraction"] >= 0.012
+            and header_metrics["stddev"] >= 14.0
+        )
+        title_contaminated = contaminated_regions >= 2
+        rejected = header_contaminated or title_contaminated
+        reason = ""
+        if header_contaminated and title_contaminated:
+            reason = "header_text_and_section_title_copy"
+        elif header_contaminated:
+            reason = "header_text_copy"
+        elif title_contaminated:
+            reason = "section_title_copy"
+
+        return {
+            "rejected": rejected,
+            "reason": reason,
+            "header": {
+                "dark_fraction": round(header_metrics["dark_fraction"], 4),
+                "very_dark_fraction": round(header_metrics["very_dark_fraction"], 4),
+                "stddev": round(header_metrics["stddev"], 2),
+                "contaminated": header_contaminated,
+            },
+            "contaminated_title_regions": contaminated_regions,
+            "title_region_count": len(title_regions),
+            "title_regions": title_regions[:12],
+        }
+
+    def _layout_element_crop(
+        self,
+        img: Image.Image,
+        element: Dict[str, Any],
+        poster_width: float,
+        poster_height: float,
+        *,
+        expand_y: float = 0.0,
+    ) -> Image.Image | None:
+        width = float(element.get("width", 0.0) or 0.0)
+        height = float(element.get("height", 0.0) or 0.0)
+        if width <= 0 or height <= 0:
+            return None
+        x = float(element.get("x", 0.0) or 0.0)
+        y = float(element.get("y", 0.0) or 0.0)
+        top = max(0, int(round((y - expand_y) / poster_height * img.height)))
+        bottom = min(img.height, int(round((y + height + expand_y) / poster_height * img.height)))
+        left = max(0, int(round(x / poster_width * img.width)))
+        right = min(img.width, int(round((x + width) / poster_width * img.width)))
+        if right <= left or bottom <= top:
+            return None
+        return img.crop((left, top, right, bottom))
+
+    def _crop_darkness_metrics(self, crop: Image.Image) -> Dict[str, float]:
+        gray = crop.convert("L")
+        if max(gray.size) > 128:
+            scale = 128 / max(gray.size)
+            gray = gray.resize(
+                (max(1, int(gray.width * scale)), max(1, int(gray.height * scale))),
+                Image.Resampling.BILINEAR,
+            )
+        stat = ImageStat.Stat(gray)
+        hist = gray.histogram()
+        total = max(1, sum(hist))
+        return {
+            "mean": float(stat.mean[0]),
+            "stddev": float(stat.stddev[0]),
+            "dark_fraction": sum(hist[:175]) / total,
+            "very_dark_fraction": sum(hist[:120]) / total,
+        }
 
     def _procedural_academic_background(
         self,

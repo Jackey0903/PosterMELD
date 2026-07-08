@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import random
 import re
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -187,9 +186,7 @@ class HeaderPlanner:
         seed = state.get("header_seed")
         if seed is not None:
             return random.Random(str(seed))
-        if self.header_config.get("stable_random_by_default", False):
-            return random.Random(f"{state.get('poster_name', '')}:{title}:{int(time.time() // 86400)}")
-        return random.Random()
+        return random.Random(f"{state.get('poster_name', '')}:{title}")
 
     def _select_route(
         self,
@@ -235,6 +232,8 @@ class HeaderPlanner:
 
         if requested != "auto":
             return requested if requested in eligible else "classic_left"
+        if state.get("header_seed") is None:
+            return "classic_left" if "classic_left" in eligible else eligible[0]
         return rng.choice(eligible)
 
     def _select_subtitle(self, state: PosterState, title: str, rng: random.Random) -> str:
@@ -253,8 +252,23 @@ class HeaderPlanner:
         short_by_words = len(words) <= int(self.header_config.get("short_title_max_words", 11))
         if not (short_by_chars or short_by_words):
             return ""
-        if policy == "auto" and rng.random() > float(self.header_config.get("subtitle_probability", 0.5)):
-            return ""
+        if policy == "auto":
+            auto_max_chars = int(
+                self.header_config.get(
+                    "auto_subtitle_max_chars",
+                    min(int(self.header_config.get("short_title_max_chars", 82)), 52),
+                )
+            )
+            auto_max_words = int(
+                self.header_config.get(
+                    "auto_subtitle_max_words",
+                    min(int(self.header_config.get("short_title_max_words", 11)), 7),
+                )
+            )
+            if len(title) > auto_max_chars or len(words) > auto_max_words:
+                return ""
+            if rng.random() > float(self.header_config.get("subtitle_probability", 0.5)):
+                return ""
         return self._generate_subtitle(state, title)
 
     def _generate_subtitle(self, state: PosterState, title: str) -> str:
@@ -298,7 +312,7 @@ class HeaderPlanner:
                 candidates.append(str(text))
 
         for item in state.get("paper_poster_keypoints") or []:
-            for key in ("poster_text", "claim", "summary", "text"):
+            for key in ("key_point", "poster_text", "claim", "summary", "text"):
                 if item.get(key):
                     candidates.append(str(item[key]))
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import shutil
@@ -52,14 +53,25 @@ class GeneratedTeaserAgent:
             height = int(geometry["height_px"])
             prompt = self._build_prompt(state, target, geometry)
 
-            generated_path = ImageTools().generate_image(
-                prompt,
-                width=width,
-                height=height,
-                output_path=str(raw_path),
-            )
-            if Path(generated_path).exists() and Path(generated_path) != raw_path:
-                shutil.copyfile(generated_path, raw_path)
+            image_api_error = ""
+            procedural_only = bool(self.teaser_config.get("procedural_only", False)) or os.getenv(
+                "PAPER2POSTER_PROCEDURAL_TEASER"
+            ) == "1"
+            if procedural_only:
+                image_api_error = "procedural_teaser_requested"
+            else:
+                try:
+                    generated_path = ImageTools().generate_image(
+                        prompt,
+                        width=width,
+                        height=height,
+                        output_path=str(raw_path),
+                    )
+                    if Path(generated_path).exists() and Path(generated_path) != raw_path:
+                        shutil.copyfile(generated_path, raw_path)
+                except Exception as exc:
+                    image_api_error = str(exc)
+                    log_agent_warning(self.name, f"image API failed; using procedural teaser fallback: {exc}")
 
             used_fallback = self._postprocess_teaser(raw_path, final_path, width, height, state)
             self._inject_teaser_asset(state, target, asset_id, final_path, geometry)
@@ -68,6 +80,8 @@ class GeneratedTeaserAgent:
             report = {
                 "enabled": True,
                 "source": self.name,
+                "asset_source": "procedural" if used_fallback else "image_api",
+                "degraded": bool(used_fallback and not procedural_only),
                 "applied": True,
                 "asset_id": asset_id,
                 "target_section_id": target.get("section_id"),
@@ -80,6 +94,7 @@ class GeneratedTeaserAgent:
                 "geometry": geometry,
                 "summary_text": summary_text,
                 "used_procedural_fallback": used_fallback,
+                "image_api_error": image_api_error,
                 "safety": {
                     "conceptual_only": True,
                     "no_readable_text": True,
@@ -87,6 +102,15 @@ class GeneratedTeaserAgent:
                     "no_logos": True,
                 },
             }
+            if report["degraded"]:
+                state.setdefault("degraded_quality_states", []).append(
+                    {
+                        "component": self.name,
+                        "category": "generated_teaser",
+                        "reason": image_api_error or "placeholder_or_unusable_image",
+                        "fallback": "procedural",
+                    }
+                )
             state["generated_teaser_report"] = report
             state["current_agent"] = self.name
             self._save_report(state, report)
@@ -99,13 +123,26 @@ class GeneratedTeaserAgent:
 
     def _select_target_section(self, sections: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         allow_existing_visual = bool(self.teaser_config.get("allow_existing_visual", False))
+        allow_existing_visual = allow_existing_visual or os.getenv("PAPER2POSTER_TEASER_ALLOW_EXISTING_VISUAL") == "1"
+        candidates = self._rank_target_sections(sections, allow_existing_visual=allow_existing_visual)
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return candidates[0][2]
+
+    def _rank_target_sections(
+        self,
+        sections: List[Dict[str, Any]],
+        allow_existing_visual: bool,
+    ) -> List[tuple[int, int, Dict[str, Any]]]:
         candidates = []
         for index, section in enumerate(sections):
             if section.get("visual_assets") and not allow_existing_visual:
                 continue
             title = str(section.get("section_title") or "").lower()
             section_id = str(section.get("section_id") or "").lower()
-            role = str(section.get("content_role") or "").lower()
+            role = str(section.get("content_role") or section.get("content_type") or "").lower()
             text = f"{title} {section_id} {role}"
             score = 0
             semantic_score = 0
@@ -122,12 +159,7 @@ class GeneratedTeaserAgent:
             if semantic_score <= 0:
                 continue
             candidates.append((score, -index, section))
-
-        candidates = [item for item in candidates if item[0] > 0]
-        if not candidates:
-            return None
-        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return candidates[0][2]
+        return [item for item in candidates if item[0] > 0]
 
     def _build_prompt(self, state: PosterState, section: Dict[str, Any], geometry: Dict[str, Any]) -> str:
         title = self._poster_title(state)
@@ -178,7 +210,13 @@ class GeneratedTeaserAgent:
         snippets = []
         for item in keypoints[:6]:
             if isinstance(item, dict):
-                text = item.get("keypoint") or item.get("claim") or item.get("summary") or item.get("text")
+                text = (
+                    item.get("key_point")
+                    or item.get("keypoint")
+                    or item.get("claim")
+                    or item.get("summary")
+                    or item.get("text")
+                )
                 if text:
                     snippets.append(str(text))
             elif item:
@@ -252,9 +290,16 @@ class GeneratedTeaserAgent:
         available_h = max(content_h - text_h, 0.9)
         target_h = min(slot_h * target_fraction, slot_h * max_fraction, available_h)
         target_h = max(target_h, min(slot_h * 0.55, 3.0))
-        target_h = min(target_h, target_w / 1.4)
+        min_aspect = float(
+            self.teaser_config.get(
+                "portrait_min_aspect" if is_portrait else "min_aspect",
+                1.55 if is_portrait else 1.05,
+            )
+            or (1.55 if is_portrait else 1.05)
+        )
+        target_h = min(target_h, target_w / max(min_aspect, 0.2))
         target_h = max(target_h, 0.85)
-        aspect = max(target_w / max(target_h, 0.1), 1.55)
+        aspect = max(target_w / max(target_h, 0.1), min_aspect)
 
         max_px_w = int(self.teaser_config.get("width_px", 1800) or 1800)
         width_px = max(1024, min(max_px_w, int(round(target_w * 110))))

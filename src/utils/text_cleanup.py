@@ -40,7 +40,7 @@ DANGLING_TERMINAL_WORDS = (
     "may|can|could|would|should|will|must|is|are|was|were|be|been|being|"
     "typically|generally|often|roughly|approximately|consistently|significantly|"
     "limited|especially|particularly|notably|further"
-    "|outperforming|improving|exceeding|achieving|injecting|creating|reducing|enabling|enables|enabled"
+    "|outperforming|improving|exceeding|achieving|injecting|creating|reducing|enabling|enables|enabled|called"
 )
 
 
@@ -136,6 +136,17 @@ def normalize_title_for_poster(title: str) -> str:
     return " ".join(normalized)
 
 
+def repair_possessive_title_apostrophe(title: str) -> str:
+    """Repair possessive apostrophes that model cleanup split into a lone S."""
+    def replacement(match: re.Match[str]) -> str:
+        word = match.group(1)
+        if word.isupper():
+            return match.group(0)
+        return f"{word}'s "
+
+    return re.sub(r"\b([A-Za-z][A-Za-z]+)\s+[sS]\s+(?=[A-Za-z])", replacement, str(title or ""))
+
+
 def _strip_poster_artifact_noise(line: str) -> str:
     """Remove OCR, markdown, and metadata artifacts that should never appear on posters."""
     if not isinstance(line, str) or not line:
@@ -181,6 +192,28 @@ def _strip_poster_artifact_noise(line: str) -> str:
         flags=re.IGNORECASE,
     ):
         return ""
+    if re.search(
+        r"\bwe\s+compare\s+(?:the\s+proposed\s+approach|our\s+approach|the\s+method|our\s+method)?"
+        r".{0,80}\b(?:to|against)\s+(?:the\s+)?following\s+baselines\b",
+        line,
+        flags=re.IGNORECASE,
+    ):
+        return ""
+    if re.search(r"\bintroduced\s+in\s+the\s+hierarchical\.\s*$", line, flags=re.IGNORECASE):
+        return ""
+
+    line = re.sub(
+        r"\s+that\s+(?:jointly\s+)?handles\.\s*$",
+        ".",
+        line,
+        flags=re.IGNORECASE,
+    )
+    line = re.sub(
+        r"\s*[:;]\s*[A-Za-z][A-Za-z0-9_]*(?:\s*\([^)]+\))?\s*=\s*"
+        r"[A-Za-z][A-Za-z0-9_]*(?:\s*[+\-*/]\s*[A-Za-z0-9_]+)*\.?\s*$",
+        ".",
+        line,
+    )
 
     line = re.sub(
         r"\b(?:as\s+)?(?:shown|provided|presented|reported|summarized|listed|given)\s+in\s+"
@@ -266,7 +299,8 @@ def _looks_like_metadata_only(line: str) -> bool:
     if any(token in lowered for token in metadata_tokens):
         return True
     words = re.findall(r"[A-Za-z][A-Za-z-]+", line)
-    return bool(words) and len(words) <= 4 and any(word.lower() in {"content", "foundation", "main", "support"} for word in words)
+    metadata_labels = {"content", "foundation", "main", "support"}
+    return bool(words) and len(words) <= 4 and all(word.lower() in metadata_labels for word in words)
 
 
 def _looks_like_bibliography(line: str) -> bool:
@@ -324,9 +358,9 @@ def repair_truncated_sentence_end(line: str) -> str:
             line,
             flags=re.IGNORECASE,
         )
+        line = re.sub(r"\s+to\s+find\s+and\s+support\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+and\s+(?:reducing|increasing|improving|decreasing)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+and\s+(?:reduce|increase|improve|decrease|support)\.$", ".", line, flags=re.IGNORECASE)
-        line = re.sub(r"\s+to\s+find\s+and\s+support\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+with\s+(?:especially|particularly|notably)\s+[A-Za-z-]{2,28}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
             r",\s+where\s+[^.;:]{1,160}\s+and\s+(?:statistically|computationally|operationally|empirically)\.$",
@@ -335,14 +369,21 @@ def repair_truncated_sentence_end(line: str) -> str:
             flags=re.IGNORECASE,
         )
         line = re.sub(
-            r"\s+to\s+(?:update|learn|scale|adapt|improve|reach|select|query|discover|estimate|predict|visit)\.$",
+            r"\s+to\s+(?:update|learn|scale|adapt|improve|reach|select|query|discover|estimate|predict)\.$",
+            ".",
+            line,
+            flags=re.IGNORECASE,
+        )
+        line = re.sub(
+            r"(?<!properties)(?<!parcels)\s+to\s+visit\.$",
             ".",
             line,
             flags=re.IGNORECASE,
         )
         line = re.sub(r"\s+for\s+large\s+urban\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+across\s+cost\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+within\s+a\s+[A-Za-z-]*(?:searc|regio|neighbo|budg)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+by\s+average\s+(?:number|numbe)\.$", ".", line, flags=re.IGNORECASE)
-        line = re.sub(r"\s+within\s+a\s+[A-Za-z-]{2,16}\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(
             r"[;:]\s+(?:performance|results?|evaluation|analysis|target|targets?|policy|method)\.$",
             ".",

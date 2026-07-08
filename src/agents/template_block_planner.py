@@ -1003,18 +1003,52 @@ class TemplatePriorPlanner:
         if not sentences:
             return []
         query_terms = self._terms(
-            f"{section.get('section_title', '')} {section.get('section_id', '')} {section.get('content_role', '')}"
+            " ".join(
+                [
+                    str(section.get("section_title") or ""),
+                    str(section.get("section_id") or ""),
+                    str(section.get("content_role") or ""),
+                    str(section.get("source_section") or ""),
+                    " ".join(str(item or "") for item in section.get("source_sections") or []),
+                    " ".join(str(item or "") for item in section.get("source_keypoints") or []),
+                    " ".join(str(item or "") for item in section.get("text_content") or []),
+                ]
+            )
         )
+        is_results_context = self._is_results_context(section)
         scored = []
         for sentence in sentences:
             sentence = normalize_text_for_poster(sentence)
             if not self._is_clean_poster_bullet(sentence):
                 continue
+            if self._looks_like_result_summary_text(sentence) and not is_results_context:
+                continue
             overlap = len(query_terms & self._terms(sentence))
-            if overlap or len(scored) < 16:
+            if overlap:
                 scored.append((overlap, len(sentence), sentence))
         scored.sort(key=lambda item: (-item[0], item[1]))
         return [item[2] for item in scored[:24]]
+
+    def _is_results_context(self, section: Dict[str, Any]) -> bool:
+        text = " ".join(
+            [
+                str(section.get("section_title") or ""),
+                str(section.get("section_id") or ""),
+                str(section.get("content_role") or ""),
+                str(section.get("source_section") or ""),
+                " ".join(str(item or "") for item in section.get("source_sections") or []),
+            ]
+        ).lower()
+        return any(token in text for token in ("result", "evaluation", "experiment", "takeaway", "benchmark"))
+
+    def _looks_like_result_summary_text(self, text: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(overall empirical conclusion|strongest method|outperforms?|best performing|"
+                r"performance|target rates?|cost models?|budgets?|main result|key result)\b",
+                str(text or "").lower(),
+            )
+        )
 
     def _build_capacity_planning_report(
         self,

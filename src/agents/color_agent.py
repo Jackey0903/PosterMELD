@@ -93,6 +93,12 @@ class ColorAgent:
             
         except Exception as e:
             log_agent_warning(self.name, f"logo extraction failed: {e}, using fallback")
+            self._record_degraded_quality_state(
+                state,
+                "logo theme extraction failed",
+                str(e),
+                "visual_or_default_theme",
+            )
             return self._extract_theme_from_visuals(state)
 
     def _extract_theme_from_visuals(self, state: PosterState) -> str:
@@ -118,7 +124,23 @@ class ColorAgent:
             return theme_color
         except Exception as e:
             log_agent_warning(self.name, f"visual color extraction failed: {e}, using default navy color")
+            self._record_degraded_quality_state(
+                state,
+                "visual color extraction failed",
+                str(e),
+                "default_theme",
+            )
             return load_config()["colors"]["fallback_theme"]
+
+    def _record_degraded_quality_state(self, state: PosterState, reason: str, detail: str, fallback: str) -> None:
+        state.setdefault("degraded_quality_states", []).append(
+            {
+                "component": self.name,
+                "category": "color_extraction",
+                "reason": f"{reason}: {detail}",
+                "fallback": fallback,
+            }
+        )
 
     def _analyze_figure_for_color(self, image_path: str, state: PosterState) -> str:
         """analyze figure to extract theme color"""

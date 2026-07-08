@@ -8,7 +8,7 @@ import re
 import traceback
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from src.state.poster_state import PosterState
 from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
@@ -17,7 +17,7 @@ from src.config.poster_config import load_config
 from src.layout.template_selector import TemplateSelector
 from src.tools.layout_api import LayoutTemplates
 from src.template_extraction.block_template_registry import get_block_template_info, is_block_template_id
-from src.utils.text_cleanup import normalize_text_for_poster
+from src.utils.text_cleanup import normalize_text_for_poster, repair_possessive_title_apostrophe
 from src.utils.visual_footprint import visual_slot_is_feasible
 from jinja2 import Template
 
@@ -865,7 +865,14 @@ class StoryBoardCurator:
                 or template_defaults.get("expected_content_density")
                 or ("medium" if role in {"method", "results"} else "high")
             )
-            section["text_content"] = self._grouped_keypoint_text_content(section.get("text_content"), texts)
+            existing_text = [] if template_name in self._standard_template_ids() else section.get("text_content")
+            section["text_content"] = self._grouped_keypoint_text_content(
+                existing_text,
+                texts,
+                role=role,
+                source_sections=source_sections,
+                title=str(title or ""),
+            )
             section["visual_assets"] = self._valid_visual_assets(section.get("visual_assets"), visual_context)
             if template_defaults.get("preferred_slot_id"):
                 section["preferred_slot_id"] = template_defaults["preferred_slot_id"]
@@ -890,6 +897,7 @@ class StoryBoardCurator:
         if template_name == "cluster_72":
             self._ensure_cluster_72_grouped_visuals(aligned, classified_visuals, visual_context)
         elif template_name in self._standard_template_ids():
+            self._normalize_standard_grouped_section_titles(aligned)
             self._ensure_standard_template_grouped_visuals(aligned, classified_visuals, visual_context)
         else:
             self._ensure_grouped_keypoint_visuals(aligned, classified_visuals, visual_context)
@@ -1023,7 +1031,15 @@ class StoryBoardCurator:
             bullets.insert(0, keypoint_text)
         return self._clean_poster_text_items(bullets, max_items=3)
 
-    def _grouped_keypoint_text_content(self, existing: Any, keypoint_texts: List[str]) -> List[str]:
+    def _grouped_keypoint_text_content(
+        self,
+        existing: Any,
+        keypoint_texts: List[str],
+        *,
+        role: str = "",
+        source_sections: Optional[List[str]] = None,
+        title: str = "",
+    ) -> List[str]:
         bullets = []
         for text in keypoint_texts:
             clean = normalize_text_for_poster(str(text or "").strip())
@@ -1032,9 +1048,88 @@ class StoryBoardCurator:
         if isinstance(existing, list):
             for clean in self._clean_poster_text_items(existing, max_items=4):
                 key = self._dedupe_key(clean)
+                if not self._existing_group_text_relevant(
+                    clean,
+                    keypoint_texts,
+                    role=role,
+                    source_sections=source_sections or [],
+                    title=title,
+                ):
+                    continue
                 if key and all(key not in self._dedupe_key(existing_item) for existing_item in bullets):
                     bullets.append(clean)
         return self._clean_poster_text_items(bullets, max_items=4) or ["Key paper finding."]
+
+    def _existing_group_text_relevant(
+        self,
+        text: str,
+        keypoint_texts: List[str],
+        *,
+        role: str,
+        source_sections: List[str],
+        title: str,
+    ) -> bool:
+        clean = normalize_text_for_poster(str(text or "").strip())
+        if not clean:
+            return False
+        role_key = str(role or "").lower()
+        source_key = " ".join(str(section or "") for section in source_sections).lower()
+        title_key = str(title or "").lower()
+        result_like_section = (
+            role_key in {"results", "takeaway"}
+            or any(token in source_key for token in ("result", "experiment", "evaluation", "benchmark"))
+            or any(token in title_key for token in ("result", "evaluation", "takeaway"))
+        )
+        if self._looks_like_result_summary_text(clean) and not result_like_section:
+            return False
+
+        candidate_terms = self._content_terms(clean)
+        group_terms = self._content_terms(
+            " ".join(
+                [
+                    *[str(value or "") for value in keypoint_texts],
+                    *[str(value or "") for value in source_sections],
+                    str(title or ""),
+                    str(role or ""),
+                ]
+            )
+        )
+        if not candidate_terms or not group_terms:
+            return False
+        overlap = candidate_terms & group_terms
+        required_overlap = 1 if len(group_terms) <= 4 else 2
+        return len(overlap) >= required_overlap
+
+    def _looks_like_result_summary_text(self, text: str) -> bool:
+        lowered = str(text or "").lower()
+        return bool(
+            re.search(
+                r"\b(overall empirical conclusion|strongest method|outperforms?|best performing|"
+                r"performance|target rates?|cost models?|budgets?|main result|key result)\b",
+                lowered,
+            )
+        )
+
+    def _content_terms(self, text: str) -> set[str]:
+        stop = {
+            "section",
+            "result",
+            "results",
+            "method",
+            "methods",
+            "using",
+            "with",
+            "from",
+            "this",
+            "that",
+            "paper",
+            "main",
+        }
+        return {
+            term
+            for term in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", str(text or "").lower())
+            if term not in stop
+        }
 
     def _clean_poster_text_items(self, items: Any, *, max_items: int) -> List[str]:
         if not isinstance(items, list):
@@ -1065,6 +1160,7 @@ class StoryBoardCurator:
     def _clean_section_title(self, title: Any) -> str:
         text = str(title or "").strip()
         text = text.replace("\u00a0", " ").replace("–", "-").replace("—", "-")
+        text = self._repair_possessive_title_apostrophe(text)
         text = re.sub(r"\bwith\s+(?:a\s+)?table\b", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\btable\b", "", text, flags=re.IGNORECASE)
         text = re.sub(r"^\s*[•●◦▪▫*\-]\s*", "", text)
@@ -1085,6 +1181,9 @@ class StoryBoardCurator:
 
         words = [clean_word(word, index) for index, word in enumerate(text.split())]
         return " ".join(word for word in words if word)
+
+    def _repair_possessive_title_apostrophe(self, title: str) -> str:
+        return repair_possessive_title_apostrophe(title)
 
     def _valid_visual_assets(self, visuals: Any, visual_context: Dict[str, Any]) -> List[Dict[str, Any]]:
         valid_ids = set((visual_context or {}).get("valid_visual_ids") or [])
@@ -1273,6 +1372,7 @@ class StoryBoardCurator:
         slot_role = str(block.get("slot_role") or "").strip()
         if slot_role and (not title or title.lower() in {"paper", "method", "results", "experiments"}):
             title = slot_role
+        title = self._standard_group_title(title, role, keypoint_texts, slot_role)
 
         bbox = block.get("slot_bbox") or {}
         layout = (visual_context or {}).get("template_layout") or {}
@@ -1307,6 +1407,118 @@ class StoryBoardCurator:
             "expected_content_density": "high" if target_chars >= 430 else "low" if target_chars <= 160 else "medium",
             "spatial_rationale": "Standard-template grouped keypoint mapping keeps ten paper points in curated visual blocks.",
         }
+
+    def _standard_group_title(
+        self,
+        current_title: str,
+        role: str,
+        keypoint_texts: List[str],
+        slot_role: str,
+    ) -> str:
+        title = repair_possessive_title_apostrophe(str(current_title or "").strip())
+        title_key = self._dedupe_key(title)
+        joined = " ".join(str(text or "") for text in keypoint_texts).lower()
+        slot_key = str(slot_role or "").strip().lower()
+        generic_titles = {
+            "",
+            "paper",
+            "paper s main",
+            "paper's main",
+            "core method",
+            "method details",
+            "method visual",
+            "system flow",
+            "system details",
+            "key results",
+            "results",
+            "evaluation setup",
+            "main results with table",
+        }
+
+        if re.search(r"\bpaper'?s?\s+main\b", title, flags=re.IGNORECASE) or "main application" in joined:
+            return "Main Application"
+        if re.search(r"\b(prior active search|visual active search|related work|baseline methods?)\b", joined):
+            return "Prior Methods"
+        if "previous eviction prediction" in joined:
+            return "Prior Prediction"
+        if re.search(r"\b(policy|prediction module|search module|remaining budget|sequential geospatial search)\b", joined):
+            return "Search Policy"
+        if re.search(r"\b(hags)\b", joined) and re.search(r"\b(introduced|scalable|hierarchical)\b", joined):
+            return "HAGS Overview" if title_key in generic_titles or title_key == "hags is introduced" else title
+        if role == "results" and re.search(r"\b(empirical|outperform|strongest|target rates?|budgets?|positive rate)\b", joined):
+            return "Main Results"
+        if slot_key.startswith("main results") and title_key in generic_titles:
+            return "Main Results"
+        if slot_key.startswith("evaluation") and title_key in generic_titles:
+            return "Evaluation Setup"
+        if slot_key.startswith("method details") and title_key in generic_titles:
+            return "Method Details"
+        if slot_key and title_key in generic_titles:
+            return self._clean_section_title(slot_role)
+        return title
+
+    def _dedupe_grouped_section_titles(self, sections: List[Dict[str, Any]]) -> None:
+        used: set[str] = set()
+        for section in sections:
+            title = self._clean_section_title(section.get("section_title") or "")
+            key = self._dedupe_key(title)
+            if key and key not in used:
+                section["section_title"] = title
+                used.add(key)
+                continue
+            replacement = self._alternate_grouped_section_title(section, used)
+            section["section_title"] = replacement
+            used.add(self._dedupe_key(replacement))
+
+    def _alternate_grouped_section_title(self, section: Dict[str, Any], used: set[str]) -> str:
+        text = " ".join(
+            [
+                *[str(value or "") for value in section.get("source_keypoints") or []],
+                *[str(value or "") for value in section.get("text_content") or []],
+                " ".join(str(value or "") for value in section.get("source_sections") or []),
+            ]
+        ).lower()
+        role = str(section.get("content_type") or section.get("content_role") or "").lower()
+        candidates: List[str] = []
+        if re.search(r"\b(prior active search|visual active search|related work|baseline methods?)\b", text):
+            candidates.append("Prior Methods")
+        if "previous eviction prediction" in text:
+            candidates.append("Prior Prediction")
+        if re.search(r"\b(policy|prediction module|search module|remaining budget|sequential geospatial search)\b", text):
+            candidates.append("Search Policy")
+        if role == "results":
+            candidates.extend(["Main Results", "Result Summary", "Takeaway"])
+        elif role == "method":
+            candidates.extend(["Method Details", "Method Workflow", "Core Mechanism"])
+        else:
+            candidates.extend(["Motivation", "Problem Setting", "Context"])
+
+        for candidate in candidates:
+            key = self._dedupe_key(candidate)
+            if key and key not in used:
+                return candidate
+        slot_id = str(section.get("preferred_slot_id") or section.get("slot_id") or "")
+        fallback = f"{self._clean_section_title(role or 'Section')} {slot_id.replace('_', ' ').title()}".strip()
+        return fallback or "Section"
+
+    def _normalize_standard_grouped_section_titles(self, sections: List[Dict[str, Any]]) -> None:
+        for section in sections:
+            budget = section.get("capacity_budget") or {}
+            slot_role = str(budget.get("slot_role") or "")
+            role = str(section.get("content_type") or section.get("content_role") or budget.get("content_role") or "")
+            keypoint_texts = [
+                str(value or "")
+                for value in (section.get("source_keypoints") or section.get("text_content") or [])
+            ]
+            section["section_title"] = self._clean_section_title(
+                self._standard_group_title(
+                    str(section.get("section_title") or ""),
+                    role,
+                    keypoint_texts,
+                    slot_role,
+                )
+            )
+        self._dedupe_grouped_section_titles(sections)
 
     def _ensure_cluster_72_grouped_visuals(
         self,
@@ -1371,13 +1583,27 @@ class StoryBoardCurator:
         valid_ids = set((visual_context or {}).get("valid_visual_ids") or [])
         if not valid_ids or not sections:
             return
+        protected_visuals_by_slot: Dict[str, List[Dict[str, Any]]] = {}
         for section in sections:
+            slot_id = str(section.get("preferred_slot_id") or "")
+            protected = []
+            for visual in section.get("visual_assets") or []:
+                normalized = self._normalize_visual_reference(visual)
+                if not normalized:
+                    continue
+                visual_id = str(normalized.get("visual_id") or "")
+                if visual_id.startswith("generated_teaser") and visual_id in valid_ids:
+                    protected.append(normalized)
+            if protected and slot_id:
+                protected_visuals_by_slot[slot_id] = protected
             section["visual_assets"] = []
 
         slot_map = {str(section.get("preferred_slot_id") or ""): section for section in sections}
         fast_visual_policy = (visual_context or {}).get("fast_visual_policy") or {}
         figure_slots = [str(slot_id) for slot_id in fast_visual_policy.get("figure_slots") or []]
         table_slots = [str(slot_id) for slot_id in fast_visual_policy.get("table_slots") or []]
+        figure_slot_set = set(figure_slots)
+        table_slot_set = set(table_slots)
         figure_candidates = self._cluster_72_figure_candidates(classified_visuals or {}, valid_ids, visual_context)
         table_candidates = self._cluster_72_table_candidates(classified_visuals or {}, valid_ids, visual_context)
 
@@ -1385,16 +1611,28 @@ class StoryBoardCurator:
         figure_count = int(fast_visual_policy.get("figure_count") or 2)
         table_count = int(fast_visual_policy.get("table_count") or 1)
         if not is_portrait:
-            figure_count = max(figure_count, min(2, len(figure_candidates)))
-            table_count = max(table_count, min(2, len(table_candidates)))
+            figure_count = min(max(figure_count, 0), len(figure_candidates))
+            table_count = min(max(table_count, 0), len(table_candidates))
         max_visuals_total = int(fast_visual_policy.get("max_visuals_total") or (figure_count + table_count))
         if not is_portrait:
-            max_visuals_total = max(max_visuals_total, min(figure_count, len(figure_candidates)) + min(table_count, len(table_candidates)))
+            max_visuals_total = min(max(max_visuals_total, 0), figure_count + table_count)
         used_visuals: set[str] = set()
         used_slots: set[str] = set()
+        for slot_id, protected_visuals in protected_visuals_by_slot.items():
+            holder = slot_map.get(slot_id)
+            if not holder:
+                continue
+            holder["visual_assets"] = list(protected_visuals)
+            holder["importance_level"] = min(int(holder.get("importance_level") or 1), 1)
+            used_slots.add(slot_id)
+            used_visuals.update(str(visual.get("visual_id") or "") for visual in protected_visuals)
 
         def place_visual(slot_id: str, visual_id: str, purpose: str, *, importance: int, append: bool = False) -> bool:
-            if len(used_visuals) >= max_visuals_total:
+            paper_visual_count = sum(
+                1 for used_visual_id in used_visuals
+                if not str(used_visual_id).startswith("generated_teaser")
+            )
+            if paper_visual_count >= max_visuals_total:
                 return False
             if not visual_id or visual_id in used_visuals:
                 return False
@@ -1402,6 +1640,10 @@ class StoryBoardCurator:
                 return False
             holder = slot_map.get(slot_id)
             if not holder:
+                return False
+            if visual_id.startswith("figure_") and figure_slot_set and slot_id not in figure_slot_set:
+                return False
+            if visual_id.startswith("table_") and table_slot_set and slot_id not in table_slot_set:
                 return False
             if not self._slot_can_hold_visual(slot_id, visual_id, visual_context):
                 log_agent_info(
@@ -1460,7 +1702,7 @@ class StoryBoardCurator:
                     break
 
         if placed_figures < min(figure_count, len(figure_candidates)):
-            multi_slot_order = self._standard_multi_visual_slot_order(slot_map, visual_context)
+            multi_slot_order = figure_slot_order or self._standard_multi_visual_slot_order(slot_map, visual_context)
             for visual_id in figure_candidates:
                 if placed_figures >= min(figure_count, len(figure_candidates)):
                     break
@@ -1472,7 +1714,7 @@ class StoryBoardCurator:
                         break
 
         if placed_tables < min(table_count, len(table_candidates)):
-            multi_slot_order = self._standard_multi_visual_slot_order(slot_map, visual_context)
+            multi_slot_order = table_slot_order or self._standard_multi_visual_slot_order(slot_map, visual_context)
             for selected_table in table_candidates:
                 if placed_tables >= min(table_count, len(table_candidates)):
                     break
@@ -1495,10 +1737,11 @@ class StoryBoardCurator:
             str(region.get("region_id") or region.get("slot_id") or region.get("id") or ""): region
             for region in template_layout.get("regions") or []
         }
+        candidate_slot_ids = preferred_slot_ids if preferred_slot_ids else list(slot_map.keys())
         ordered = [
             slot_id
-            for slot_id in self._unique_preserve_order([*preferred_slot_ids, *slot_map.keys()])
-            if self._slot_declares_visual_host(slot_id, visual_context)
+            for slot_id in self._unique_preserve_order(candidate_slot_ids)
+            if slot_id in slot_map and self._slot_declares_visual_host(slot_id, visual_context)
         ]
 
         def area(slot_id: str) -> float:

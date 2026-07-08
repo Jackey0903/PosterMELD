@@ -35,6 +35,15 @@ class VisualLegibilityReviewer:
         try:
             review = self._review_or_fallback(state)
             review = self._merge_heuristic_review(state, review)
+            if review.get("degraded"):
+                state.setdefault("degraded_quality_states", []).append(
+                    {
+                        "component": self.name,
+                        "category": "visual_legibility_review",
+                        "reason": "; ".join(str(item) for item in review.get("warnings", [])),
+                        "fallback": review.get("fallback") or "deterministic_visual_heuristic",
+                    }
+                )
             state["visual_legibility_review"] = review
             is_template_prior = state.get("template_layout_mode") == "template_prior"
             fast_mode = bool(state.get("template_fast_mode"))
@@ -260,6 +269,8 @@ Visual slots:
         recommendation.setdefault("reason", "")
         return {
             "source": review.get("source") or source,
+            "degraded": bool(review.get("degraded", False)),
+            "fallback": review.get("fallback"),
             "needs_relayout": bool(review.get("needs_relayout", False)),
             "issues": review.get("issues") if isinstance(review.get("issues"), list) else [],
             "layout_recommendation": recommendation,
@@ -269,6 +280,8 @@ Visual slots:
     def _fallback_review(self, warning: str) -> Dict[str, Any]:
         log_agent_warning(self.name, warning)
         review = self._normalize_review({}, source="fallback")
+        review["degraded"] = True
+        review["fallback"] = "deterministic_visual_heuristic"
         review["warnings"].append(warning)
         return review
 

@@ -17,7 +17,7 @@ from src.state.poster_state import PosterState
 from src.template_extraction.block_template_registry import is_block_template_id
 from src.tools.layout_api import LayoutTemplates
 from src.utils.style_options import normalize_visual_density, resolve_visual_density_settings
-from src.utils.visual_footprint import visual_footprint_config, visual_requirements
+from src.utils.visual_footprint import visual_footprint_config, visual_requirements, visual_slot_is_feasible
 from utils.src.logging_utils import log_agent_info, log_agent_success
 
 
@@ -190,23 +190,40 @@ class TemplateCapacityPlanner:
             contract,
         )
         rejected_visual_slots: Dict[str, List[Dict[str, Any]]] = {"figure": [], "table": []}
+        figure_slots, rejected_visual_slots["figure"] = self._filter_visual_slots(
+            figure_slots,
+            contract,
+            template_layout,
+            "figure",
+        )
+        table_slots, rejected_visual_slots["table"] = self._filter_visual_slots(
+            table_slots,
+            contract,
+            template_layout,
+            "table",
+        )
         if is_portrait:
-            figure_slots, rejected_visual_slots["figure"] = self._filter_portrait_visual_slots(
+            figure_slots, portrait_rejected_figures = self._filter_portrait_visual_slots(
                 figure_slots,
                 contract,
                 "figure",
             )
-            table_slots, rejected_visual_slots["table"] = self._filter_portrait_visual_slots(
+            table_slots, portrait_rejected_tables = self._filter_portrait_visual_slots(
                 table_slots,
                 contract,
                 "table",
             )
+            rejected_visual_slots["figure"].extend(portrait_rejected_figures)
+            rejected_visual_slots["table"].extend(portrait_rejected_tables)
             self._retarget_rejected_portrait_visual_slots(
                 contract,
                 rejected_visual_slots,
                 {*figure_slots, *table_slots},
             )
             figure_count = min(figure_count, len(figure_slots))
+            table_count = min(table_count, len(table_slots))
+            max_visuals_total = min(max_visuals_total, figure_count + table_count)
+        else:
             table_count = min(table_count, len(table_slots))
             max_visuals_total = min(max_visuals_total, figure_count + table_count)
         return {
@@ -251,6 +268,66 @@ class TemplateCapacityPlanner:
 
         original_index = {slot_id: index for index, slot_id in enumerate(slot_ids)}
         return sorted(slot_ids, key=lambda slot_id: (-area(slot_id), original_index.get(slot_id, 999)))
+
+    def _filter_visual_slots(
+        self,
+        slot_ids: List[str],
+        contract: Dict[str, Any],
+        template_layout: Dict[str, Any],
+        visual_kind: str,
+    ) -> tuple[List[str], List[Dict[str, Any]]]:
+        by_slot = contract.get("by_slot") or {}
+        region_by_slot = {
+            str(region.get("region_id") or region.get("slot_id") or region.get("id") or ""): region
+            for region in template_layout.get("regions") or []
+        }
+        visual_id = f"{visual_kind}_contract"
+        visual_assets = {
+            visual_id: {
+                "asset_type": visual_kind,
+                "aspect": 1.5 if visual_kind == "table" else 2.0,
+            }
+        }
+        text_padding = 2 * float(self.config["layout"]["text_padding"]["left_right"])
+        kept: List[str] = []
+        rejected: List[Dict[str, Any]] = []
+        for slot_id in slot_ids:
+            block = by_slot.get(slot_id)
+            if not block:
+                continue
+            bbox = block.get("slot_bbox") or {}
+            region = dict(region_by_slot.get(slot_id) or {})
+            region.setdefault("id", slot_id)
+            region.setdefault("slot_id", slot_id)
+            region.setdefault("region_id", slot_id)
+            region.setdefault("x", bbox.get("x", 0.0))
+            region.setdefault("y", bbox.get("y", 0.0))
+            region.setdefault("w", bbox.get("w", 0.0))
+            region.setdefault("h", bbox.get("h", 0.0))
+            region.setdefault("poster_orientation", template_layout.get("orientation"))
+            max_width = max(float(region.get("w", 0.0) or 0.0) - text_padding, 0.1)
+            failed = []
+            if not bool(region.get("can_host_visual", True)):
+                failed.append("visual_host")
+            if not visual_slot_is_feasible(
+                visual_id,
+                region,
+                visual_assets,
+                self.config,
+                max_width=max_width,
+            ):
+                failed.append("footprint")
+            if failed:
+                rejected.append({
+                    "slot_id": slot_id,
+                    "visual_type": visual_kind,
+                    "width": round(float(region.get("w", 0.0) or 0.0), 4),
+                    "height": round(float(region.get("h", 0.0) or 0.0), 4),
+                    "failed": failed,
+                })
+                continue
+            kept.append(slot_id)
+        return kept, rejected
 
     def _filter_portrait_visual_slots(
         self,

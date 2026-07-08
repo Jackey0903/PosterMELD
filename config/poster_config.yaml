@@ -45,6 +45,8 @@ header_planner:
   allowed_routes: ["classic_left", "centered", "right_title", "split_logos"]
   subtitle_policy: "auto"
   subtitle_probability: 0.5
+  auto_subtitle_max_chars: 52
+  auto_subtitle_max_words: 7
   short_title_max_chars: 82
   short_title_max_words: 11
   subtitle_max_chars: 86
@@ -636,6 +638,7 @@ standard_template_policy:
     - "one_plus_two_mixed"
   dense_section_threshold: 6
   dense_visual_threshold: 3
+  default_standard_landscape_template: "cluster_43_landscape"
   default_dense_landscape_template: "cluster_104_landscape"
   default_visual_landscape_template: "cluster_43_landscape"
   default_light_landscape_template: "cluster_2_landscape"
@@ -781,8 +784,8 @@ template_fast_mode:
 affiliation_logos:
   enabled: false
   max_logos: 5
-  request_timeout_seconds: 20
-  include_placeholders: false
+  request_timeout_seconds: 8
+  include_placeholders: true
   clearbit_base_url: "https://logo.clearbit.com"
   min_logo_long_edge: 320
   normalized_max_size: [1800, 720]
@@ -842,10 +845,10 @@ generated_teaser:
   width_px: 1800
   height_px: 650
   aspect: 2.7692
-  target_block_height_fraction: 0.72
-  max_block_height_fraction: 0.74
-  portrait_target_block_height_fraction: 0.66
-  portrait_max_block_height_fraction: 0.68
+  target_block_height_fraction: 0.65
+  max_block_height_fraction: 0.66
+  portrait_target_block_height_fraction: 0.65
+  portrait_max_block_height_fraction: 0.66
   summary_text_height_inches: 1.15
   summary_max_items: 2
   summary_max_chars: 260
@@ -854,6 +857,8 @@ generated_teaser:
   layout_max_height_fraction: 0.76
   portrait_layout_max_height_fraction: 0.68
   portrait_geometry_safety_inches: 0.45
+  min_aspect: 1.05
+  portrait_min_aspect: 1.55
   allow_existing_visual: false
   prompt_style: "top-tier AI conference panoramic teaser banner, clean conceptual schematic, polished NeurIPS/ICLR-style visual"
 
@@ -918,9 +923,12 @@ block_refinement:
   acceptable_max: 0.992
   final_min_utilization: 0.96
   final_mean_utilization: 0.965
-  final_max_bottom_whitespace_inches: 0.18
-  final_max_bottom_whitespace_fraction: 0.012
+  final_max_bottom_whitespace_inches: 0.08
+  final_max_bottom_whitespace_fraction: 0.006
+  final_max_bottom_whitespace_line_fraction: 1.0
+  final_gate_repair_max_iterations: 1
   hard_max: 0.995
+  final_max_body_font_size: 44
   safety_factor: 0.82
   capacity_min_factor: 0.88
   capacity_max_factor: 1.08
@@ -938,16 +946,18 @@ block_refinement:
   vlm_underfilled_min_extra_chars: 120
   underfilled_min_extra_chars: 70
   expand_height_safety_inches: 0.14
-  max_extra_chars_per_block: 620
+  max_extra_chars_per_block: 900
   teaser_max_extra_chars: 180
   chars_per_bullet: 120
   max_new_bullets_per_block: 5
+  rewrite_existing_bullets: true
+  near_line_rewrite_extra_chars: 80
   second_round_expand_scale: 0.75
   second_round_max_extra_chars: 260
   max_text_box_slack_ratio: 2.2
   max_text_box_slack_inches: 2.0
   source_context_chars: 7000
-  portrait_ppt_chars_per_inch_at_44pt: 3.25
+  portrait_ppt_chars_per_inch_at_44pt: 3.0
   temperature: 0.1
   max_tokens: 1800
   timeout_seconds: 120
@@ -984,7 +994,7 @@ micro_layout_refinement:
   min_body_font_size: 36
   min_section_title_font_size: 46
   min_title_font_size: 72
-  max_body_font_size: 54
+  max_body_font_size: 44
   max_section_title_font_size: 72
   min_visual_scale: 0.72
   max_visual_scale: 1.08
@@ -1001,20 +1011,23 @@ micro_layout_refinement:
   target_lane_utilization: 0.965
   underflow_expand_threshold: 0.08
   max_underflow_iterations: 10
-  max_body_font_boost: 10
+  max_body_font_boost: 4
   max_section_title_font_boost: 6
   body_font_boost_step: 2
   title_font_boost_step: 1
   section_gap_expand_step: 0.12
-  ppt_chars_per_inch_at_44pt: 4.2
-  portrait_ppt_chars_per_inch_at_44pt: 3.25
-  text_height_safety_factor: 1.12
-  text_height_safety_padding: 0.12
-  container_bottom_padding: 0.02
-  bottom_takeaway_enabled: true
+  ppt_chars_per_inch_at_44pt: 3.25
+  portrait_ppt_chars_per_inch_at_44pt: 3.0
+  text_height_safety_factor: 1.03
+  text_height_safety_padding: 0.05
+  container_bottom_padding: 0.06
+  min_text_container_bottom_padding_inches: 0.06
+  text_box_overflow_safety_inches: 0.06
+  final_lane_overflow_tolerance_inches: 0.02
+  bottom_takeaway_enabled: false
   bottom_takeaway_threshold_inches: 0.42
   bottom_takeaway_height_inches: 0.52
-  bottom_takeaway_bottom_padding_inches: 0.06
+  bottom_takeaway_bottom_padding_inches: 0.02
   bottom_takeaway_gap_inches: 0.04
   bottom_takeaway_font_size: 36
   bottom_takeaway_font_color: "#4A1020"
@@ -1027,16 +1040,23 @@ micro_layout_refinement:
   bottom_fill_font_size: 38
   bottom_fill_line_spacing: 0.9
   real_content_fill_enabled: true
-  real_content_fill_portrait_only: true
+  real_content_fill_portrait_only: false
+  real_content_fill_allow_new_lines: false
+  real_content_fill_allow_teaser_new_lines: true
+  real_content_fill_teaser_max_new_lines: 3
+  real_content_fill_bottom_padding_inches: 0.08
+  portrait_real_content_fill_bottom_padding_inches: 0.08
   real_content_fill_disable_portrait_bottom_fill: true
-  real_content_fill_threshold_inches: 0.16
-  real_content_fill_target_slack_inches: 0.12
+  real_content_fill_threshold_inches: 0.01
+  real_content_fill_target_slack_inches: 0.01
   portrait_real_content_fill_threshold_inches: 0.04
   portrait_real_content_fill_target_slack_inches: 0.02
   real_content_fill_max_sentences: 16
   real_content_fill_max_chars: 190
-  real_content_fill_max_line_spacing: 1.20
+  real_content_fill_max_line_spacing: 1.38
+  real_content_fill_spacing_step: 0.01
   real_content_fill_max_font_boost: 4
+  use_fast_text_height_measurement: true
   portrait_split_text_min_fill_fraction: 0.92
   portrait_split_text_max_fill_sentences: 16
   portrait_split_text_max_candidate_chars: 170

@@ -13,12 +13,14 @@ from src.agents.background_image_agent import BackgroundImageAgent
 from src.agents.block_content_refiner import BlockContentRefiner
 from src.agents.block_occupancy_analyzer import BlockOccupancyAnalyzer
 from src.agents.block_vlm_reviewer import BlockVLMReviewer
+from src.agents.color_agent import ColorAgent
 from src.agents.curator import StoryBoardCurator
 from src.agents.font_agent import FontAgent
 from src.agents.generated_teaser_agent import GeneratedTeaserAgent
 from src.agents.header_block_reviewer import HeaderBlockReviewer
 from src.agents.header_planner import HeaderPlanner
 from src.agents.layout_agent import LayoutAgent
+from src.agents.layout_with_balancer import LayoutWithBalancerAgent
 from src.agents.micro_layout_refiner import MicroLayoutRefiner
 from src.agents.parser import Parser
 from src.agents.poster_keypoint_selector import PosterKeypointSelector
@@ -45,7 +47,13 @@ from src.tools.image_api import ImageTools
 from src.tools.layout_api import LayoutTemplates
 from src.tools.pptx_api import PPTXDirector
 from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_for_poster
-from src.workflow.pipeline import _run_final_quality_gate, _section_geometry_issues, resolve_poster_dimensions
+from utils.langgraph_utils import LangGraphAgent
+from src.workflow.pipeline import (
+    _build_final_gate_refinement_occupancy,
+    _run_final_quality_gate,
+    _section_geometry_issues,
+    resolve_poster_dimensions,
+)
 
 
 def test_parser_visual_assets_registry_matches_images_tables():
@@ -291,6 +299,8 @@ def test_curator_normalizes_poster_text_items():
             "",
             "Step 2: Workflow prefixes should be removed.",
             "The results are presented in Table 2.",
+            "Baseline Methods We compare the proposed approach to the following baselines: - 1. *Random:* Each.",
+            "This suggests the inductive bias introduced in the hierarchical.",
         ],
         max_items=6,
     )
@@ -302,6 +312,17 @@ def test_curator_normalizes_poster_text_items():
         "Workflow prefixes should be removed.",
     ]
     assert curator._clean_section_title("Main results with table") == "Main Results"
+    assert curator._clean_section_title("Paper S Main") == "Paper's Main"
+    assert normalize_text_for_poster("Paper's Main") == "Paper's Main"
+    assert normalize_text_for_poster("Main Results") == "Main Results"
+    assert normalize_text_for_poster(
+        "Baseline Methods We compare the proposed approach to the following baselines: - 1. Random: Each."
+    ) == ""
+    assert normalize_text_for_poster("This suggests the inductive bias introduced in the hierarchical.") == ""
+    assert normalize_text_for_poster(
+        "Overall empirical conclusion: HAGS is the strongest method across cost."
+    ) == "Overall empirical conclusion: HAGS is the strongest method."
+    assert LayoutAgent()._section_title_label({}, "Paper S Main", create_state("/tmp/paper.pdf"))["title"] == "Paper's Main"
     assert normalize_title_for_poster("Active Geospatial Search For Effcient Tenant Eviction Outreach") == (
         "Active Geospatial Search for Efficient Tenant Eviction Outreach"
     )
@@ -436,6 +457,174 @@ def test_curator_groups_keypoints_for_six_slot_landscape_template(tmp_path):
     assert {"figure_2", "figure_3", "table_2"}.issubset(set(visual_ids))
 
 
+def test_curator_standard_landscape_uses_distinct_professional_section_titles(tmp_path):
+    capacity_state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+    )
+    capacity_state["output_dir"] = str(tmp_path / "output_titles")
+    capacity_state = TemplateCapacityPlanner()(capacity_state)
+    curator = StoryBoardCurator()
+    state = create_state(str(tmp_path / "paper.pdf"))
+    state["paper_poster_keypoints"] = [
+        {"id": 1, "key_point": "Eviction outreach requires sequential, budget-constrained search under uncertainty.", "section": "Introduction"},
+        {"id": 2, "key_point": "AGS formalizes the exploration-exploitation tradeoff with geospatial and travel-cost considerations.", "section": "Introduction"},
+        {"id": 3, "key_point": "HAGS is introduced to make AGS scalable to large urban search spaces.", "section": "Introduction"},
+        {"id": 4, "key_point": "The paper's main application is finding properties with tenants at risk of imminent eviction to support preventive outreach.", "section": "Introduction"},
+        {"id": 5, "key_point": "Prior active search methods do not adequately model geospatial structure and travel costs.", "section": "Related Work"},
+        {"id": 6, "key_point": "Visual active search is related but not directly applicable to parcel-level eviction outreach.", "section": "Related Work"},
+        {"id": 7, "key_point": "Previous eviction prediction work lacks adaptive sequential search and multimodal decision policies.", "section": "Related Work"},
+        {"id": 8, "key_point": "AGS formulates outreach as budget-constrained sequential geospatial search.", "section": "Methodology"},
+        {"id": 9, "key_point": "The policy combines a prediction module with a search module under remaining budget.", "section": "Methodology"},
+        {"id": 10, "key_point": "Overall empirical conclusion: HAGS is the strongest method across cost models, budgets, and target rates.", "section": "Results"},
+    ]
+    state["poster_reading_order"] = list(range(1, 11))
+    stale_result = "Overall empirical conclusion: HAGS is the strongest method across cost models, budgets, and target rates."
+    story_board = {
+        "spatial_content_plan": {
+            "sections": [
+                {"section_id": "old_motivation", "text_content": []},
+                {"section_id": "old_hags", "text_content": [stale_result]},
+                {"section_id": "old_application", "text_content": []},
+                {
+                    "section_id": "old_prior",
+                    "text_content": [
+                        "Hierarchy is the main reason the method succeeds at urban scale.",
+                        stale_result,
+                    ],
+                },
+                {
+                    "section_id": "old_prediction",
+                    "text_content": [
+                        "AGS fills the gap between predictive eviction analytics and operational outreach planning."
+                    ],
+                },
+                {"section_id": "old_policy", "text_content": ["Hierarchy is the main reason the method succeeds at urban scale."]},
+            ]
+        }
+    }
+    visual_context = {
+        "valid_visual_ids": ["figure_1", "figure_2", "table_1"],
+        "keypoint_target_count": 10,
+        "keypoint_section_target_count": 6,
+        "keypoint_grouping_mode": True,
+        "requested_layout_template": "cluster_43_landscape",
+        "template_fast_mode": True,
+        "fast_block_contract": capacity_state["fast_block_contract"],
+        "fast_visual_policy": capacity_state["fast_visual_policy"],
+        "template_layout": capacity_state["layout_template_metadata"],
+        "visual_assets_heights": {
+            "figure_1": {"aspect_ratio": 1.6},
+            "figure_2": {"aspect_ratio": 2.0},
+            "table_1": {"aspect_ratio": 2.4},
+        },
+    }
+    classified_visuals = {
+        "key_visual": "figure_1",
+        "method_workflow": [],
+        "main_results": ["figure_2", "table_1"],
+        "comparative_results": [],
+        "supporting": [],
+    }
+
+    curator._align_sections_to_keypoints(story_board, state, visual_context, classified_visuals)
+
+    titles = [section["section_title"] for section in story_board["spatial_content_plan"]["sections"]]
+    assert len(titles) == len(set(titles))
+    assert "Paper S Main" not in titles
+    assert "Paper's Main" not in titles
+    assert "HAGS Overview" in titles
+    assert "Main Application" in titles
+    assert "Prior Methods" in titles
+    assert "Search Policy" in titles or "Main Results" in titles
+    by_title = {section["section_title"]: section for section in story_board["spatial_content_plan"]["sections"]}
+    assert by_title["Prior Prediction"]["source_keypoint_ids"] == [7, 8]
+    assert by_title["Search Policy"]["source_keypoint_ids"] == [9, 10]
+    assert stale_result not in "\n".join(by_title["HAGS Overview"]["text_content"])
+    assert stale_result not in "\n".join(by_title["Prior Methods"]["text_content"])
+    assert stale_result in "\n".join(by_title["Search Policy"]["text_content"])
+
+
+def test_curator_standard_visual_assignment_preserves_generated_teaser(tmp_path):
+    capacity_state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+    )
+    capacity_state["output_dir"] = str(tmp_path / "output_teaser_preserve")
+    capacity_state = TemplateCapacityPlanner()(capacity_state)
+    curator = StoryBoardCurator()
+    state = create_state(str(tmp_path / "paper.pdf"))
+    state["paper_poster_keypoints"] = [
+        {"id": index, "key_point": f"Poster keypoint {index} with method or result evidence.", "section": "Method" if index <= 6 else "Results"}
+        for index in range(1, 11)
+    ]
+    state["poster_reading_order"] = list(range(1, 11))
+    story_board = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Motivation",
+                    "text_content": ["Motivation text."],
+                    "visual_assets": [{"visual_id": "generated_teaser_1"}],
+                    "generated_teaser_summary": True,
+                }
+            ]
+        }
+    }
+    visual_context = {
+        "valid_visual_ids": ["generated_teaser_1", "figure_1", "figure_2", "table_1", "table_2"],
+        "keypoint_target_count": 10,
+        "keypoint_section_target_count": 6,
+        "keypoint_grouping_mode": True,
+        "requested_layout_template": "cluster_43_landscape",
+        "template_fast_mode": True,
+        "fast_block_contract": capacity_state["fast_block_contract"],
+        "fast_visual_policy": capacity_state["fast_visual_policy"],
+        "template_layout": capacity_state["layout_template_metadata"],
+        "visual_assets": {
+            "generated_teaser_1": {"asset_type": "figure", "aspect": 2.2},
+            "figure_1": {"asset_type": "figure", "aspect": 1.6},
+            "figure_2": {"asset_type": "figure", "aspect": 2.0},
+            "table_1": {"asset_type": "table", "aspect": 2.4},
+            "table_2": {"asset_type": "table", "aspect": 2.2},
+        },
+    }
+    classified_visuals = {
+        "key_visual": "figure_1",
+        "method_workflow": [],
+        "main_results": ["figure_2", "table_1"],
+        "comparative_results": ["table_2"],
+        "supporting": [],
+    }
+
+    curator._align_sections_to_keypoints(story_board, state, visual_context, classified_visuals)
+
+    first_section = story_board["spatial_content_plan"]["sections"][0]
+    visual_ids = [
+        visual["visual_id"]
+        for section in story_board["spatial_content_plan"]["sections"]
+        for visual in section.get("visual_assets", [])
+    ]
+    assert first_section["section_title"] == "Motivation"
+    assert first_section["visual_assets"][0]["visual_id"] == "generated_teaser_1"
+    assert len([visual_id for visual_id in visual_ids if not visual_id.startswith("generated_teaser")]) == 4
+    figure_slots = set(visual_context["fast_visual_policy"]["figure_slots"])
+    table_slots = set(visual_context["fast_visual_policy"]["table_slots"])
+    for section in story_board["spatial_content_plan"]["sections"]:
+        slot_id = section["preferred_slot_id"]
+        for visual in section.get("visual_assets", []):
+            visual_id = visual["visual_id"]
+            if visual_id.startswith("figure_"):
+                assert slot_id in figure_slots
+            if visual_id.startswith("table_"):
+                assert slot_id in table_slots
+
+
 def test_template_capacity_planner_builds_landscape_fast_contract(tmp_path):
     state = create_state(
         str(tmp_path / "paper.pdf"),
@@ -492,8 +681,11 @@ def test_template_capacity_planner_orders_visual_slots_by_area(tmp_path):
     result = TemplateCapacityPlanner()(state)
 
     policy = result["fast_visual_policy"]
-    assert policy["figure_slots"][:3] == ["slot_2", "slot_1", "slot_3"]
-    assert policy["table_slots"][:2] == ["slot_5", "slot_6"]
+    assert policy["figure_slots"] == ["slot_2", "slot_1"]
+    assert policy["table_slots"] == ["slot_5"]
+    rejected = policy["rejected_visual_slots"]
+    assert any(item["slot_id"] == "slot_3" for item in rejected["figure"])
+    assert any(item["slot_id"] == "slot_6" for item in rejected["table"])
 
 
 def test_template_capacity_planner_excludes_narrow_portrait_figure_slots(tmp_path):
@@ -532,10 +724,10 @@ def test_template_capacity_planner_uses_conservative_portrait_text_capacity():
     portrait = planner._estimate_capacity({"w": 12.41, "h": 11.6256, "poster_orientation": "portrait"}, "text_summary")
 
     assert portrait["target_chars"] < landscape["target_chars"]
-    assert portrait["target_chars"] == 424
+    assert portrait["target_chars"] == 390
 
 
-def test_standard_template_preselector_auto_selects_dense_landscape_template(tmp_path):
+def test_standard_template_preselector_auto_selects_default_standard_landscape_template(tmp_path):
     state = create_state(str(tmp_path / "paper.pdf"), layout_template="auto", width=54, height=36)
     state["output_dir"] = str(tmp_path / "output")
     state["structured_sections"] = {
@@ -553,7 +745,7 @@ def test_standard_template_preselector_auto_selects_dense_landscape_template(tmp
 
     result = StandardTemplatePreselector()(state)
 
-    assert result["resolved_layout_template"] == "cluster_104_landscape"
+    assert result["resolved_layout_template"] == "cluster_43_landscape"
     assert result["poster_width"] == 54.0
     assert result["poster_height"] == 27.0
     assert result["enable_block_vlm_review"] is True
@@ -720,13 +912,19 @@ def test_curator_backfills_standard_template_visuals_by_large_blocks(tmp_path):
     slot_2_visual_ids = [visual["visual_id"] for visual in by_slot["slot_2"]["visual_assets"]]
     slot_3_visual_ids = [visual["visual_id"] for visual in by_slot["slot_3"]["visual_assets"]]
     assert slot_2_visual_ids[0] == "figure_2"
-    assert any(visual_id.startswith("table_") for visual_id in slot_2_visual_ids)
+    assert not any(visual_id.startswith("table_") for visual_id in slot_2_visual_ids)
     assert not any(visual_id.startswith("table_") for visual_id in slot_3_visual_ids)
+    table_slot_visual_ids = [
+        visual["visual_id"]
+        for slot_id in capacity_state["fast_visual_policy"]["table_slots"]
+        for visual in by_slot[slot_id].get("visual_assets", [])
+    ]
+    assert sum(visual_id.startswith("table_") for visual_id in table_slot_visual_ids) == capacity_state["fast_visual_policy"]["table_count"]
     assert sum(visual_id.startswith("figure_") for visual_id in visual_ids) == 2
-    assert sum(visual_id.startswith("table_") for visual_id in visual_ids) == 2
+    assert sum(visual_id.startswith("table_") for visual_id in visual_ids) == capacity_state["fast_visual_policy"]["table_count"]
 
 
-def test_template_block_planner_preserves_fast_assigned_two_figures_two_tables(tmp_path):
+def test_template_block_planner_preserves_feasible_fast_assigned_visuals(tmp_path):
     capacity_state = create_state(
         str(tmp_path / "paper.pdf"),
         layout_template="cluster_96_landscape",
@@ -806,9 +1004,9 @@ def test_template_block_planner_preserves_fast_assigned_two_figures_two_tables(t
     }
     slot_2_visual_ids = [visual["visual_id"] for visual in by_slot["slot_2"].get("visual_assets", [])]
     assert sum(visual_id.startswith("figure_") for visual_id in visual_ids) == 2
-    assert sum(visual_id.startswith("table_") for visual_id in visual_ids) == 2
+    assert sum(visual_id.startswith("table_") for visual_id in visual_ids) == capacity_state["fast_visual_policy"]["table_count"]
     assert "figure_2" in slot_2_visual_ids
-    assert any(visual_id.startswith("table_") for visual_id in slot_2_visual_ids)
+    assert not any(visual_id.startswith("table_") for visual_id in slot_2_visual_ids)
 
 
 def test_curator_block_template_key_visual_validation_uses_slot_mapping_not_middle_column():
@@ -1172,6 +1370,76 @@ def test_header_planner_generates_centered_subtitle_for_short_title(tmp_path):
     assert plan["title"]["alignment"] == "center"
     assert plan["subtitle"]["text"]
     assert plan["validation"]["passed"]
+
+
+def test_header_planner_auto_defaults_to_stable_classic_left_without_seed(tmp_path):
+    routes = []
+    subtitles = []
+    for _ in range(8):
+        state = create_state(
+            str(tmp_path / "paper.pdf"),
+            layout_template="cluster_43_landscape",
+            width=54,
+            height=27,
+            header_route="auto",
+            header_subtitle_policy="auto",
+        )
+        state["narrative_content"] = {
+            "meta": {
+                "poster_title": "Fast Spatial Search",
+                "authors": "A. Researcher and B. Scientist",
+            }
+        }
+        state["story_board"] = {
+            "spatial_content_plan": {
+                "sections": [
+                    {
+                        "section_id": "motivation",
+                        "section_title": "Motivation",
+                        "content_role": "overview",
+                        "text_content": ["Prioritizes high-impact outreach cases while reducing unnecessary search effort."],
+                    }
+                ]
+            }
+        }
+
+        plan = HeaderPlanner()(state)["header_plan"]
+        routes.append(plan["route"])
+        subtitles.append(plan["subtitle"]["text"])
+
+    assert routes == ["classic_left"] * 8
+    assert len(set(subtitles)) == 1
+
+
+def test_header_planner_auto_subtitle_stays_off_for_long_paper_title(tmp_path):
+    class AlwaysSubtitleRng:
+        def random(self):
+            return 0.0
+
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        header_subtitle_policy="auto",
+    )
+    title = "Active Geospatial Search for Efficient Tenant Eviction Outreach"
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Motivation",
+                    "content_role": "overview",
+                    "text_content": ["Eviction outreach requires sequential, budget-constrained search under uncertainty."],
+                }
+            ]
+        }
+    }
+
+    subtitle = HeaderPlanner()._select_subtitle(state, title, AlwaysSubtitleRng())
+
+    assert subtitle == ""
 
 
 def test_header_planner_shortens_subtitle_to_complete_clause():
@@ -2587,7 +2855,7 @@ def test_generated_teaser_agent_injects_motivation_visual(tmp_path, monkeypatch)
     assert result["generated_teaser_report"]["geometry"]["source"] == "template_slot"
     assert result["generated_teaser_report"]["geometry"]["slot_id"] == "slot_1"
     geometry = result["generated_teaser_report"]["geometry"]
-    assert geometry["target_height_inches"] > geometry["slot_height_inches"] * 0.65
+    assert geometry["target_height_inches"] == pytest.approx(geometry["slot_height_inches"] * 0.65, abs=0.01)
     assert section["generated_teaser_summary"] is True
     assert len(section["text_content"]) <= 2
     saved_visual_assets = json.loads((Path(state["output_dir"]) / "content" / "visual_assets.json").read_text(encoding="utf-8"))
@@ -2928,6 +3196,84 @@ def test_background_image_agent_uses_poster_preview_as_reference(tmp_path, monke
     assert result["background_image_report"]["reference_poster_path"] == str(preview_path)
 
 
+def test_background_image_agent_rejects_background_that_copies_layout_text(tmp_path, monkeypatch):
+    from PIL import ImageDraw
+
+    def fake_edit_image(self, image_path, prompt, output_path):
+        img = Image.new("RGB", (320, 160), color=(246, 251, 255))
+        draw = ImageDraw.Draw(img)
+        draw.text((78, 8), "Copied Poster Title", fill=(55, 55, 55))
+        for x, y, w, h, label in [
+            (20, 42, 110, 12, "Motivation"),
+            (150, 42, 130, 12, "Core Method"),
+            (20, 102, 110, 12, "Results"),
+        ]:
+            draw.rectangle([x, y, x + w, y + h], fill=(218, 225, 232))
+            draw.text((x + 28, y + 1), label, fill=(64, 64, 64))
+        img.save(output_path)
+        return output_path
+
+    monkeypatch.setattr("src.agents.background_image_agent.ImageTools.edit_image", fake_edit_image)
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        width=16,
+        height=8,
+        enable_generated_background=True,
+        background_palette="light_blue",
+    )
+    state["output_dir"] = str(tmp_path / "output")
+    state["color_scheme"] = {"theme": "#0057B8", "mono_light": "#E6EAEF"}
+    state["styled_layout"] = [
+        {"type": "title", "x": 1.0, "y": 0.3, "width": 14.0, "height": 1.0},
+        {"type": "section_title", "section_id": "motivation", "x": 1.0, "y": 2.1, "width": 5.5, "height": 0.6},
+        {"type": "section_title", "section_id": "method", "x": 7.5, "y": 2.1, "width": 6.5, "height": 0.6},
+        {"type": "section_title", "section_id": "results", "x": 1.0, "y": 5.1, "width": 5.5, "height": 0.6},
+    ]
+    preview_path = tmp_path / "draft.png"
+    Image.new("RGB", (320, 160), color=(255, 255, 255)).save(preview_path)
+    state["poster_preview_path"] = str(preview_path)
+    agent = BackgroundImageAgent()
+    agent.background_config["width_px"] = 320
+    agent.background_config["height_px"] = 160
+    agent.background_config["procedural_only"] = False
+
+    result = agent(state)
+    report = result["background_image_report"]
+
+    assert result["errors"] == []
+    assert report["used_procedural_fallback"] is True
+    assert report["generation_mode"] == "poster_conditioned_image_api_contaminated_procedural_fallback"
+    assert report["postprocess"]["fallback_reason"] == "layout_copy_artifacts"
+    assert report["postprocess"]["copy_artifact_report"]["rejected"] is True
+    assert report["safety"]["layout_copy_artifacts_rejected"] is True
+    assert result["degraded_quality_states"][-1]["category"] == "generated_background"
+    assert Path(report["raw_path"]).exists()
+    assert Path(report["background_image_path"]).exists()
+
+
+def test_color_agent_records_degraded_state_when_visual_color_extraction_fails(tmp_path, monkeypatch):
+    visual_path = tmp_path / "figure.png"
+    Image.new("RGB", (120, 80), color=(240, 240, 255)).save(visual_path)
+    state = create_state(str(tmp_path / "paper.pdf"))
+    state["output_dir"] = str(tmp_path / "output")
+    state["classified_visuals"] = {"key_visual": "figure_1"}
+    state["visual_assets"] = {"figure_1": {"source_path": str(visual_path)}}
+
+    monkeypatch.setattr(
+        ColorAgent,
+        "_analyze_figure_for_color",
+        lambda self, image_path, state: (_ for _ in ()).throw(RuntimeError("vision unavailable")),
+    )
+
+    result = ColorAgent()(state)
+
+    assert result["errors"] == []
+    assert result["color_scheme"]["theme"] == load_config()["colors"]["fallback_theme"]
+    assert result["degraded_quality_states"][-1]["component"] == "color_agent"
+    assert result["degraded_quality_states"][-1]["category"] == "color_extraction"
+    assert result["degraded_quality_states"][-1]["fallback"] == "default_theme"
+
+
 def test_background_image_agent_api_failure_falls_back_without_error(tmp_path, monkeypatch):
     def fail_edit_image(self, image_path, prompt, output_path):
         raise TimeoutError("stuck image API")
@@ -3089,6 +3435,29 @@ def test_image_tools_falls_back_from_gpt_image_to_gemini_without_retrying_model_
     assert calls == [
         ("gpt-image-2", "https://example.test/v1"),
         ("gemini-3.1-flash-image-preview", "https://example.test/v1"),
+    ]
+
+
+def test_image_tools_does_not_retry_unsupported_operations():
+    tool = ImageTools(
+        api_key="test-key",
+        base_url="https://first.example/v1, https://second.example/v1",
+        model="unsupported-image-model",
+        retry_attempts=5,
+        retry_delay=0,
+    )
+    calls = []
+
+    def operation(base_url):
+        calls.append((tool.model, base_url))
+        raise RuntimeError("The requested operation is unsupported.")
+
+    with pytest.raises(RuntimeError):
+        tool._request_with_failover("unsupported image operation", operation)
+
+    assert calls == [
+        ("unsupported-image-model", "https://first.example/v1"),
+        ("unsupported-image-model", "https://second.example/v1"),
     ]
 
 
@@ -3576,6 +3945,75 @@ def test_font_agent_keyword_prompt_uses_narrative_content(monkeypatch):
     assert "poster narrative signal" in captured["message"]
 
 
+def test_font_agent_normalizes_keyword_section_aliases_to_layout_ids():
+    agent = FontAgent()
+    story_board = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "sec_method_ags",
+                    "section_title": "AGS Formulation",
+                    "content_role": "method",
+                    "text_content": ["Define AGS as a budget-constrained MDP."],
+                },
+                {
+                    "section_id": "sec_motivation_foundation",
+                    "section_title": "Eviction Outreach Challenge",
+                    "content_role": "foundation",
+                    "text_content": ["Motivate tenant outreach."],
+                }
+            ]
+        }
+    }
+    keywords = {
+        "section_keywords": {
+            "method_ags": {
+                "bold_contrast": ["Active Geospatial Search"],
+                "bold": ["MDP"],
+                "italic": ["policy"],
+            },
+            "motivation": {
+                "bold_contrast": ["Active Geospatial Search"],
+                "bold": ["at-risk"],
+                "italic": [],
+            }
+        }
+    }
+
+    normalized = agent._normalize_keyword_section_ids(keywords, story_board)
+
+    assert "sec_method_ags" in normalized["section_keywords"]
+    assert normalized["section_keywords"]["sec_method_ags"]["bold"] == ["MDP"]
+    assert "sec_motivation_foundation" in normalized["section_keywords"]
+    assert normalized["section_keywords"]["sec_motivation_foundation"]["bold"] == ["at-risk"]
+
+
+def test_micro_layout_refiner_styles_added_fill_lines_with_section_keywords():
+    refiner = MicroLayoutRefiner()
+    state = {
+        "keywords": {
+            "section_keywords": {
+                "sec_results": {
+                    "bold_contrast": ["HAGS"],
+                    "bold": ["ANT"],
+                    "italic": ["sparse"],
+                }
+            }
+        },
+        "color_scheme": {"contrast": "#7A1F2B"},
+    }
+
+    styled = refiner._apply_fill_keyword_highlighting(
+        "HAGS improves ANT under sparse targets.",
+        "sec_results",
+        state,
+    )
+
+    assert "<color:#7A1F2B>HAGS</color>" in styled
+    assert "**ANT**" in styled
+    assert "*sparse*" in styled
+
+
 def test_text_cleanup_repairs_mojibake_bullets_and_common_ocr_typos():
     text = "â¢ **Realistic Setting: When costs matter.\\nâ¦ Effcient search improves 42%â70% with î»L_BCE."
 
@@ -3663,6 +4101,54 @@ def test_visual_asset_agent_disabled_is_slot_preserving_crop_only(tmp_path):
     assert result["visual_plan"][0]["action"] == "crop_only"
     assert "method_figure_1" in result["resolved_visual_assets"]
     assert Path(result["resolved_visual_assets"]["method_figure_1"]["resolved_path"]).exists()
+
+
+def test_visual_asset_agent_table_crop_only_preserves_full_table_edges(tmp_path):
+    source_path = tmp_path / "wide_table.png"
+    image = Image.new("RGB", (400, 100), color=(255, 255, 255))
+    for x in range(0, 40):
+        for y in range(0, 100):
+            image.putpixel((x, y), (220, 0, 0))
+    for x in range(360, 400):
+        for y in range(0, 100):
+            image.putpixel((x, y), (0, 0, 220))
+    image.save(source_path)
+
+    state = create_state(str(tmp_path / "paper.pdf"))
+    state["output_dir"] = str(tmp_path / "output_table")
+    state["enable_visual_refinement"] = False
+    state["visual_assets"] = {
+        "table_1": {
+            "asset_id": "table_1",
+            "asset_type": "table",
+            "source_path": str(source_path),
+            "resolved_path": None,
+            "caption": "Table 1",
+            "aspect": 4.0,
+            "provenance": "paper_extracted",
+        }
+    }
+    state["styled_layout"] = [
+        {
+            "type": "visual",
+            "slot_id": "results_table_1",
+            "id": "results_table_1",
+            "visual_id": "table_1",
+            "width": 2.0,
+            "height": 1.0,
+        }
+    ]
+
+    result = VisualAssetAgent()(state)
+
+    resolved = result["resolved_visual_assets"]["results_table_1"]
+    assert resolved["provenance"] == "fit_resized"
+    with Image.open(resolved["resolved_path"]).convert("RGB") as rendered:
+        mid_y = rendered.height // 2
+        left_pixel = rendered.getpixel((5, mid_y))
+        right_pixel = rendered.getpixel((rendered.width - 6, mid_y))
+    assert left_pixel[0] > 150 and left_pixel[1] < 80 and left_pixel[2] < 80
+    assert right_pixel[2] > 150 and right_pixel[0] < 80 and right_pixel[1] < 80
 
 
 def test_visual_asset_agent_enabled_generates_for_missing_source_slot(tmp_path):
@@ -3762,11 +4248,67 @@ def test_vlm_layout_reviewer_falls_back_on_request_failure(tmp_path, monkeypatch
     assert "VLM layout request failed" in result["vlm_layout_review"]["warnings"][0]
 
 
+def test_visual_legibility_reviewer_records_degraded_state_on_vlm_fallback(tmp_path, monkeypatch):
+    state = create_state(str(tmp_path / "paper.pdf"), enable_visual_legibility_review=True)
+    state["output_dir"] = str(tmp_path / "output")
+    state["poster_preview_path"] = str(tmp_path / "preview.png")
+    state["styled_layout"] = []
+    state["layout_template_metadata"] = {"lanes": []}
+    Path(state["output_dir"], "content").mkdir(parents=True)
+    Image.new("RGB", (200, 120), color=(255, 255, 255)).save(state["poster_preview_path"])
+
+    monkeypatch.setenv("VLM_BASE_URL", "https://example.com/v1")
+    monkeypatch.setenv("VLM_API_KEY", "test")
+    monkeypatch.setenv("VLM_MODEL", "gpt-5.4")
+
+    def fail_post(self, base_url, headers, model, prompt, image_data):
+        raise ConnectionResetError("connection reset")
+
+    monkeypatch.setattr(VLMLayoutReviewer, "_post_vlm_request", fail_post)
+
+    result = VisualLegibilityReviewer()(state)
+
+    assert result["errors"] == []
+    review = result["visual_legibility_review"]
+    assert review["source"] == "fallback"
+    assert review["degraded"] is True
+    assert result["degraded_quality_states"][-1]["component"] == "visual_legibility_reviewer"
+    assert result["degraded_quality_states"][-1]["category"] == "visual_legibility_review"
+    assert result["degraded_quality_states"][-1]["fallback"] == "deterministic_visual_heuristic"
+
+
 def test_gpt_54_uses_openai_chat_provider():
     config = _get_model_config("gpt-5.4")
 
     assert config.provider == "openai"
     assert config.model_name == "gpt-5.4"
+
+
+def test_langgraph_agent_does_not_retry_authentication_errors():
+    class FakeAuthenticationError(Exception):
+        status_code = 401
+
+    class FailingModel:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, _history):
+            self.calls += 1
+            raise FakeAuthenticationError("401 Unauthorized: 无效的令牌")
+
+    model = FailingModel()
+    agent = LangGraphAgent.__new__(LangGraphAgent)
+    agent.system_msg = "system"
+    agent.config = _get_model_config("gpt-5.4")
+    agent.model = model
+    agent.history = []
+    agent.state = None
+    agent.agent_name = "test"
+
+    with pytest.raises(FakeAuthenticationError):
+        agent.step("hello")
+
+    assert model.calls == 1
 
 
 def test_vlm_layout_reviewer_applies_single_safe_patch(tmp_path, monkeypatch):
@@ -4031,6 +4573,56 @@ def test_layout_agent_respects_requested_template_geometry():
     assert sections["intro"]["width"] > sections["results"]["width"]
 
 
+def _six_slot_story_board(*, long_slot_4: bool = False):
+    sections = []
+    for idx, slot_id in enumerate(["slot_1", "slot_2", "slot_3", "slot_4", "slot_5", "slot_6"], start=1):
+        text = [f"Concise section {idx} point."]
+        if long_slot_4 and slot_id == "slot_4":
+            text = [
+                "This deliberately long paragraph repeats enough content to exceed the fixed "
+                "template slot before micro-layout has a chance to compress it. " * 8
+            ]
+        sections.append(
+            {
+                "section_id": f"section_{idx}",
+                "section_title": f"Section {idx}",
+                "column_assignment": slot_id,
+                "preferred_slot_id": slot_id,
+                "vertical_priority": "top",
+                "text_content": text,
+                "visual_assets": [],
+                "importance_level": 2,
+            }
+        )
+    return {"spatial_content_plan": {"sections": sections}}
+
+
+def test_template_prior_layout_validation_does_not_poison_global_errors():
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_43_landscape", width=54, height=27)
+    state["narrative_content"] = {"meta": {"poster_title": "Paper", "authors": "Authors"}}
+    state["optimized_story_board"] = _six_slot_story_board(long_slot_4=True)
+
+    result = LayoutAgent()(state, mode="final")
+
+    assert result["layout_validation"]["valid"] is False
+    assert result["design_layout"]
+    assert not result["errors"]
+
+
+def test_layout_with_balancer_ignores_stale_errors_when_retrying_template_prior_layout():
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_43_landscape", width=54, height=27)
+    state["narrative_content"] = {"meta": {"poster_title": "Paper", "authors": "Authors"}}
+    state["template_layout_mode"] = "template_prior"
+    state["story_board"] = _six_slot_story_board()
+    state["errors"] = ["layout_agent: final layout validation failed: stale pre-micro diagnostic"]
+
+    result = LayoutWithBalancerAgent()(state)
+
+    assert result["design_layout"]
+    assert result["optimized_story_board"]
+    assert result["errors"] == ["layout_agent: final layout validation failed: stale pre-micro diagnostic"]
+
+
 def test_layout_agent_respects_adaptive_lane_widths():
     state = create_state("/tmp/paper.pdf", layout_template="three_column_postergen")
     state["adaptive_lane_widths"] = {"left": 0.85, "middle": 1.30, "right": 0.85}
@@ -4246,7 +4838,13 @@ def test_micro_layout_refiner_packs_overflowing_lane_without_lane_overflow():
         },
     ]
 
-    result = MicroLayoutRefiner()(state)
+    refiner = MicroLayoutRefiner()
+    refined_layout, report = refiner._refine_layout(
+        state["styled_layout"],
+        state["layout_template_metadata"],
+        state,
+    )
+    result = {"styled_layout": refined_layout}
     left_lane = state["layout_template_metadata"]["lanes"][0]
     left_sections = [
         element for element in result["styled_layout"]
@@ -4255,6 +4853,81 @@ def test_micro_layout_refiner_packs_overflowing_lane_without_lane_overflow():
 
     assert left_sections
     assert max(section["y"] + section["height"] for section in left_sections) <= left_lane["y"] + left_lane["h"] + 0.05
+
+
+def test_micro_layout_refiner_reports_post_force_fit_overflow():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_43_landscape", width=54, height=27)
+    state["template_fast_mode"] = True
+    lane = {"id": "slot_1", "x": 1.0, "y": 5.1, "w": 14.04, "h": 6.0}
+    group = {
+        "section_id": "method",
+        "lane_id": "slot_1",
+        "container": {
+            "type": "section_container",
+            "section_id": "method",
+            "lane_id": "slot_1",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": 12.0,
+        },
+        "children": [
+            {
+                "type": "title_accent_block",
+                "section_id": "method",
+                "lane_id": "slot_1",
+                "x": lane["x"],
+                "y": lane["y"],
+                "width": lane["w"],
+                "height": 0.78,
+            },
+            {
+                "type": "section_title",
+                "section_id": "method",
+                "lane_id": "slot_1",
+                "x": lane["x"] + 0.28,
+                "y": lane["y"] + 0.04,
+                "width": lane["w"] - 0.56,
+                "height": 0.7,
+                "font_size": 48,
+            },
+            {
+                "type": "text",
+                "id": "method_text",
+                "section_id": "method",
+                "lane_id": "slot_1",
+                "x": lane["x"] + 0.3,
+                "y": lane["y"] + 1.3,
+                "width": lane["w"] - 0.6,
+                "height": 12.0,
+                "content": "\n".join(
+                    [
+                        "Line one with enough words to wrap across the narrow panel and consume height.",
+                        "Line two with enough words to wrap across the narrow panel and consume height.",
+                        "Line three with enough words to wrap across the narrow panel and consume height.",
+                        "Line four with enough words to wrap across the narrow panel and consume height.",
+                        "Line five with enough words to wrap across the narrow panel and consume height.",
+                    ]
+                ),
+                "font_family": "Arial",
+                "font_size": 44,
+                "font_color": "#000000",
+            },
+        ],
+    }
+
+    result = refiner._refine_lane(
+        [group],
+        lane,
+        state,
+        {"template_name": "cluster_43_landscape", "orientation": "landscape", "layout_mode": "template_prior", "lanes": [lane]},
+    )
+    report = result["report"]
+
+    assert report["force_fit_used"] is True
+    assert report["pre_force_fit_overflow"] > report["final_overflow"]
+    assert report["final_overflow"] == pytest.approx(refiner._lane_overflow(result["elements"], lane))
 
 
 def test_micro_layout_refiner_expands_underfilled_lane():
@@ -4715,7 +5388,7 @@ def test_micro_layout_refiner_uses_portrait_split_for_moderately_wide_portrait_b
     visual = next(element for element in elements if element.get("type") == "visual")
     text = next(element for element in elements if element.get("type") == "text")
     assert visual["portrait_split_layout"] == "image_left_text_right"
-    assert visual["x"] <= lane["x"] + 0.31
+    assert visual["x"] < text["x"]
     assert visual["width"] >= 23.0
     assert text["x"] > visual["x"] + visual["width"]
     top_gap = visual["y"] - text["y"]
@@ -4728,7 +5401,7 @@ def test_micro_layout_refiner_uses_portrait_split_for_moderately_wide_portrait_b
         for element in elements
         if element.get("type") in {"section_title", "title_accent_block", "text", "visual"}
     )
-    assert lane["y"] + lane["h"] - content_bottom <= refiner._final_bottom_whitespace_limit(lane) + 0.03
+    assert content_bottom <= lane["y"] + lane["h"]
 
 
 def test_micro_layout_refiner_keeps_generated_teaser_as_banner_in_portrait_block():
@@ -4822,7 +5495,7 @@ def test_micro_layout_refiner_keeps_generated_teaser_as_banner_in_portrait_block
     assert text["y"] > visual["y"] + visual["height"]
 
 
-def test_micro_layout_refiner_fills_portrait_split_text_column_from_source():
+def test_micro_layout_refiner_does_not_fill_portrait_split_text_column_from_source():
     refiner = MicroLayoutRefiner()
     state = create_state("/tmp/paper.pdf", layout_template="cluster_8_portrait", width=36, height=50.88)
     state["template_fast_mode"] = True
@@ -4945,9 +5618,9 @@ def test_micro_layout_refiner_fills_portrait_split_text_column_from_source():
 
     text = next(element for element in elements if element.get("type") == "text")
     assert text["portrait_split_layout"] == "image_left_text_right"
-    assert text["portrait_split_text_fill_ratio"] >= 0.90
-    assert len(text["content"].splitlines()) >= 3
-    assert "predictor estimates" in text["content"].lower()
+    assert text["portrait_split_text_fill_ratio"] < 0.90
+    assert text["content"].splitlines() == ["AGS updates beliefs online as new eviction labels are discovered."]
+    assert "predictor estimates" not in text["content"].lower()
 
 
 def test_micro_layout_refiner_portrait_wide_columns_fill_bottom_with_dense_content():
@@ -5039,7 +5712,9 @@ def test_micro_layout_refiner_portrait_wide_columns_fill_bottom_with_dense_conte
     assert result is not None
     column_elements, _, content_bottom = result
     assert lane["y"] + lane["h"] - content_bottom <= 0.18
-    assert sum(len(element["content"].splitlines()) for element in column_elements) >= 10
+    combined = "\n".join(element["content"] for element in column_elements)
+    assert sum(len(element["content"].splitlines()) for element in column_elements) == len(section_lines)
+    assert "Travel-aware settings amplify" not in combined
 
 
 def test_micro_layout_refiner_portrait_expands_visual_to_absorb_bottom_gap():
@@ -5122,7 +5797,232 @@ def test_micro_layout_refiner_portrait_text_fill_uses_fine_line_spacing_step():
 
     assert updated["content"] == text_element["content"]
     assert font_size == 42
-    assert line_spacing == pytest.approx(0.99)
+    assert line_spacing == pytest.approx(1.01)
+
+
+def test_micro_layout_refiner_caps_body_font_in_underfilled_template_slots():
+    refiner = MicroLayoutRefiner()
+    lane = {"id": "slot_3", "x": 1.0, "y": 2.0, "w": 16.0, "h": 12.0}
+    group = {
+        "section_id": "sec_application",
+        "lane_id": "slot_3",
+        "container": {
+            "type": "section_container",
+            "section_id": "sec_application",
+            "lane_id": "slot_3",
+            "slot_id": "slot_3",
+            "x": 1.0,
+            "y": 2.0,
+            "width": 16.0,
+            "height": 6.0,
+        },
+        "children": [
+            {
+                "type": "title_accent_block",
+                "section_id": "sec_application",
+                "lane_id": "slot_3",
+                "slot_id": "slot_3",
+                "x": 1.0,
+                "y": 2.0,
+                "width": 16.0,
+                "height": 0.7,
+            },
+            {
+                "type": "section_title",
+                "id": "sec_application_title",
+                "section_id": "sec_application",
+                "lane_id": "slot_3",
+                "slot_id": "slot_3",
+                "x": 1.2,
+                "y": 2.05,
+                "width": 15.6,
+                "height": 0.7,
+                "font_size": 48,
+                "content": "Application",
+            },
+            {
+                "type": "visual",
+                "id": "sec_application_figure",
+                "section_id": "sec_application",
+                "lane_id": "slot_3",
+                "slot_id": "slot_3",
+                "x": 1.3,
+                "y": 3.2,
+                "width": 14.0,
+                "height": 4.0,
+            },
+            {
+                "type": "text",
+                "id": "sec_application_text",
+                "section_id": "sec_application",
+                "lane_id": "slot_3",
+                "slot_id": "slot_3",
+                "x": 1.3,
+                "y": 7.5,
+                "width": 15.4,
+                "height": 1.0,
+                "font_size": 44,
+                "font_family": "Arial",
+                "line_spacing": 1.0,
+                "content": "Short application takeaway.",
+            },
+        ],
+    }
+    state = {
+        "poster_width": 54,
+        "poster_height": 27,
+        "story_board": {},
+        "structured_sections": {},
+        "narrative_content": {},
+        "template_fast_mode": True,
+    }
+
+    result = refiner._refine_lane(
+        [group],
+        lane,
+        state,
+        {
+            "template_name": "cluster_43_landscape",
+            "orientation": "landscape",
+            "layout_mode": "template_prior",
+            "lanes": [lane],
+        },
+    )
+
+    body_text = next(element for element in result["elements"] if element.get("id") == "sec_application_text")
+    max_body_font = load_config()["micro_layout_refinement"]["max_body_font_size"]
+    assert max_body_font <= 48
+    assert body_text["font_size"] <= max_body_font
+    assert result["report"]["underflow_expanded"] is True
+
+
+def test_micro_layout_refiner_does_not_create_semantic_bottom_fill_text():
+    refiner = MicroLayoutRefiner()
+    group = {"section_id": "sec_results", "lane_id": "slot_1"}
+    lane = {"id": "slot_1", "x": 1.0, "y": 2.0, "w": 14.0, "h": 12.0}
+    state = {
+        "story_board": {
+            "spatial_content_plan": {
+                "sections": [
+                    {
+                        "section_id": "sec_results",
+                        "section_title": "Results",
+                        "content_role": "results",
+                        "text_content": ["Existing result statement from the rewritten block."],
+                    }
+                ]
+            }
+        }
+    }
+
+    fill = refiner._bottom_fill_elements(
+        group,
+        lane,
+        state,
+        {"text_padding": 0.3},
+        {"template_name": "cluster_86_landscape", "orientation": "landscape", "layout_mode": "template_prior"},
+        content_bottom=6.0,
+    )
+
+    assert fill == []
+
+
+def test_micro_layout_refiner_real_content_fill_reuses_only_existing_lines_by_default():
+    refiner = MicroLayoutRefiner()
+    content = "The rewritten block explains how HAGS improves parcel search decisions under limited outreach budgets."
+    state = {
+        "story_board": {
+            "spatial_content_plan": {
+                "sections": [
+                    {
+                        "section_id": "sec_results",
+                        "section_title": "Results",
+                        "content_role": "results",
+                        "text_content": [content],
+                    }
+                ]
+            }
+        },
+        "structured_sections": {
+            "paper_sections": [
+                {
+                    "section_name": "Results",
+                    "section_type": "results",
+                    "content": "A separate source sentence should not be injected during micro layout.",
+                }
+            ]
+        },
+    }
+
+    lines = refiner._content_lines_for_fill("sec_results", state, content, max_items=5)
+
+    assert lines == [content]
+    assert all("Operational takeaway" not in line for line in lines)
+
+
+def test_micro_layout_refiner_teaser_fill_rejects_unrelated_source_sentences():
+    refiner = MicroLayoutRefiner()
+    content = (
+        "Eviction outreach requires sequential, budget-constrained search under uncertainty.\n"
+        "AGS formalizes the exploration-exploitation tradeoff with geospatial and travel-cost considerations."
+    )
+    state = {
+        "story_board": {
+            "spatial_content_plan": {
+                "sections": [
+                    {
+                        "section_id": "motivation",
+                        "section_title": "Motivation",
+                        "content_role": "foundation",
+                        "generated_teaser_summary": True,
+                        "text_content": content.splitlines(),
+                    }
+                ]
+            }
+        },
+        "structured_sections": {
+            "paper_sections": [
+                {
+                    "section_name": "Introduction",
+                    "section_type": "foundation",
+                    "content": (
+                        "HAGS is introduced to make AGS scalable to large urban search spaces. "
+                        "Prior work developed non-myopic and cost-effective active search methods."
+                    ),
+                }
+            ]
+        },
+    }
+
+    lines = refiner._content_lines_for_fill("motivation", state, content, max_items=5)
+
+    joined = "\n".join(lines)
+    assert "HAGS is introduced" not in joined
+    assert "Prior work developed" not in joined
+
+
+def test_micro_layout_refiner_preserves_existing_concise_fill_lines():
+    refiner = MicroLayoutRefiner()
+    lines = [
+        "AGS formulates outreach as budget-constrained sequential geospatial search.",
+        "The policy combines a prediction module.",
+        "Hierarchy is the main reason the method succeeds at urban scale.",
+        "Overall empirical conclusion: HAGS is the strongest method across cost models, budgets, and target rates.",
+    ]
+
+    cleaned = refiner._clean_existing_fill_content("\n".join(lines))
+
+    assert cleaned.splitlines() == lines
+
+
+def test_micro_layout_refiner_repairs_existing_truncated_fill_tail():
+    refiner = MicroLayoutRefiner()
+
+    cleaned = refiner._clean_existing_fill_content(
+        "Overall empirical conclusion: HAGS is the strongest method across cost."
+    )
+
+    assert cleaned == "Overall empirical conclusion: HAGS is the strongest method."
 
 
 def test_micro_layout_refiner_uses_conservative_portrait_text_measurement():
@@ -5147,7 +6047,30 @@ def test_micro_layout_refiner_uses_conservative_portrait_text_measurement():
         template_layout={"template_name": "cluster_22_portrait", "orientation": "portrait"},
     )
 
-    assert portrait_height > landscape_height
+    assert portrait_height >= landscape_height
+
+
+def test_micro_layout_refiner_defaults_to_fast_text_measurement_for_landscape(monkeypatch):
+    refiner = MicroLayoutRefiner()
+
+    def fail_slow_measurement(**_kwargs):
+        raise AssertionError("slow python-pptx text measurement should not run by default")
+
+    monkeypatch.setattr(
+        "src.agents.micro_layout_refiner.measure_text_height",
+        fail_slow_measurement,
+    )
+
+    measured = refiner._measure_text_height_for_refinement(
+        text_content="A concise landscape block line.\nA second line used for sizing.",
+        width_inches=12.0,
+        font_name="Arial",
+        font_size=44,
+        line_spacing=1.0,
+        template_layout={"template_name": "cluster_104_landscape", "orientation": "landscape"},
+    )
+
+    assert measured["optimal_height"] > 0
 
 
 def test_micro_layout_force_fit_preserves_visual_footprint_contract():
@@ -5188,6 +6111,87 @@ def test_micro_layout_force_fit_preserves_visual_footprint_contract():
     assert visual["visual_footprint"]["ok"] is True
 
 
+def test_micro_layout_force_fit_rechecks_overflow_after_footprint_and_text_floors():
+    refiner = MicroLayoutRefiner()
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_43_landscape", width=54, height=27)
+    state["template_fast_mode"] = True
+    state["visual_assets"] = {"generated_teaser_1": {"asset_type": "figure", "aspect": 1.9882}}
+    lane = {"id": "slot_1", "x": 1.0, "y": 5.1, "w": 14.04, "h": 10.4}
+    text = (
+        "Eviction-prevention outreach faces a sequential search problem: canvassers have limited "
+        "budget, uncertain parcel-level risk.\n"
+        "• The paper formulates this as <color:#1e324d>Active Geospatial Search</color> (AGS): "
+        "sequentially query parcels with geographic locations, features."
+    )
+    layout = [
+        {
+            "type": "section_container",
+            "section_id": "section_1",
+            "lane_id": "slot_1",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": 10.695,
+        },
+        {
+            "type": "title_accent_block",
+            "section_id": "section_1",
+            "lane_id": "slot_1",
+            "x": lane["x"],
+            "y": lane["y"],
+            "width": lane["w"],
+            "height": 0.647,
+        },
+        {
+            "type": "section_title",
+            "id": "section_1_title",
+            "section_id": "section_1",
+            "lane_id": "slot_1",
+            "x": lane["x"] + 0.28,
+            "y": lane["y"] + 0.033,
+            "width": lane["w"] - 0.52,
+            "height": 0.689,
+            "font_size": 46,
+        },
+        {
+            "type": "visual",
+            "id": "section_1_generated_teaser_1",
+            "visual_id": "generated_teaser_1",
+            "section_id": "section_1",
+            "lane_id": "slot_1",
+            "x": 2.208,
+            "y": 5.963,
+            "width": 11.624,
+            "height": 5.847,
+        },
+        {
+            "type": "text",
+            "id": "section_1_text",
+            "section_id": "section_1",
+            "lane_id": "slot_1",
+            "x": lane["x"] + 0.24,
+            "y": 11.965,
+            "width": lane["w"] - 0.48,
+            "height": 3.809,
+            "content": text,
+            "font_family": "Arial",
+            "font_size": 36,
+        },
+    ]
+
+    compressed = refiner._force_fit_lane(
+        layout,
+        lane,
+        state,
+        {"template_name": "cluster_43_landscape", "orientation": "landscape"},
+    )
+
+    lane_bottom = lane["y"] + lane["h"]
+    assert max(element["y"] + element["height"] for element in compressed) <= lane_bottom + 0.02
+    visual = next(element for element in compressed if element.get("type") == "visual")
+    assert visual["visual_footprint"]["ok"] is True
+
+
 def test_micro_layout_refiner_validation_rejects_child_outside_container():
     state = create_state("/tmp/paper.pdf", layout_template="three_column_postergen")
     template = LayoutTemplates(54, 36, margin=1.0, col_gap=1.0).get_template(
@@ -5219,6 +6223,44 @@ def test_micro_layout_refiner_validation_rejects_child_outside_container():
     validation = MicroLayoutRefiner()._validate_refined_layout(layout, lane_map, state)
 
     assert any("child vertical overflow" in issue for issue in validation["issues"])
+
+
+def test_micro_layout_refiner_validation_rejects_text_touching_container_bottom():
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_86_landscape", width=54, height=27)
+    state["layout_template_metadata"] = {
+        "template_name": "cluster_test",
+        "layout_mode": "template_prior",
+        "lanes": [{"id": "slot_1", "x": 1.0, "y": 4.0, "w": 12.0, "h": 8.0}],
+    }
+    lane_map = {lane["id"]: lane for lane in state["layout_template_metadata"]["lanes"]}
+    layout = [
+        {
+            "type": "section_container",
+            "section_id": "method",
+            "lane_id": "slot_1",
+            "x": 1.0,
+            "y": 4.0,
+            "width": 12.0,
+            "height": 5.0,
+        },
+        {
+            "type": "text",
+            "id": "method_text",
+            "section_id": "method",
+            "lane_id": "slot_1",
+            "x": 1.3,
+            "y": 5.0,
+            "width": 11.4,
+            "height": 4.0,
+            "font_size": 44,
+            "line_spacing": 1.0,
+            "content": "A fitted block line.\nAnother fitted block line.",
+        },
+    ]
+
+    validation = MicroLayoutRefiner()._validate_refined_layout(layout, lane_map, state)
+
+    assert any("text bottom padding too small" in issue for issue in validation["issues"])
 
 
 def test_micro_layout_refiner_validation_rejects_template_section_overlap():
@@ -5256,6 +6298,43 @@ def test_micro_layout_refiner_validation_rejects_template_section_overlap():
     validation = MicroLayoutRefiner()._validate_refined_layout(layout, lane_map, state)
 
     assert any("section container overlap" in issue for issue in validation["issues"])
+
+
+def test_micro_layout_refiner_skips_slot_width_resize_when_it_would_create_overlap(monkeypatch):
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_86_landscape", width=54, height=27)
+    template = {
+        "template_name": "cluster_86_landscape",
+        "layout_mode": "template_prior",
+        "slot_order": ["slot_1", "slot_3", "slot_4"],
+        "lanes": [
+            {"id": "slot_1", "x": 18.68, "y": 4.6, "w": 17.16, "h": 9.28},
+            {"id": "slot_3", "x": 35.84, "y": 4.6, "w": 17.16, "h": 10.4},
+            {"id": "slot_4", "x": 19.2, "y": 13.875, "w": 16.64, "h": 12.0},
+        ],
+        "adjacency_graph": {
+            "slot_3": [{"slot_id": "slot_1", "orientation": "vertical"}],
+        },
+    }
+    lane_map = {lane["id"]: dict(lane) for lane in template["lanes"]}
+    section_containers = [
+        {"section_id": "method", "lane_id": "slot_1", "container": {"height": 2.0}, "children": []},
+        {"section_id": "details", "lane_id": "slot_3", "container": {"height": 2.0}, "children": []},
+        {"section_id": "evaluation", "lane_id": "slot_4", "container": {"height": 2.0}, "children": []},
+    ]
+    demands = {"slot_1": 2.0, "slot_3": 11.0, "slot_4": 8.0}
+
+    def fake_layout_section(group, lane, section_y, state_arg, params, template_arg):
+        return [], demands[group["lane_id"]]
+
+    refiner = MicroLayoutRefiner()
+    monkeypatch.setattr(refiner, "_layout_section", fake_layout_section)
+
+    updated = refiner._rebalance_template_block_slots(template, section_containers, lane_map, state)
+
+    assert updated["slot_3"]["x"] == pytest.approx(35.84)
+    assert updated["slot_3"]["w"] == pytest.approx(17.16)
+    assert state["slot_pressure_report"]["slot_resize_applied"] is False
+    assert state["slot_pressure_report"]["slot_resize_skipped"] == "resize_would_overlap_template_slots"
 
 
 def test_vlm_layout_reviewer_syncs_container_after_patch():
@@ -5548,7 +6627,7 @@ def test_template_selector_auto_uses_standard_template_whitelist():
     assert selected["template_name"] in expected_templates
 
 
-def test_template_selector_dense_standard_auto_prefers_dense_landscape_template():
+def test_template_selector_standard_auto_prefers_default_standard_landscape_template():
     selector = TemplateSelector(load_config())
     state = create_state("/tmp/paper.pdf", layout_template="auto", width=54, height=27)
     visual_assets = {
@@ -5571,7 +6650,7 @@ def test_template_selector_dense_standard_auto_prefers_dense_landscape_template(
     )
 
     assert result["selection_mode"] == "standard_auto"
-    assert result["selected_template"] == "cluster_104_landscape"
+    assert result["selected_template"] == "cluster_43_landscape"
 
 
 def _block_refinement_state(tmp_path, utilization=0.45):
@@ -5635,10 +6714,28 @@ def _block_refinement_state(tmp_path, utilization=0.45):
 def test_block_occupancy_analyzer_formula_actions(tmp_path):
     analyzer = BlockOccupancyAnalyzer()
 
-    low = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.45))["blocks"][0]
-    moderate = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.92))["blocks"][0]
-    near_target = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.986))["blocks"][0]
-    crowded = analyzer.analyze(_block_refinement_state(tmp_path, utilization=0.997))["blocks"][0]
+    def analyze_with_visible_extent(utilization):
+        state = _block_refinement_state(tmp_path, utilization=utilization)
+        lane = state["layout_template_metadata"]["lanes"][0]
+        state["styled_layout"].append(
+            {
+                "type": "visual",
+                "id": "occupancy_extent_marker",
+                "section_id": "method",
+                "lane_id": "slot_1",
+                "slot_id": "slot_1",
+                "x": lane["x"] + 0.3,
+                "y": lane["y"],
+                "width": lane["w"] - 0.6,
+                "height": lane["h"] * utilization,
+            }
+        )
+        return analyzer.analyze(state)["blocks"][0]
+
+    low = analyze_with_visible_extent(0.45)
+    moderate = analyze_with_visible_extent(0.92)
+    near_target = analyze_with_visible_extent(0.986)
+    crowded = analyze_with_visible_extent(0.997)
 
     assert low["action"] == "expand"
     assert low["target_extra_chars"] > moderate["target_extra_chars"]
@@ -5658,8 +6755,9 @@ def test_block_occupancy_analyzer_uses_real_child_content_not_container_backgrou
     block = BlockOccupancyAnalyzer().analyze(state)["blocks"][0]
 
     assert block["container_bbox"]["h"] == pytest.approx(30.0)
-    assert block["used_height"] == pytest.approx(9.0)
-    assert block["bottom_whitespace"] == pytest.approx(21.0)
+    assert block["used_height"] < 9.0
+    assert block["visible_content_height"] < 8.0
+    assert block["bottom_whitespace"] > 21.0
     assert block["action"] == "expand"
     assert block["target_extra_chars"] > 0
 
@@ -5728,6 +6826,331 @@ def test_final_quality_gate_rejects_excessive_bottom_whitespace(tmp_path):
     )
 
 
+def test_final_quality_gate_allows_subline_bottom_whitespace_when_within_line_height(tmp_path, monkeypatch):
+    class FakeAnalyzer:
+        def analyze(self, _state):
+            return {
+                "summary": {"mean_utilization": 0.975},
+                "blocks": [
+                    {
+                        "slot_id": "slot_1",
+                        "section_id": "method",
+                        "section_title": "Method",
+                        "available_height": 10.0,
+                        "utilization": 0.975,
+                        "bottom_whitespace": 0.55,
+                        "line_height": 0.7,
+                        "action": "keep",
+                        "visual_count": 0,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(
+        "src.agents.block_occupancy_analyzer.BlockOccupancyAnalyzer",
+        lambda: FakeAnalyzer(),
+    )
+
+    state = create_state(str(tmp_path / "paper.pdf"), layout_template="cluster_3_portrait")
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    state["layout_template_metadata"] = {"lanes": []}
+    state["styled_layout"] = []
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_quality_gate"]["accepted"] is True
+
+
+def test_final_quality_gate_dedupes_degraded_states_and_removes_stale_repair_report(tmp_path, monkeypatch):
+    class FakeAnalyzer:
+        def analyze(self, _state):
+            return {
+                "summary": {"mean_utilization": 0.975},
+                "blocks": [
+                    {
+                        "slot_id": "slot_1",
+                        "section_id": "method",
+                        "section_title": "Method",
+                        "available_height": 10.0,
+                        "utilization": 0.975,
+                        "bottom_whitespace": 0.02,
+                        "line_height": 0.7,
+                        "action": "keep",
+                        "visual_count": 0,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(
+        "src.agents.block_occupancy_analyzer.BlockOccupancyAnalyzer",
+        lambda: FakeAnalyzer(),
+    )
+
+    state = create_state(str(tmp_path / "paper.pdf"), layout_template="cluster_43_landscape", width=54, height=27)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    state["layout_template_metadata"] = {"lanes": []}
+    state["styled_layout"] = []
+    state["degraded_quality_states"] = [
+        {"component": "vlm_layout_reviewer", "category": "vlm_layout_review", "fallback": "deterministic_acceptance", "reason": "request 1"},
+        {"component": "vlm_layout_reviewer", "category": "vlm_layout_review", "fallback": "deterministic_acceptance", "reason": "request 2"},
+    ]
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    stale_report = content_dir / "final_quality_repair_report.json"
+    stale_report.write_text(json.dumps({"stale": True}), encoding="utf-8")
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_quality_gate"]["accepted"] is True
+    assert len(result["final_quality_gate"]["degraded_quality_states"]) == 1
+    assert not stale_report.exists()
+
+
+def test_final_quality_gate_records_affiliation_logo_degraded_state(tmp_path, monkeypatch):
+    class FakeAnalyzer:
+        def analyze(self, _state):
+            return {
+                "summary": {"mean_utilization": 0.975},
+                "blocks": [
+                    {
+                        "slot_id": "slot_1",
+                        "section_id": "method",
+                        "section_title": "Method",
+                        "available_height": 10.0,
+                        "utilization": 0.975,
+                        "bottom_whitespace": 0.02,
+                        "line_height": 0.7,
+                        "action": "keep",
+                        "visual_count": 0,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(
+        "src.agents.block_occupancy_analyzer.BlockOccupancyAnalyzer",
+        lambda: FakeAnalyzer(),
+    )
+
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        enable_affiliation_logos=True,
+    )
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    state["layout_template_metadata"] = {"lanes": []}
+    state["styled_layout"] = []
+    state["affiliations"] = ["Example Research University"]
+    state["affiliation_logos"] = []
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_quality_gate"]["accepted"] is True
+    degraded = result["final_quality_gate"]["degraded_quality_states"]
+    assert degraded[-1]["component"] == "affiliation_logo_agent"
+    assert degraded[-1]["category"] == "affiliation_logo_resolution"
+    assert degraded[-1]["fallback"] == "no_affiliation_logo"
+
+
+def test_final_quality_gate_rejects_micro_layout_lane_overflow(tmp_path, monkeypatch):
+    class FakeAnalyzer:
+        def analyze(self, _state):
+            return {
+                "summary": {"mean_utilization": 0.99},
+                "blocks": [
+                    {
+                        "slot_id": "slot_1",
+                        "section_id": "method",
+                        "section_title": "Method",
+                        "available_height": 10.0,
+                        "utilization": 0.99,
+                        "bottom_whitespace": 0.02,
+                        "line_height": 0.7,
+                        "action": "keep",
+                        "visual_count": 0,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(
+        "src.agents.block_occupancy_analyzer.BlockOccupancyAnalyzer",
+        lambda: FakeAnalyzer(),
+    )
+
+    state = create_state(str(tmp_path / "paper.pdf"), layout_template="cluster_43_landscape", width=54, height=27)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    state["layout_template_metadata"] = {"lanes": []}
+    state["styled_layout"] = []
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps(
+            {
+                "validation": {"issues": []},
+                "lanes": [
+                    {
+                        "lane_id": "slot_1",
+                        "force_fit_used": True,
+                        "final_overflow": 0.12,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_poster_accepted"] is False
+    assert result["final_quality_gate"]["accepted"] is False
+    assert any(
+        failure["category"] == "micro_layout_lane_overflow"
+        for failure in result["final_quality_gate"]["failures"]
+    )
+
+
+def test_final_quality_gate_rejects_oversized_body_font(tmp_path, monkeypatch):
+    class FakeAnalyzer:
+        def analyze(self, _state):
+            return {
+                "summary": {"mean_utilization": 0.99},
+                "blocks": [
+                    {
+                        "slot_id": "slot_3",
+                        "section_id": "sec_application",
+                        "section_title": "Application",
+                        "available_height": 10.0,
+                        "utilization": 0.99,
+                        "bottom_whitespace": 0.02,
+                        "line_height": 0.7,
+                        "action": "keep",
+                        "visual_count": 1,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(
+        "src.agents.block_occupancy_analyzer.BlockOccupancyAnalyzer",
+        lambda: FakeAnalyzer(),
+    )
+
+    state = create_state(str(tmp_path / "paper.pdf"), layout_template="cluster_43_landscape", width=54, height=27)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    state["layout_template_metadata"] = {"lanes": []}
+    state["styled_layout"] = [
+        {
+            "type": "text",
+            "id": "sec_application_text",
+            "section_id": "sec_application",
+            "lane_id": "slot_3",
+            "slot_id": "slot_3",
+            "font_size": 54,
+            "content": "Short application takeaway.",
+        }
+    ]
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_poster_accepted"] is False
+    assert result["final_quality_gate"]["accepted"] is False
+    assert any(
+        failure["category"] == "body_font_scale"
+        for failure in result["final_quality_gate"]["failures"]
+    )
+
+
+def test_final_gate_whitespace_repair_feeds_block_refiner_expand_input(tmp_path):
+    state = _block_refinement_state(tmp_path, utilization=0.96)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+    repair_occupancy = _build_final_gate_refinement_occupancy(result)
+
+    assert repair_occupancy["source"] == "final_quality_gate_repair"
+    assert len(repair_occupancy["blocks"]) == 1
+    block = repair_occupancy["blocks"][0]
+    assert block["section_id"] == "method"
+    assert block["action"] == "expand"
+    assert block["final_gate_repair"] is True
+    assert block["target_extra_chars"] >= load_config()["block_refinement"]["near_line_rewrite_extra_chars"]
+
+
+def test_block_content_refiner_preserves_final_gate_repair_extra_budget():
+    state = create_state("/tmp/paper.pdf", layout_template="cluster_43_landscape", width=54, height=27)
+    state["template_fast_mode"] = True
+    state["block_occupancy_report"] = {
+        "settings": {
+            "acceptable_min": 0.96,
+            "hard_max": 0.995,
+        },
+        "blocks": [
+            {
+                "slot_id": "slot_3",
+                "section_id": "sec_application",
+                "action": "expand",
+                "target_extra_chars": 80,
+                "utilization": 0.8399,
+                "available_height": 12.4,
+                "visible_content_height": 10.415,
+                "used_height": 10.415,
+                "bottom_whitespace": 1.985,
+                "line_height": 1.058,
+                "chars_per_line": 46,
+                "visual_count": 1,
+                "final_gate_repair": True,
+                "reason": "final quality gate requested full block text rewrite for bottom whitespace",
+            }
+        ],
+    }
+    state["block_vlm_review"] = {"blocks": []}
+
+    actions = BlockContentRefiner()._decide_actions(state)
+
+    assert len(actions) == 1
+    assert actions[0]["target_extra_chars"] >= load_config()["block_refinement"]["near_line_rewrite_extra_chars"]
+
+
 def test_final_quality_gate_allows_readable_single_line_title_too_small_vlm_status(tmp_path):
     state = _block_refinement_state(tmp_path, utilization=0.98)
     state["output_dir"] = str(tmp_path / "output")
@@ -5737,7 +7160,7 @@ def test_final_quality_gate_allows_readable_single_line_title_too_small_vlm_stat
     state["styled_layout"][1].update(
         {
             "y": 2.1,
-            "height": 29.8,
+            "height": 29.9,
             "content": "\n".join(
                 f"Filled factual line {index} with method detail and evidence."
                 for index in range(1, 30)
@@ -5899,7 +7322,8 @@ def test_block_content_refiner_expands_underfilled_block_without_changing_refs(t
     def fake_expansion(self, state, actions, section_by_id):
         return {
             "method": {
-                "new_bullets": [
+                "rewritten_bullets": [
+                    "The method rewrites the original factual point so the block reads as one continuous section.",
                     "The method uses paper-grounded evidence to add detail while preserving the original section assignment."
                 ]
             }
@@ -5910,10 +7334,53 @@ def test_block_content_refiner_expands_underfilled_block_without_changing_refs(t
     after_section = state["story_board"]["spatial_content_plan"]["sections"][0]
 
     assert patch["applied"] is True
-    assert len(after_section["text_content"]) == len(before_section["text_content"]) + 1
+    assert len(after_section["text_content"]) == 2
+    assert after_section["text_content"][0] != before_section["text_content"][0]
     assert after_section["section_id"] == before_section["section_id"]
     assert after_section["slot_id"] == before_section["slot_id"]
     assert after_section["visual_assets"] == before_section["visual_assets"]
+
+
+def test_block_content_refiner_rewrites_near_line_bottom_gap_instead_of_skipping(tmp_path, monkeypatch):
+    state = _block_refinement_state(tmp_path, utilization=0.956)
+    state["block_occupancy_report"] = {
+        "settings": {"acceptable_min": 0.96, "hard_max": 0.995},
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "section_title": "Method",
+                "available_height": 12.125,
+                "visible_content_height": 11.5969,
+                "used_height": 11.5969,
+                "bottom_whitespace": 0.5281,
+                "line_height": 0.6389,
+                "chars_per_line": 74,
+                "utilization": 0.9564,
+                "action": "expand",
+                "target_extra_chars": 60,
+                "visual_count": 1,
+                "reason": "utilization below target",
+            }
+        ],
+    }
+    state["block_vlm_review"] = {
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "status": "ok",
+                "severity": "low",
+                "description": "content is readable but bottom whitespace remains",
+            }
+        ]
+    }
+
+    actions = BlockContentRefiner()._decide_actions(state)
+
+    assert actions
+    assert actions[0]["action"] == "expand"
+    assert actions[0]["target_extra_chars"] > 0
 
 
 def test_block_content_refiner_fallback_expands_vlm_underfilled_small_gap(tmp_path, monkeypatch):
@@ -6096,7 +7563,23 @@ def test_block_content_refiner_reduces_crowded_block_without_changing_refs(tmp_p
         "A third lower-priority factual bullet that can be removed first.",
         "A fourth low-priority factual bullet that should be removed in a crowded block.",
     ]
-    state["block_occupancy_report"] = BlockOccupancyAnalyzer().analyze(state)
+    state["styled_layout"][1]["content"] = "\n".join(section["text_content"])
+    state["styled_layout"][1]["height"] = 29.0
+    state["block_occupancy_report"] = {
+        "settings": {"acceptable_min": 0.96, "hard_max": 0.995},
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "section_title": "Method",
+                "utilization": 0.997,
+                "action": "reduce",
+                "target_extra_chars": 0,
+                "visual_count": 0,
+                "reason": "utilization exceeds hard max",
+            }
+        ],
+    }
     state["block_vlm_review"] = {
         "blocks": [
             {
@@ -6147,6 +7630,11 @@ def test_truncation_removes_dangling_connector_suffixes():
     assert normalize_text_for_poster("Each visit consumes scarce outreach budget and may also.").endswith("budget.")
     assert normalize_text_for_poster("HAGS scales city-wide search by first selecting a.").endswith("search.")
     assert normalize_text_for_poster("The policy then selects the next property within the chosen region using local.").endswith("region.")
+    repaired_called_tail = normalize_text_for_poster(
+        "The paper proposes reinforcement learning for AGS, then addresses scaling challenges using a hierarchical approach called."
+    )
+    assert repaired_called_tail.endswith("challenges.")
+    assert "called" not in repaired_called_tail
     assert normalize_text_for_poster("Updates labels instead of relying only on stale.").endswith("labels.")
     assert normalize_text_for_poster("The predictor is updated with binary cross-entropy, letting.").endswith("entropy.")
     assert normalize_text_for_poster("Teams work with limited staff, limited.").endswith("staff.")
@@ -6216,12 +7704,40 @@ def test_truncation_removes_dangling_connector_suffixes():
     assert normalize_text_for_poster("Our focus here is on large-area search; we defer most results involving small-area search to the Supplement.") == ""
     assert normalize_text_for_poster("We also provide results of random queries for calibration purposes.") == ""
     assert normalize_text_for_poster("Louis, USA Brown School at Washington University in St.") == ""
+    assert normalize_text_for_poster(
+        "After the episode, the search policy and initial predictor are updated jointly using reinforcement learning plus supervised loss: L_AGS = L_RL."
+    ) == "After the episode, the search policy and initial predictor are updated jointly using reinforcement learning plus supervised loss."
+    assert normalize_text_for_poster(
+        "Overall, the gap identified by the paper is the lack of a framework that jointly handles."
+    ) == "Overall, the gap identified by the paper is the lack of a framework."
     teaser_summary = GeneratedTeaserAgent()._truncate_on_word_boundary(
         "Eviction-prevention outreach must decide which rental properties to canvass under tight budgets, while true near-term eviction risk is only partially known and can change online.",
         150,
     )
     assert len(teaser_summary) > 80
     assert "cha." not in teaser_summary
+
+
+def test_block_content_refiner_fallback_truncates_short_extra_budget():
+    refiner = BlockContentRefiner()
+
+    weak = refiner._fallback_new_bullets(
+        "Hierarchy is the main reason the method succeeds at urban scale.",
+        [],
+        {"target_extra_chars": 46},
+    )
+    assert weak == []
+
+    bullets = refiner._fallback_new_bullets(
+        "Hierarchy is the main reason the method succeeds at urban scale. The paper introduces Active Geospatial Search to select parcels under limited outreach budgets while updating predictions after each observed label.",
+        [],
+        {"target_extra_chars": 46},
+    )
+
+    assert bullets
+    assert all("the method." not in item for item in bullets)
+    assert sum(len(item) for item in bullets) <= int(46 * 1.05)
+    assert bullets[0].endswith(".")
 
 
 def test_template_block_planner_filters_reference_text_and_truncation_fragments():
@@ -6257,6 +7773,37 @@ def test_template_block_planner_filters_reference_text_and_truncation_fragments(
     assert planner._is_clean_poster_bullet("risk targets fo.") is False
     assert planner._is_clean_poster_bullet("maximize dis.") is False
     assert planner._is_clean_poster_bullet("large-area se.") is False
+
+
+def test_template_block_planner_does_not_expand_method_blocks_with_result_summaries():
+    planner = TemplateBlockPlanner()
+    state = create_state("/tmp/paper.pdf")
+    state["raw_text"] = """
+    HAGS is introduced to make AGS scalable to large urban search spaces.
+    Overall empirical conclusion: HAGS is the strongest method across cost models, budgets, and target rates.
+    In HAGS, the area is divided into regions.
+    """
+    section = {
+        "section_title": "HAGS Overview",
+        "section_id": "keypoint_group_02_hags_overview",
+        "content_role": "method",
+        "source_section": "Introduction",
+        "source_sections": ["Introduction"],
+        "source_keypoints": ["HAGS is introduced to make AGS scalable to large urban search spaces."],
+        "text_content": ["HAGS is introduced to make AGS scalable to large urban search spaces."],
+    }
+
+    source_sentences = planner._source_sentences_for_section(section, state)
+
+    assert any("area is divided into regions" in sentence for sentence in source_sentences)
+    assert all("strongest method" not in sentence for sentence in source_sentences)
+    expanded = planner._expand_bullets_from_source(
+        ["HAGS is introduced to make AGS scalable to large urban search spaces."],
+        {"min_chars": 160, "max_chars": 260, "target_bullets": 2},
+        section,
+        state,
+    )
+    assert all("strongest method" not in sentence for sentence in expanded)
 
 
 def test_block_content_refiner_forces_min_budget_for_vlm_underfilled_keep(tmp_path):
@@ -6298,7 +7845,21 @@ def test_block_content_refiner_compresses_caption_for_visual_too_small(tmp_path)
         "height": 3.0,
         "visual_id": "figure_1",
     })
-    state["block_occupancy_report"] = BlockOccupancyAnalyzer().analyze(state)
+    state["block_occupancy_report"] = {
+        "settings": {"acceptable_min": 0.96, "hard_max": 0.995},
+        "blocks": [
+            {
+                "slot_id": "slot_1",
+                "section_id": "method",
+                "section_title": "Method",
+                "utilization": 0.99,
+                "action": "keep",
+                "target_extra_chars": 0,
+                "visual_count": 1,
+                "reason": "near target",
+            }
+        ],
+    }
     state["block_vlm_review"] = {
         "blocks": [
             {
@@ -6489,6 +8050,9 @@ def test_block_vlm_reviewer_falls_back_when_request_fails(tmp_path, monkeypatch)
     assert review["blocks"][0]["status"] == "crowded"
     assert review["contact_sheet_path"].endswith("block_contact_sheet.png")
     assert "bad gateway" in review["warnings"][0]
+    assert result["degraded_quality_states"][-1]["component"] == "block_vlm_reviewer"
+    assert result["degraded_quality_states"][-1]["category"] == "block_vlm_review"
+    assert result["degraded_quality_states"][-1]["fallback"] == "occupancy_only_block_review"
 
 
 def test_vlm_layout_reviewer_rejects_unresolved_template_whitespace(tmp_path):

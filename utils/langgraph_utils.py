@@ -11,11 +11,45 @@ from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.schema import HumanMessage, SystemMessage
 from langchain_community.callbacks.manager import get_openai_callback
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from src.state.poster_state import ModelConfig
 
 load_dotenv(override=True) # reload env every time
+
+
+def _status_code_from_exception(exc: Exception) -> Optional[int]:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return status_code if isinstance(status_code, int) else None
+
+
+def is_non_retryable_model_error(exc: Exception) -> bool:
+    status_code = _status_code_from_exception(exc)
+    if status_code in {400, 401, 403, 404}:
+        return True
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "authentication",
+            "unauthorized",
+            "invalid api key",
+            "incorrect api key",
+            "api key",
+            "permission denied",
+            "forbidden",
+            "model not found",
+            "无效的令牌",
+        )
+    )
+
+
+def is_retryable_model_error(exc: Exception) -> bool:
+    return not is_non_retryable_model_error(exc)
 
 
 def create_model(config: ModelConfig):
@@ -243,7 +277,11 @@ class LangGraphAgent:
         """reset conversation"""
         self.history = [SystemMessage(content=self.system_msg)]
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception(is_retryable_model_error),
+    )
     def step(self, message: str) -> 'AgentResponse':
         """process message and return response"""
         # check if message is json with image data
@@ -290,7 +328,7 @@ class LangGraphAgent:
             elif "rate limit" in str(e).lower():
                 print(f"⚠️  Rate limit exceeded for {self.config.provider}")
                 print("💡 Consider adding delays between requests")
-            elif "authentication" in str(e).lower() or "api key" in str(e).lower():
+            elif is_non_retryable_model_error(e):
                 print(f"⚠️  Authentication error for {self.config.provider}")
                 print("💡 Check your API key configuration")
             

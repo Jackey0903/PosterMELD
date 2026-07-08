@@ -240,6 +240,15 @@ class MicroLayoutRefiner:
                 break
 
         if transferred:
+            overlap_pair = self._first_overlapping_template_lane_pair(updated)
+            if overlap_pair:
+                state["slot_pressure_report"] = {
+                    "slots": report_slots,
+                    "slot_resize_applied": False,
+                    "slot_resize_skipped": "resize_would_overlap_template_slots",
+                    "overlap_pair": overlap_pair,
+                }
+                return lane_map
             ordered_ids = template_layout.get("slot_order") or [lane["id"] for lane in template_layout.get("lanes", [])]
             template_layout["lanes"] = [updated[lane_id] for lane_id in ordered_ids if lane_id in updated]
             template_layout["columns"] = template_layout["lanes"]
@@ -254,6 +263,31 @@ class MicroLayoutRefiner:
             "slot_resize_applied": False,
         }
         return updated
+
+    def _first_overlapping_template_lane_pair(self, lane_map: Dict[str, Dict[str, Any]]) -> Optional[List[str]]:
+        lanes = list(lane_map.values())
+        for index, left in enumerate(lanes):
+            for right in lanes[index + 1:]:
+                if self._lane_boxes_overlap(left, right):
+                    return [str(left.get("id") or ""), str(right.get("id") or "")]
+        return None
+
+    def _lane_boxes_overlap(self, left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+        tolerance = 0.02
+        left_x = float(left.get("x", 0.0) or 0.0)
+        left_y = float(left.get("y", 0.0) or 0.0)
+        left_right = left_x + float(left.get("w", left.get("width", 0.0)) or 0.0)
+        left_bottom = left_y + float(left.get("h", left.get("height", 0.0)) or 0.0)
+        right_x = float(right.get("x", 0.0) or 0.0)
+        right_y = float(right.get("y", 0.0) or 0.0)
+        right_right = right_x + float(right.get("w", right.get("width", 0.0)) or 0.0)
+        right_bottom = right_y + float(right.get("h", right.get("height", 0.0)) or 0.0)
+        return not (
+            left_right <= right_x + tolerance
+            or right_right <= left_x + tolerance
+            or left_bottom <= right_y + tolerance
+            or right_bottom <= left_y + tolerance
+        )
 
     def _transfer_slot_width(self, receiver: Dict[str, Any], donor: Dict[str, Any], max_shift_ratio: float, gutter: float) -> bool:
         shift = min(donor["w"] * max_shift_ratio, donor["w"] - 1.6)
@@ -532,13 +566,17 @@ class MicroLayoutRefiner:
             }
 
         force_fit_layout = self._force_fit_lane(best_layout or [], lane, state, template_layout)
+        final_overflow = self._lane_overflow(force_fit_layout, lane)
+        lane_height = max(float(lane.get("h", 0.0) or 0.0), 0.01)
         return {
             "elements": force_fit_layout,
             "report": {
                 "lane_id": lane["id"],
                 "force_fit_used": True,
                 "iterations": iteration_count,
-                "final_overflow": best_overflow,
+                "pre_force_fit_overflow": best_overflow,
+                "final_overflow": final_overflow,
+                "final_utilization": (lane_height + final_overflow) / lane_height,
                 "params": best_params,
             },
         }
@@ -677,6 +715,15 @@ class MicroLayoutRefiner:
             if index < len(groups) - 1:
                 current_y += params["section_gap"]
 
+        elements = self._stretch_table_visual_after_force_fit(
+            self._sync_container_bounds(elements),
+            lane,
+        )
+        elements = self._sync_container_bounds(elements)
+        current_y = max(
+            (float(element.get("y", 0.0) or 0.0) + float(element.get("height", 0.0) or 0.0))
+            for element in elements
+        )
         lane_bottom = lane["y"] + lane["h"]
         overflow = current_y - lane_bottom
         return elements, overflow
@@ -786,7 +833,10 @@ class MicroLayoutRefiner:
                 for visual in visual_elements:
                     lane_for_footprint = self._lane_with_poster_orientation(lane, state, template_layout)
                     aspect_ratio = visual.get("width", 1.0) / max(visual.get("height", 0.01), 0.01)
-                    scaled_width = min(visual_available_width, visual.get("width", visual_available_width) * params["visual_scale"])
+                    visual_scale = params["visual_scale"]
+                    if str(visual.get("visual_id") or visual.get("id") or "").startswith("generated_teaser"):
+                        visual_scale = max(visual_scale, 1.0)
+                    scaled_width = min(visual_available_width, visual.get("width", visual_available_width) * visual_scale)
                     scaled_height = scaled_width / max(aspect_ratio, 0.01)
                     scaled_width, scaled_height, footprint_report = enforce_visual_footprint(
                         visual.get("visual_id") or visual.get("id"),
@@ -836,7 +886,7 @@ class MicroLayoutRefiner:
                 target_bottom = (
                     float(lane["y"])
                     + float(lane["h"])
-                    - float(self.refine_config.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06)
+                    - self._real_content_fill_bottom_padding(template_layout)
                 )
                 max_text_height = max(target_bottom - current_y, 0.2)
                 text_element, font_size, line_spacing = self._expand_text_content_to_fill(
@@ -865,6 +915,7 @@ class MicroLayoutRefiner:
             text_element["height"] = (
                 measured["optimal_height"] * self.refine_config.get("text_height_safety_factor", 1.0)
                 + self.refine_config.get("text_height_safety_padding", 0.05)
+                + self.refine_config.get("text_box_overflow_safety_inches", 0.0)
             )
             text_element["font_size"] = font_size
             text_element["line_spacing"] = line_spacing
@@ -941,7 +992,7 @@ class MicroLayoutRefiner:
             return None
 
         lane_bottom = float(lane["y"]) + float(lane["h"])
-        bottom_padding = float(self.refine_config.get("bottom_takeaway_bottom_padding_inches", 0.06) or 0.06)
+        bottom_padding = self._real_content_fill_bottom_padding(template_layout)
         available_height = lane_bottom - bottom_padding - current_y
         if available_height < float(self.refine_config.get("wide_text_columns_min_height_inches", 2.2) or 2.2):
             return None
@@ -1082,8 +1133,6 @@ class MicroLayoutRefiner:
     ) -> tuple[List[Dict[str, Any]], float]:
         if not self._real_content_fill_enabled(template_layout):
             return elements, content_bottom
-        if str(template_layout.get("orientation") or "").lower() != "portrait":
-            return elements, content_bottom
 
         lane_bottom = float(lane["y"]) + float(lane["h"])
         bottom_gap = lane_bottom - content_bottom
@@ -1092,13 +1141,21 @@ class MicroLayoutRefiner:
         if bottom_gap <= allowed_gap:
             return elements, content_bottom
 
-        visuals = [element for element in elements if element.get("type") == "visual"]
+        visuals = [
+            element
+            for element in elements
+            if element.get("type") == "visual"
+            and not str(element.get("visual_id") or element.get("id") or "").startswith("generated_teaser")
+        ]
         if not visuals:
             return elements, content_bottom
         visual = max(
             visuals,
             key=lambda item: float(item.get("width", 0.0) or 0.0) * float(item.get("height", 0.0) or 0.0),
         )
+        split_layout = str(visual.get("portrait_split_layout") or "")
+        if split_layout in {"image_left_text_right", "text_left_image_right"}:
+            return elements, content_bottom
         visual_width = float(visual.get("width", 0.0) or 0.0)
         visual_height = float(visual.get("height", 0.0) or 0.0)
         if visual_width <= 0 or visual_height <= 0:
@@ -1109,15 +1166,20 @@ class MicroLayoutRefiner:
         max_width = max(float(lane["w"]) - 2 * padding, visual_width)
         max_height = max_width / max(aspect_ratio, 0.01)
         grow_by = min(bottom_gap - target_gap, max_height - visual_height)
+        stretch_height_only = False
+        if grow_by <= 0.03 and self._can_stretch_visual_height_to_absorb_gap(visual):
+            grow_by = bottom_gap - target_gap
+            stretch_height_only = grow_by > 0.03
         if grow_by <= 0.03:
             return elements, content_bottom
 
         old_visual_bottom = float(visual.get("y", 0.0) or 0.0) + visual_height
         new_height = visual_height + grow_by
-        new_width = min(new_height * aspect_ratio, max_width)
+        new_width = visual_width if stretch_height_only else min(new_height * aspect_ratio, max_width)
         visual["width"] = new_width
         visual["height"] = new_height
-        visual["x"] = float(lane["x"]) + (float(lane["w"]) - new_width) / 2
+        if not stretch_height_only:
+            visual["x"] = float(lane["x"]) + (float(lane["w"]) - new_width) / 2
 
         for element in elements:
             if element is visual:
@@ -1127,6 +1189,10 @@ class MicroLayoutRefiner:
                 element["y"] = element_y + grow_by
 
         return elements, content_bottom + grow_by
+
+    def _can_stretch_visual_height_to_absorb_gap(self, visual: Dict[str, Any]) -> bool:
+        visual_id = str(visual.get("visual_id") or visual.get("id") or "")
+        return visual_id.startswith("table_") or "_table_" in visual_id
 
     def _pack_wide_column_lines_for_fill(
         self,
@@ -1211,16 +1277,49 @@ class MicroLayoutRefiner:
         existing = {self._dedupe_text_key(line) for line in content.splitlines() if line.strip()}
         best_content = content
         best_measured = measured
+        max_candidate_chars = int(self.refine_config.get("real_content_fill_max_chars", 190) or 190)
+        min_candidate_chars = int(
+            self.refine_config.get(
+                "real_content_fill_min_candidate_chars",
+                self.refine_config.get("portrait_split_text_min_candidate_chars", 42),
+            )
+            or 42
+        )
         for candidate in candidates:
             key = self._dedupe_text_key(candidate)
             if not key or key in existing:
                 continue
-            trial = (best_content.rstrip() + "\n" + candidate).strip()
-            trial_measured = self._text_height_for_width(trial, text_width, text_element, font_size, line_spacing, template_layout)
-            if trial_measured <= max_height + height_tolerance:
-                best_content = trial
-                best_measured = trial_measured
-                existing.add(key)
+
+            best_trial_content = None
+            best_trial_measured = best_measured
+            for limit in self._split_candidate_char_limits(max_candidate_chars):
+                trimmed = self._truncate_takeaway(str(candidate or "").strip(), limit)
+                plain = self._strip_markup_for_measurement(trimmed).strip()
+                trimmed_key = self._dedupe_text_key(trimmed)
+                if len(plain) < min_candidate_chars or not trimmed_key or trimmed_key in existing:
+                    continue
+                if self._is_bad_fill_sentence(plain):
+                    continue
+                trial = (best_content.rstrip() + "\n" + trimmed).strip()
+                trial_measured = self._text_height_for_width(
+                    trial,
+                    text_width,
+                    text_element,
+                    font_size,
+                    line_spacing,
+                    template_layout,
+                )
+                if trial_measured <= max_height + height_tolerance and trial_measured > best_trial_measured + 0.01:
+                    best_trial_content = trial
+                    best_trial_measured = trial_measured
+                if target_height - best_trial_measured < threshold:
+                    break
+
+            if best_trial_content is not None:
+                best_content = best_trial_content
+                best_measured = best_trial_measured
+                existing.add(self._dedupe_text_key(candidate))
+                existing.add(self._dedupe_text_key(best_content.splitlines()[-1]))
             if target_height - best_measured < threshold:
                 break
 
@@ -1271,31 +1370,91 @@ class MicroLayoutRefiner:
         current_content: str,
         max_items: int,
     ) -> List[str]:
-        max_chars = int(self.refine_config.get("real_content_fill_max_chars", 190) or 190)
-        section = self._story_section_by_id(state, section_id)
-        candidates: List[str] = []
-        candidates.extend(self._section_sentence_candidates(section))
-        candidates.extend(self._bottom_fill_texts(section_id, state, max_items))
-        candidates.extend(self._source_sentence_candidates(section_id, state))
-
-        existing = {self._dedupe_text_key(line) for line in str(current_content or "").splitlines() if line.strip()}
-        result = []
-        seen = set(existing)
-        for candidate in candidates:
-            text = self._truncate_takeaway(str(candidate or "").strip(), max_chars)
-            key = self._dedupe_text_key(text)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            result.append(text)
-            if len(result) >= max_items:
-                break
         current_lines = [
             line.strip()
             for line in self._clean_existing_fill_content(str(current_content or "")).splitlines()
             if line.strip()
         ]
+        section = self._story_section_by_id(state, section_id)
+        allow_new_lines = bool(self.refine_config.get("real_content_fill_allow_new_lines", False))
+        teaser_fill = False
+        if (
+            not allow_new_lines
+            and bool(self.refine_config.get("real_content_fill_allow_teaser_new_lines", True))
+            and self._section_has_generated_teaser(section)
+        ):
+            allow_new_lines = True
+            teaser_fill = True
+        if not allow_new_lines:
+            return current_lines
+
+        max_chars = int(self.refine_config.get("real_content_fill_max_chars", 190) or 190)
+        max_new_lines = max_items
+        if teaser_fill:
+            max_new_lines = int(self.refine_config.get("real_content_fill_teaser_max_new_lines", 1) or 1)
+        candidates: List[str] = []
+        candidates.extend(self._section_sentence_candidates(section))
+        candidates.extend(self._source_sentence_candidates(section_id, state))
+
+        existing = {self._dedupe_text_key(line) for line in current_lines}
+        result = []
+        seen = set(existing)
+        for candidate in candidates:
+            text = self._truncate_takeaway(str(candidate or "").strip(), max_chars)
+            text = self._apply_fill_keyword_highlighting(text, section_id, state)
+            key = self._dedupe_text_key(text)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(text)
+            if len(result) >= max_new_lines:
+                break
         return current_lines + result
+
+    def _apply_fill_keyword_highlighting(self, text: str, section_id: str, state: PosterState) -> str:
+        if not text or any(marker in text for marker in ("<color:", "**", "*")):
+            return text
+        section_keywords = ((state.get("keywords") or {}).get("section_keywords") or {})
+        keywords = section_keywords.get(section_id) or section_keywords.get(section_id.removeprefix("sec_"))
+        if not keywords:
+            return text
+        colors = state.get("color_scheme") or {}
+        highlight_color = str(colors.get("contrast") or colors.get("theme") or "#1E3A8A")
+        formatted = text
+        for style_name, wrapper in (
+            ("bold_contrast", lambda value: f"<color:{highlight_color}>{value}</color>"),
+            ("bold", lambda value: f"**{value}**"),
+            ("italic", lambda value: f"*{value}*"),
+        ):
+            for keyword in keywords.get(style_name) or []:
+                formatted = self._highlight_fill_keyword(formatted, str(keyword or ""), wrapper)
+        return formatted
+
+    def _highlight_fill_keyword(self, text: str, keyword: str, wrapper) -> str:
+        keyword = keyword.strip()
+        if not keyword:
+            return text
+        pattern = rf"\b{re.escape(keyword)}\b"
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            if self._inside_existing_inline_markup(text, match.start()):
+                continue
+            matched = match.group(0)
+            return text[: match.start()] + wrapper(matched) + text[match.end() :]
+        return text
+
+    def _inside_existing_inline_markup(self, text: str, index: int) -> bool:
+        for match in re.finditer(r"<color:[^>]+>.*?</color>|\*\*.*?\*\*|\*[^*]+\*", text):
+            if match.start() <= index < match.end():
+                return True
+        return False
+
+    def _section_has_generated_teaser(self, section: Dict[str, Any]) -> bool:
+        if bool(section.get("generated_teaser_summary")):
+            return True
+        for visual in section.get("visual_assets") or []:
+            if str((visual or {}).get("visual_id") or "").startswith("generated_teaser"):
+                return True
+        return False
 
     def _source_sentence_candidates(self, section_id: str, state: PosterState) -> List[str]:
         section = self._story_section_by_id(state, section_id)
@@ -1309,6 +1468,8 @@ class MicroLayoutRefiner:
                 continue
             overlap = len(query_terms & self._terms(clean))
             source_match = self._source_section_match_bonus(section, clean)
+            if overlap + source_match <= 0:
+                continue
             scored.append((overlap + source_match + 1, len(clean), clean))
         scored.sort(key=lambda item: (-item[0], item[1]))
         return [item[2] for item in scored[:24]]
@@ -1385,6 +1546,14 @@ class MicroLayoutRefiner:
         return 1 if source_terms & self._terms(sentence) else 0
 
     def _is_bad_fill_sentence(self, text: str) -> bool:
+        if self._is_bad_existing_fill_sentence(text):
+            return True
+        cleaned = str(text or "").strip()
+        if re.match(r"^[A-Z][A-Za-z ,.'’:-]{10,90}\.\s*$", cleaned) and len(self._terms(cleaned)) <= 8:
+            return True
+        return False
+
+    def _is_bad_existing_fill_sentence(self, text: str) -> bool:
         cleaned = str(text or "").strip()
         lowered = cleaned.lower()
         if re.match(r"^\d{4}\.\s+", cleaned):
@@ -1401,8 +1570,6 @@ class MicroLayoutRefiner:
             return True
         if re.search(r"\b(in:|eds?\.|vol\.|pp\.)\b", lowered):
             return True
-        if re.match(r"^[A-Z][A-Za-z ,.'’:-]{10,90}\.\s*$", cleaned) and len(self._terms(cleaned)) <= 8:
-            return True
         return False
 
     def _clean_existing_fill_content(self, content: str) -> str:
@@ -1417,7 +1584,7 @@ class MicroLayoutRefiner:
             if repaired_plain != plain:
                 plain = repaired_plain.strip()
                 line = repaired_plain.strip()
-            if self._is_bad_fill_sentence(plain):
+            if self._is_bad_existing_fill_sentence(plain):
                 continue
             key = self._dedupe_text_key(plain)
             if not key or key in seen:
@@ -1446,6 +1613,7 @@ class MicroLayoutRefiner:
         return (
             float(measured["optimal_height"]) * self.refine_config.get("text_height_safety_factor", 1.0)
             + self.refine_config.get("text_height_safety_padding", 0.05)
+            + self.refine_config.get("text_box_overflow_safety_inches", 0.0)
         )
 
     def _dedupe_text_key(self, text: str) -> str:
@@ -1495,9 +1663,27 @@ class MicroLayoutRefiner:
         return 0.04
 
     def _real_content_fill_spacing_step(self, template_layout: Dict[str, Any]) -> float:
+        configured = self.refine_config.get("real_content_fill_spacing_step")
+        if configured is not None:
+            return float(configured or 0.01)
         if str(template_layout.get("orientation") or "").lower() == "portrait":
             return 0.01
-        return 0.02
+        return 0.01
+
+    def _real_content_fill_bottom_padding(self, template_layout: Dict[str, Any]) -> float:
+        default = float(
+            self.refine_config.get(
+                "real_content_fill_bottom_padding_inches",
+                self.refine_config.get("bottom_takeaway_bottom_padding_inches", 0.06),
+            )
+            or 0.06
+        )
+        if str(template_layout.get("orientation") or "").lower() != "portrait":
+            return default
+        return float(
+            self.refine_config.get("portrait_real_content_fill_bottom_padding_inches", default)
+            or default
+        )
 
     def _final_bottom_whitespace_limit(self, lane: Dict[str, Any]) -> float:
         block_settings = self.config.get("block_refinement", {})
@@ -1711,6 +1897,7 @@ class MicroLayoutRefiner:
         return (
             float(measured["optimal_height"]) * self.refine_config.get("text_height_safety_factor", 1.0)
             + self.refine_config.get("text_height_safety_padding", 0.05)
+            + self.refine_config.get("text_box_overflow_safety_inches", 0.0)
         )
 
     def _bottom_takeaway_element(
@@ -1771,63 +1958,12 @@ class MicroLayoutRefiner:
     def _bottom_takeaway_text(self, section_id: str, state: PosterState) -> str:
         max_chars = int(self.refine_config.get("bottom_takeaway_max_chars", 92) or 92)
         section = self._story_section_by_id(state, section_id)
-        title = str(section.get("section_title") or "").lower()
-        role = str(section.get("content_role") or "").lower()
-
-        if "hierarchy" in title or "hags" in title:
-            text = "Key benefit: city-scale search without a flat action space."
-        elif "result" in title or role == "results":
-            text = "Operational takeaway: prioritize regions first, then parcels."
-        elif "problem" in title or "search" in title or role in {"foundation", "motivation"}:
-            text = "Adaptive routing turns each visit into new evidence."
-        elif "method" in role or "ags" in title:
-            text = "Mechanism: predict risk, query parcel, update route."
-        else:
-            text = self._last_text_sentence(section)
+        text = self._last_text_sentence(section)
         return self._truncate_takeaway(text, max_chars)
 
     def _bottom_fill_texts(self, section_id: str, state: PosterState, max_items: int) -> List[str]:
         section = self._story_section_by_id(state, section_id)
-        title = str(section.get("section_title") or "").lower()
-        role = str(section.get("content_role") or "").lower()
-        candidates: List[str] = []
-
-        if "result" in title or role == "results":
-            candidates.extend(
-                [
-                    "<color:#7A1F2B>HAGS</color> stays strongest across the displayed query budgets.",
-                    "The hierarchy matters most when outreach visits are scarce.",
-                    "Region-first search avoids spending budget in low-yield areas.",
-                    "Parcel-level updates exploit each new observation immediately.",
-                    "Travel-aware settings amplify the gains over greedy baselines.",
-                ]
-            )
-        elif "hierarchy" in title or "hags" in title:
-            candidates.extend(
-                [
-                    "<color:#7A1F2B>HAGS</color> turns a city-scale search into reusable local decisions.",
-                    "The high-level policy selects regions before parcels.",
-                    "The shared predictor transfers evidence across neighborhoods.",
-                ]
-            )
-        elif "method" in role or "ags" in title:
-            candidates.extend(
-                [
-                    "Predict risk, query a parcel, then update the route.",
-                    "Each observation changes both the classifier and the search policy.",
-                    "Adaptive search balances exploration with immediate outreach yield.",
-                ]
-            )
-        elif "problem" in title or "search" in title or role in {"foundation", "motivation"}:
-            candidates.extend(
-                [
-                    "Outreach teams must choose visits under time and travel limits.",
-                    "Risk information is partial, local, and quickly changing.",
-                    "Adaptive routing turns each visit into new evidence.",
-                ]
-            )
-
-        candidates.extend(self._section_sentence_candidates(section))
+        candidates: List[str] = self._section_sentence_candidates(section)
         deduped = []
         seen = set()
         for candidate in candidates:
@@ -2126,6 +2262,8 @@ class MicroLayoutRefiner:
         content_bottom: float,
     ) -> Optional[Dict[str, Any]]:
         if not self._real_content_fill_enabled(template_layout):
+            return None
+        if not bool(self.refine_config.get("bottom_takeaway_enabled", False)):
             return None
         lane_bottom = float(lane["y"]) + float(lane["h"])
         allowed_gap = self._final_bottom_whitespace_limit(lane)
@@ -2582,7 +2720,11 @@ class MicroLayoutRefiner:
         line_spacing: float,
         template_layout: Dict[str, Any],
     ) -> Dict[str, float]:
-        if template_layout.get("extracted_template") or template_layout.get("orientation") == "portrait":
+        if (
+            bool(self.refine_config.get("use_fast_text_height_measurement", True))
+            or template_layout.get("extracted_template")
+            or template_layout.get("orientation") == "portrait"
+        ):
             return {
                 "optimal_height": self._estimate_text_height_fast(
                     text_content,
@@ -2761,7 +2903,195 @@ class MicroLayoutRefiner:
                 )
 
             compressed.append(item)
-        return self._sync_container_bounds(compressed)
+        compressed = self._sync_container_bounds(compressed)
+        compressed = self._stretch_table_visual_after_force_fit(compressed, lane)
+        compressed = self._sync_container_bounds(compressed)
+        return self._settle_force_fit_lane(compressed, lane, state, template_layout)
+
+    def _settle_force_fit_lane(
+        self,
+        elements: List[Dict[str, Any]],
+        lane: Dict[str, Any],
+        state: PosterState,
+        template_layout: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        settled = self._sync_container_bounds(elements, allow_shrink=True)
+        overflow_tolerance = 0.02
+        for _ in range(4):
+            overflow = self._lane_overflow(settled, lane)
+            if overflow <= overflow_tolerance:
+                return settled
+            if not self._shrink_force_fit_visuals_to_absorb_overflow(
+                settled,
+                lane,
+                state,
+                template_layout,
+                overflow + overflow_tolerance,
+            ):
+                break
+            settled = self._sync_container_bounds(settled, allow_shrink=True)
+        return settled
+
+    def _lane_overflow(self, elements: List[Dict[str, Any]], lane: Dict[str, Any]) -> float:
+        if not elements:
+            return 0.0
+        lane_bottom = float(lane["y"]) + float(lane["h"])
+        max_bottom = max(
+            float(element.get("y", 0.0) or 0.0) + float(element.get("height", 0.0) or 0.0)
+            for element in elements
+        )
+        return max_bottom - lane_bottom
+
+    def _shrink_force_fit_visuals_to_absorb_overflow(
+        self,
+        elements: List[Dict[str, Any]],
+        lane: Dict[str, Any],
+        state: PosterState,
+        template_layout: Dict[str, Any],
+        needed: float,
+    ) -> bool:
+        remaining = max(float(needed), 0.0)
+        if remaining <= 0.0:
+            return False
+
+        candidates = [
+            element
+            for element in elements
+            if element.get("type") == "visual"
+            and self._force_fit_visual_shrink_headroom(element) > 0.02
+        ]
+        candidates.sort(
+            key=lambda item: (
+                float(item.get("y", 0.0) or 0.0),
+                -self._force_fit_visual_shrink_headroom(item),
+            )
+        )
+
+        changed = False
+        for visual in candidates:
+            if remaining <= 0.0:
+                break
+            headroom = self._force_fit_visual_shrink_headroom(visual)
+            shrink_by = min(headroom, remaining)
+            if shrink_by <= 0.0:
+                continue
+
+            old_height = float(visual.get("height", 0.0) or 0.0)
+            old_width = float(visual.get("width", 0.0) or 0.0)
+            if old_height <= 0.0 or old_width <= 0.0:
+                continue
+
+            aspect = max(old_width / old_height, 0.2)
+            old_bottom = float(visual.get("y", 0.0) or 0.0) + old_height
+            target_height = max(old_height - shrink_by, 0.05)
+            target_width = target_height * aspect
+            lane_for_footprint = dict(lane)
+            lane_for_footprint.setdefault(
+                "poster_orientation",
+                template_layout.get("orientation")
+                or (
+                    "portrait"
+                    if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0)
+                    else "landscape"
+                ),
+            )
+            max_visual_width = max(lane["w"] - 2 * self.refine_config.get("min_text_padding", 0.18), 0.4)
+            protected_width, protected_height, footprint_report = enforce_visual_footprint(
+                visual.get("visual_id") or visual.get("id"),
+                target_width,
+                target_height,
+                max_visual_width,
+                lane_for_footprint,
+                state,
+                self.config,
+            )
+            actual_shrink = old_height - protected_height
+            if actual_shrink <= 0.01:
+                continue
+
+            center_x = float(lane.get("x", 0.0) or 0.0) + float(lane.get("w", 0.0) or 0.0) / 2
+            visual["width"] = protected_width
+            visual["height"] = protected_height
+            visual["x"] = center_x - protected_width / 2
+            visual["visual_footprint"] = footprint_report
+
+            for element in elements:
+                if element is visual:
+                    continue
+                element_y = float(element.get("y", 0.0) or 0.0)
+                if element_y >= old_bottom - 0.02:
+                    element["y"] = element_y - actual_shrink
+
+            remaining -= actual_shrink
+            changed = True
+
+        return changed
+
+    def _force_fit_visual_shrink_headroom(self, visual: Dict[str, Any]) -> float:
+        width = float(visual.get("width", 0.0) or 0.0)
+        height = float(visual.get("height", 0.0) or 0.0)
+        if width <= 0.0 or height <= 0.0:
+            return 0.0
+        aspect = max(width / height, 0.2)
+        footprint = visual.get("visual_footprint") or {}
+        min_width = float(footprint.get("min_width", 0.0) or 0.0)
+        min_height = float(footprint.get("min_height", 0.0) or 0.0)
+        min_area = float(footprint.get("min_area", 0.0) or 0.0)
+        required_width = max(
+            min_width,
+            min_height * aspect,
+            (min_area * aspect) ** 0.5 if min_area > 0 else 0.0,
+        )
+        required_height = max(min_height, required_width / aspect if required_width > 0 else 0.0)
+        return max(height - required_height, 0.0)
+
+    def _stretch_table_visual_after_force_fit(
+        self,
+        elements: List[Dict[str, Any]],
+        lane: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        lane_bottom = float(lane["y"]) + float(lane["h"])
+        content_elements = [
+            element
+            for element in elements
+            if element.get("type") in {"section_title", "title_accent_block", "text", "visual"}
+        ]
+        if not content_elements:
+            return elements
+        content_bottom = max(
+            float(element.get("y", 0.0) or 0.0) + float(element.get("height", 0.0) or 0.0)
+            for element in content_elements
+        )
+        allowed_gap = self._final_bottom_whitespace_limit(lane)
+        target_gap = min(allowed_gap, 0.08)
+        bottom_gap = lane_bottom - content_bottom
+        if bottom_gap <= allowed_gap:
+            return elements
+        candidates = [
+            element
+            for element in elements
+            if element.get("type") == "visual" and self._can_stretch_visual_height_to_absorb_gap(element)
+        ]
+        if not candidates:
+            return elements
+
+        visual = max(
+            candidates,
+            key=lambda item: float(item.get("width", 0.0) or 0.0) * float(item.get("height", 0.0) or 0.0),
+        )
+        grow_by = max(bottom_gap - target_gap, 0.0)
+        if grow_by <= 0.03:
+            return elements
+
+        old_visual_bottom = float(visual.get("y", 0.0) or 0.0) + float(visual.get("height", 0.0) or 0.0)
+        visual["height"] = float(visual.get("height", 0.0) or 0.0) + grow_by
+        for element in elements:
+            if element is visual:
+                continue
+            element_y = float(element.get("y", 0.0) or 0.0)
+            if element_y >= old_visual_bottom - 0.02:
+                element["y"] = element_y + grow_by
+        return elements
 
     def _measured_text_box_height(self, item: Dict[str, Any], template_layout: Dict[str, Any]) -> float:
         plain_text = self._strip_markup_for_measurement(str(item.get("content") or ""))
@@ -2778,7 +3108,7 @@ class MicroLayoutRefiner:
             + self.refine_config.get("text_height_safety_padding", 0.05)
         )
 
-    def _sync_container_bounds(self, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _sync_container_bounds(self, elements: List[Dict[str, Any]], *, allow_shrink: bool = False) -> List[Dict[str, Any]]:
         containers = {
             str(element.get("section_id")): element
             for element in elements
@@ -2787,6 +3117,7 @@ class MicroLayoutRefiner:
         if not containers:
             return elements
 
+        required_by_section = {section_id: 0.0 for section_id in containers}
         for element in elements:
             if element.get("type") == "section_container":
                 continue
@@ -2800,7 +3131,18 @@ class MicroLayoutRefiner:
                 continue
             child_bottom = float(element.get("y", 0.0) or 0.0) + float(element.get("height", 0.0) or 0.0)
             required = child_bottom - float(parent.get("y", 0.0) or 0.0) + self.refine_config.get("container_bottom_padding", 0.0)
-            parent["height"] = max(float(parent.get("height", 0.0) or 0.0), required)
+            if allow_shrink:
+                required_by_section[str(parent.get("section_id"))] = max(
+                    required_by_section.get(str(parent.get("section_id")), 0.0),
+                    required,
+                )
+            else:
+                parent["height"] = max(float(parent.get("height", 0.0) or 0.0), required)
+
+        if allow_shrink:
+            for section_id, parent in containers.items():
+                if required_by_section.get(section_id, 0.0) > 0.0:
+                    parent["height"] = max(required_by_section[section_id], 0.05)
         return elements
 
     def _validate_refined_layout(self, elements: List[Dict[str, Any]], lane_map: Dict[str, Dict[str, Any]], state: PosterState) -> Dict[str, Any]:
@@ -2831,6 +3173,27 @@ class MicroLayoutRefiner:
                     issues.append(f"child horizontal overflow in section {parent.get('section_id')}: {element.get('id', element.get('type'))}")
                 if y < parent.get("y", 0) - tolerance or y + height > parent_bottom + tolerance:
                     issues.append(f"child vertical overflow in section {parent.get('section_id')}: {element.get('id', element.get('type'))}")
+                if element.get("type") == "text":
+                    min_bottom_padding = float(
+                        self.refine_config.get("min_text_container_bottom_padding_inches", 0.0) or 0.0
+                    )
+                    bottom_gap = parent_bottom - (y + height)
+                    padding_tolerance = min(tolerance, max(min_bottom_padding * 0.5, 0.005))
+                    if min_bottom_padding > 0 and bottom_gap < min_bottom_padding - padding_tolerance:
+                        issues.append(
+                            "text bottom padding too small in section "
+                            f"{parent.get('section_id')}: {element.get('id', element.get('type'))}"
+                        )
+
+                    required_height = self._measured_text_box_height(
+                        element,
+                        state.get("layout_template_metadata") or {},
+                    )
+                    if required_height > height + tolerance:
+                        issues.append(
+                            "text box overflow risk in section "
+                            f"{parent.get('section_id')}: {element.get('id', element.get('type'))}"
+                        )
 
         for lane_id, lane in lane_map.items():
             lane_sections = [section for section in section_containers if section.get("lane_id") == lane_id]

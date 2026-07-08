@@ -13,7 +13,7 @@ from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent
 from src.layout.text_height_measurement import measure_text_height
 from src.config.poster_config import load_config
 from src.tools.layout_api import LayoutTemplates, SEMANTIC_LANES
-from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_for_poster
+from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_for_poster, repair_possessive_title_apostrophe
 from src.utils.style_options import resolve_poster_visual_style, resolve_typography_config
 from src.utils.visual_footprint import enforce_visual_footprint
 
@@ -180,7 +180,18 @@ class LayoutAgent:
             final_column_analysis = self._generate_column_analysis(layout_data, state)
             
             # validate final layout
-            self._validate_precise_layout(layout_data, state["poster_width"], state["poster_height"])
+            layout_validation = self._validate_precise_layout(layout_data, state["poster_width"], state["poster_height"])
+            state["layout_validation"] = layout_validation
+            if not layout_validation.get("valid", True):
+                if template_layout.get("layout_mode") == "template_prior":
+                    log_agent_warning(
+                        self.name,
+                        "pre-micro template-prior layout validation reported issues; "
+                        "micro-layout remains the blocking geometry gate",
+                    )
+                else:
+                    state["draft_status"] = "rejected"
+                    state.setdefault("errors", []).append(f"{self.name}: final layout validation failed: {layout_validation.get('issues', [])}")
             
             state["design_layout"] = layout_data
             state["final_column_analysis"] = final_column_analysis
@@ -276,6 +287,9 @@ class LayoutAgent:
         if state.get("final_column_analysis"):
             with open(output_dir / "final_column_analysis.json", "w", encoding='utf-8') as f:
                 json.dump(state.get("final_column_analysis", {}), f, indent=2)
+        if state.get("layout_validation"):
+            with open(output_dir / "layout_validation.json", "w", encoding='utf-8') as f:
+                json.dump(state.get("layout_validation", {}), f, indent=2)
     
     def _generate_column_analysis(self, layout_data: List[Dict], state: PosterState) -> Dict:
         """generate detailed column utilization analysis using exact column calculation method"""
@@ -1335,7 +1349,7 @@ class LayoutAgent:
         return {key: value for key, value in style.items() if key != "enabled"}
 
     def _section_title_label(self, section: Dict[str, Any], title: str, state: PosterState) -> Dict[str, Any]:
-        raw_title = str(title or "").strip()
+        raw_title = repair_possessive_title_apostrophe(str(title or "").strip())
         explicit_number, clean_title = self._strip_section_number(raw_title)
         mode = self._section_title_numbering_mode(state)
         number = explicit_number or self._section_number_from_slot(section)
