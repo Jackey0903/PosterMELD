@@ -171,7 +171,8 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline <paper.pdf> --layout-temp
 | `--header-route` `--header-subtitle` `--header-title-wrap` `--header-seed` | header 版式、副标题、标题换行策略、可复现随机种子 |
 | `--section-title-numbering` | `off`（默认）/ `small` / `inline` |
 | `--logo` / `--conference` | 会议 logo：本地路径，或按会议名从本地库解析（见「Logo 素材」） |
-| `--aff-logo` / `--enable-affiliation-logos` | 机构 logo：手动本地图，或自动搜索下载 |
+| `--aff-logo` / `--enable-affiliation-logos` / `--disable-affiliation-logos` | 机构 logo：默认自动搜索下载；也可手动传本地图或显式关闭自动检索 |
+| `--affiliation-logo-mode` | 放几个机构 logo：`single`（默认，1 个）或 `multi`（1–3 个，按实际解析到的数量） |
 | `--text_model` `--vision_model` `--vlm-model` | 覆盖模型 |
 | `--enable-vlm-layout-review` `--enable-visual-legibility-review` `--enable-block-vlm-review` `--enable-adaptive-column-width` | 质检 / 自适应开关（选用 `cluster_*` 标准模板时自动开启前三项） |
 | `--list-layout-templates` | 列出模板后退出 |
@@ -201,8 +202,8 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline <paper.pdf> --layout-temp
 **会议 logo（`src/utils/conference_logos.py`）——本地素材库，不联网下载**：
 `--conference "AAAI"` 会把会议名归一化后到 `assets/conference_logos/` 里匹配本地 PNG（当前内置 `aaai` / `iclr` / `neurips`）。要用其他会议，把 logo 放进该目录，或直接用 `--logo <path>` 指定任意本地图片（`--logo` 优先级高于 `--conference`）。
 
-**机构（学校）logo（`src/agents/affiliation_logo_agent.py`）——可自动搜索下载**：
-仅在传 `--enable-affiliation-logos` 时启用。流程是：从论文（必要时经 OpenAlex 按 DOI 查询）抽取机构名 → 依次尝试**官方站点 URL → Wikimedia Commons 已知文件 → Wikidata → Clearbit（`logo.clearbit.com/<域名>`）→ 本地目录**（`affiliation_logos/`、`logos/`）下载并缓存。相关映射（已知域名 / 官方 URL / Commons 文件名）配置在 `config/poster_config.yaml` 的 `affiliation_logos` 段。默认不开启时，用 `--aff-logo <path>` 手动传一张本地机构 logo。
+**机构（学校）logo（`src/agents/affiliation_logo_agent.py`）——默认自动搜索下载**：
+默认启用，默认放 **1 个**学校 logo（`--affiliation-logo-mode single`）；传 `--affiliation-logo-mode multi` 则放 1–3 个（按实际解析到的数量，上限见 config `max_logos`）；`--disable-affiliation-logos` 关闭。解析流程：先用 **OpenAlex 按标题/DOI 搜**得到规范机构名（修正 parser 抽取的乱名，对 arXiv 也有效）→ 依次尝试 **本地目录 → 官方站点 URL → Wikimedia Commons → Wikidata → Clearbit autocomplete 拿真实域名 → favicon 兜底取图**（Clearbit 官方 logo API 已停服，故用 favicon 兜底）。相关映射配置在 `config/poster_config.yaml` 的 `affiliation_logos` 段。也可以用 `--aff-logo <path>` 手动传一张本地机构 logo。
 
 ---
 

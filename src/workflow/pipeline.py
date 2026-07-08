@@ -1227,6 +1227,12 @@ def save_timing_log(state: PosterState):
 
 def main():
     config = load_config()
+    def _env_bool(name: str, default: bool) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return bool(default)
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+
     default_text_model = os.getenv("PAPER2POSTER_TEXT_MODEL") or os.getenv("PAPER2POSTER_MODEL") or "gpt-5.4"
     default_vision_model = (
         os.getenv("PAPER2POSTER_VISION_MODEL")
@@ -1244,6 +1250,10 @@ def main():
     default_visual_density = normalize_visual_density(os.getenv("PAPER2POSTER_VISUAL_DENSITY"), config)
     default_background_style = normalize_background_style(os.getenv("PAPER2POSTER_BACKGROUND_STYLE"), config)
     default_background_palette = normalize_background_palette(os.getenv("PAPER2POSTER_BACKGROUND_PALETTE"), config)
+    default_affiliation_logos = _env_bool(
+        "PAPER2POSTER_AFFILIATION_LOGOS",
+        bool((config.get("affiliation_logos") or {}).get("enabled", False)),
+    )
     default_generated_teaser = os.getenv("PAPER2POSTER_GENERATED_TEASER", "1").strip().lower() not in {"0", "false", "no", "off"}
     default_generated_background = os.getenv("PAPER2POSTER_GENERATED_BACKGROUND", "1").strip().lower() not in {"0", "false", "no", "off"}
     default_section_title_numbering = str(
@@ -1306,10 +1316,25 @@ def main():
         action="store_true",
         help="Enable the second-phase visual asset agent for edit/generate planning.",
     )
-    parser.add_argument(
+    affiliation_group = parser.add_mutually_exclusive_group()
+    affiliation_group.add_argument(
         "--enable-affiliation-logos",
+        dest="enable_affiliation_logos",
         action="store_true",
-        help="Extract author affiliations and place institution logos in the title area.",
+        help="Enable automatic institution logo search/download and place up to the configured maximum in the title area.",
+    )
+    affiliation_group.add_argument(
+        "--disable-affiliation-logos",
+        dest="enable_affiliation_logos",
+        action="store_false",
+        help="Disable automatic institution logo search/download.",
+    )
+    parser.set_defaults(enable_affiliation_logos=default_affiliation_logos)
+    parser.add_argument(
+        "--affiliation-logo-mode",
+        choices=["single", "multi"],
+        default=os.getenv("PAPER2POSTER_AFFILIATION_LOGO_MODE", "single"),
+        help="How many institution logos to place: 'single' (one, default) or 'multi' (1-3, up to the configured max, based on what resolves).",
     )
     parser.add_argument(
         "--enable-vlm-layout-review",
@@ -1547,6 +1572,7 @@ def main():
             args.url, resolved_logo_path, args.aff_logo,
             enable_visual_refinement=args.enable_visual_refinement,
             enable_affiliation_logos=args.enable_affiliation_logos,
+            affiliation_logo_mode=args.affiliation_logo_mode,
             enable_vlm_layout_review=args.enable_vlm_layout_review,
             enable_visual_legibility_review=args.enable_visual_legibility_review,
             enable_block_vlm_review=args.enable_block_vlm_review,

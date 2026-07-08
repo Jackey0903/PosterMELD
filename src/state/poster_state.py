@@ -179,6 +179,7 @@ class PosterState(TypedDict):
     conference_name: Optional[str]
     enable_visual_refinement: bool
     enable_affiliation_logos: bool
+    affiliation_logo_mode: str
     enable_vlm_layout_review: bool
     enable_visual_legibility_review: bool
     enable_block_vlm_review: bool
@@ -237,6 +238,7 @@ def create_state(
     aff_logo_path: str = "",
     enable_visual_refinement: bool = False,
     enable_affiliation_logos: bool = False,
+    affiliation_logo_mode: str = "single",
     enable_vlm_layout_review: bool = False,
     enable_visual_legibility_review: bool = False,
     enable_block_vlm_review: bool = False,
@@ -361,6 +363,7 @@ def create_state(
         conference_name=conference_name,
         enable_visual_refinement=enable_visual_refinement,
         enable_affiliation_logos=enable_affiliation_logos,
+        affiliation_logo_mode=affiliation_logo_mode,
         enable_vlm_layout_review=enable_vlm_layout_review,
         enable_visual_legibility_review=enable_visual_legibility_review,
         enable_block_vlm_review=enable_block_vlm_review,

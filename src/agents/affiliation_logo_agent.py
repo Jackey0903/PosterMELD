@@ -50,10 +50,15 @@ class AffiliationLogoAgent:
             logo_dir = output_dir / "assets" / "affiliation_logos"
             logo_dir.mkdir(parents=True, exist_ok=True)
 
+            # 'single' places one institution logo (default); 'multi' places up to the
+            # configured maximum (currently 3), based on how many actually resolve.
+            mode = str(state.get("affiliation_logo_mode") or "single").strip().lower()
+            effective_max = 1 if mode == "single" else self.max_logos
+
             logos: List[Dict[str, Any]] = []
             seen_logo_keys = set()
             for affiliation in affiliations:
-                if len(logos) >= self.max_logos:
+                if len(logos) >= effective_max:
                     break
                 logo_key = self._canonical_logo_key(affiliation)
                 if logo_key in seen_logo_keys:
