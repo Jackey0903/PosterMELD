@@ -61,9 +61,13 @@ def create_model(config: ModelConfig):
     }
     
     if config.provider == 'openai':
+        # gpt-5 / o-series reasoning models only accept the default temperature (1);
+        # sending any other value is rejected (OpenAI errors, and some relay
+        # deployments return 400 "operation not allowed in this deployment").
+        is_reasoning_model = str(config.model_name).startswith(("gpt-5", "o1", "o3", "o4"))
         openai_kwargs = {
             'model_name': config.model_name,
-            'temperature': config.temperature,
+            'temperature': 1 if is_reasoning_model else config.temperature,
             'max_tokens': config.max_tokens,
             'api_key': os.getenv('OPENAI_API_KEY'),
             'request_timeout': timeout_settings['request_timeout'],

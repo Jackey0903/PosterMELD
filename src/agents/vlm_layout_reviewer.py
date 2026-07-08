@@ -245,6 +245,11 @@ class VLMLayoutReviewer:
     def _post_vlm_request(self, base_url: str, headers: Dict[str, str], model: str, prompt: str, image_data: str) -> requests.Response:
         timeout = int(self.review_config.get("timeout_seconds", 120))
         endpoint = base_url.rstrip("/")
+        # gpt-5 / o-series reasoning models only accept the default temperature (1);
+        # some deployments reject any other value with 400 "operation not allowed" or a
+        # failed streamed response, so omit temperature entirely for those models.
+        is_reasoning_model = str(model).startswith(("gpt-5", "o1", "o3", "o4"))
+        temperature = self.review_config.get("temperature", 0.1)
         if not endpoint.endswith("/responses") and str(model).startswith("gpt-5"):
             endpoint = f"{endpoint}/responses"
         if endpoint.endswith("/responses"):
@@ -252,7 +257,6 @@ class VLMLayoutReviewer:
                 "model": model,
                 "store": False,
                 "stream": True,
-                "temperature": self.review_config.get("temperature", 0.1),
                 "max_output_tokens": self.review_config.get("max_tokens", 1600),
                 "input": [
                     {
@@ -264,11 +268,12 @@ class VLMLayoutReviewer:
                     }
                 ],
             }
+            if not is_reasoning_model:
+                payload["temperature"] = temperature
             return requests.post(endpoint, headers=headers, json=payload, timeout=timeout, stream=True)
 
         payload = {
             "model": model,
-            "temperature": self.review_config.get("temperature", 0.1),
             "max_tokens": self.review_config.get("max_tokens", 1600),
             "messages": [
                 {
@@ -280,6 +285,8 @@ class VLMLayoutReviewer:
                 }
             ],
         }
+        if not is_reasoning_model:
+            payload["temperature"] = temperature
         return requests.post(f"{endpoint}/chat/completions", headers=headers, json=payload, timeout=timeout)
 
     def _extract_response_text(self, response: requests.Response) -> str:
