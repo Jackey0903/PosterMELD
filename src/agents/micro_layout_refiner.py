@@ -787,76 +787,65 @@ class MicroLayoutRefiner:
                 else:
                     child["x"] = lane["x"] + child_x_offset
                     child["y"] = section_y + child_y_offset
-                    child["height"] = max(child.get("height", 0.3) * title_scale, 0.08)
                     if child_type in {"title_accent_block", "title_accent_line"}:
                         child["x"] = lane["x"]
                         child["width"] = lane["w"]
+                        # Keep the dark title bar at its original (layout-assigned) height instead
+                        # of scaling it by each section's title-font shrink ratio, so every
+                        # section's bar lines up at the same height across the poster.
+                        child["height"] = max(child.get("height", 0.3), 0.08)
                     else:
+                        child["height"] = max(child.get("height", 0.3) * title_scale, 0.08)
                         child["width"] = max(child.get("width", 0.3) * title_scale, 0.08)
                 rebuilt_children.append(child)
                 content_bottom = max(content_bottom, child["y"] + child["height"])
 
             current_y = content_bottom + params["title_to_content_gap"]
 
-        visual_priority_tail = self._layout_cluster_72_visual_priority_tail(
+        split_tail = self._layout_portrait_split_visual_text(
             visual_elements,
             text_elements,
             lane,
             current_y,
-            content_bottom,
             state,
+            params,
             template_layout,
+            section_id,
         )
-        if visual_priority_tail:
-            tail_elements, current_y, content_bottom = visual_priority_tail
+        if split_tail:
+            tail_elements, current_y, content_bottom = split_tail
             rebuilt_children.extend(tail_elements)
             visual_elements = []
             text_elements = []
         else:
-            split_tail = self._layout_portrait_split_visual_text(
-                visual_elements,
-                text_elements,
-                lane,
-                current_y,
-                state,
-                params,
-                template_layout,
-                section_id,
-            )
-            if split_tail:
-                tail_elements, current_y, content_bottom = split_tail
-                rebuilt_children.extend(tail_elements)
-                visual_elements = []
-                text_elements = []
-            else:
-                visual_available_width = self._get_visual_width_for_lane(lane, state, template_layout, params)
-                for visual in visual_elements:
-                    lane_for_footprint = self._lane_with_poster_orientation(lane, state, template_layout)
-                    aspect_ratio = visual.get("width", 1.0) / max(visual.get("height", 0.01), 0.01)
-                    visual_scale = params["visual_scale"]
-                    if str(visual.get("visual_id") or visual.get("id") or "").startswith("generated_teaser"):
-                        visual_scale = max(visual_scale, 1.0)
-                    scaled_width = min(visual_available_width, visual.get("width", visual_available_width) * visual_scale)
-                    scaled_height = scaled_width / max(aspect_ratio, 0.01)
-                    scaled_width, scaled_height, footprint_report = enforce_visual_footprint(
-                        visual.get("visual_id") or visual.get("id"),
-                        scaled_width,
-                        scaled_height,
-                        visual_available_width,
-                        lane_for_footprint,
-                        state,
-                        self.config,
-                    )
+            visual_available_width = self._get_visual_width_for_lane(lane, state, template_layout, params)
+            for visual in visual_elements:
+                lane_for_footprint = self._lane_with_poster_orientation(lane, state, template_layout)
+                aspect_ratio = visual.get("width", 1.0) / max(visual.get("height", 0.01), 0.01)
+                visual_scale = params["visual_scale"]
+                if str(visual.get("visual_id") or visual.get("id") or "").startswith("generated_teaser"):
+                    visual_scale = max(visual_scale, 1.0)
+                scaled_width = min(visual_available_width, visual.get("width", visual_available_width) * visual_scale)
+                scaled_height = scaled_width / max(aspect_ratio, 0.01)
+                scaled_width, scaled_height, footprint_report = enforce_visual_footprint(
+                    visual.get("visual_id") or visual.get("id"),
+                    scaled_width,
+                    scaled_height,
+                    visual_available_width,
+                    lane_for_footprint,
+                    state,
+                    self.config,
+                )
 
-                    visual["width"] = scaled_width
-                    visual["height"] = scaled_height
-                    visual["x"] = lane["x"] + (lane["w"] - scaled_width) / 2
-                    visual["y"] = current_y
-                    visual["visual_footprint"] = footprint_report
+                visual["width"] = scaled_width
+                visual["height"] = scaled_height
+                visual["x"] = lane["x"] + (lane["w"] - scaled_width) / 2
+                visual["y"] = current_y
+                visual["visual_footprint"] = footprint_report
 
-                    rebuilt_children.append(visual)
-                    current_y = visual["y"] + visual["height"] + params["visual_gap"]
-                    content_bottom = max(content_bottom, visual["y"] + visual["height"])
+                rebuilt_children.append(visual)
+                current_y = visual["y"] + visual["height"] + params["visual_gap"]
+                content_bottom = max(content_bottom, visual["y"] + visual["height"])
 
         wide_text_columns = self._layout_wide_text_columns_for_fill(
             text_elements,
@@ -2613,103 +2602,6 @@ class MicroLayoutRefiner:
             if float(state.get("poster_height", 0.0) or 0.0) > float(state.get("poster_width", 0.0) or 0.0)
             else "landscape"
         )
-
-    def _layout_cluster_72_visual_priority_tail(
-        self,
-        visual_elements: List[Dict[str, Any]],
-        text_elements: List[Dict[str, Any]],
-        lane: Dict[str, Any],
-        current_y: float,
-        title_bottom: float,
-        state: PosterState,
-        template_layout: Dict[str, Any],
-    ) -> Optional[tuple[List[Dict[str, Any]], float, float]]:
-        if not self._is_cluster_72_visual_priority_lane(lane, state, template_layout, visual_elements):
-            return None
-
-        padding = float(self.config.get("template_fast_mode", {}).get("visual_priority_text_padding", 0.18))
-        visual_gap = float(self.config.get("template_fast_mode", {}).get("visual_priority_gap", 0.08))
-        bottom_padding = float(self.config.get("template_fast_mode", {}).get("visual_priority_bottom_padding", 0.08))
-        caption_font_size = int(self.config.get("template_fast_mode", {}).get("visual_priority_caption_font_size", 30))
-        caption_line_spacing = 0.95
-        text_width = max(lane["w"] - 2 * padding, 0.5)
-
-        measured_text: List[tuple[Dict[str, Any], float]] = []
-        for text_element in text_elements:
-            plain_text = self._strip_markup_for_measurement(text_element.get("content", ""))
-            measured = self._measure_text_height_for_refinement(
-                text_content=plain_text,
-                width_inches=text_width,
-                font_name=text_element.get("font_family", self.typography_config["fonts"]["body_text"]),
-                font_size=caption_font_size,
-                line_spacing=caption_line_spacing,
-                template_layout=template_layout,
-            )
-            text_height = (
-                measured["optimal_height"] * 1.03
-                + min(self.refine_config.get("text_height_safety_padding", 0.05), 0.08)
-            )
-            measured_text.append((text_element, min(max(text_height, 0.42), 1.05)))
-
-        total_text_height = sum(height for _, height in measured_text)
-        if measured_text:
-            total_text_height += visual_gap
-
-        lane_bottom = lane["y"] + lane["h"]
-        visual_top = max(title_bottom + visual_gap, lane["y"])
-        max_visual_height = max(lane_bottom - visual_top - total_text_height - bottom_padding, 0.4)
-        visual_available_width = max(lane["w"] - 2 * padding, 0.4)
-        tail: List[Dict[str, Any]] = []
-        content_bottom = title_bottom
-        y = visual_top
-
-        for visual in visual_elements[:1]:
-            aspect_ratio = visual.get("width", 1.0) / max(visual.get("height", 0.01), 0.01)
-            scaled_width = min(visual_available_width, max_visual_height * max(aspect_ratio, 0.01))
-            scaled_height = scaled_width / max(aspect_ratio, 0.01)
-            visual["width"] = scaled_width
-            visual["height"] = scaled_height
-            visual["x"] = lane["x"] + (lane["w"] - scaled_width) / 2
-            visual["y"] = y
-            visual["visual_priority_layout"] = "cluster_72_fast"
-            tail.append(visual)
-            y = visual["y"] + visual["height"]
-            content_bottom = max(content_bottom, y)
-
-        if measured_text:
-            y += visual_gap
-        for text_element, text_height in measured_text:
-            text_element["x"] = lane["x"] + padding
-            text_element["y"] = y
-            text_element["width"] = text_width
-            text_element["height"] = text_height
-            text_element["font_size"] = caption_font_size
-            text_element["line_spacing"] = caption_line_spacing
-            text_element["visual_priority_caption"] = True
-            tail.append(text_element)
-            y = text_element["y"] + text_element["height"]
-            content_bottom = max(content_bottom, y)
-
-        return tail, y, content_bottom
-
-    def _is_cluster_72_visual_priority_lane(
-        self,
-        lane: Dict[str, Any],
-        state: PosterState,
-        template_layout: Dict[str, Any],
-        visual_elements: List[Dict[str, Any]],
-    ) -> bool:
-        if not visual_elements:
-            return False
-        if not state.get("template_fast_mode"):
-            return False
-        if str(template_layout.get("template_name") or state.get("resolved_layout_template") or "") != "cluster_72":
-            return False
-        figure_slots = set(((state.get("fast_visual_policy") or {}).get("figure_slots") or ["slot_2", "slot_3"]))
-        lane_id = str(lane.get("id") or lane.get("region_id") or lane.get("slot_id") or "")
-        if lane_id not in figure_slots:
-            return False
-        return any(str(visual.get("visual_id") or "").startswith("figure_") for visual in visual_elements)
 
     def _measure_text_height_for_refinement(
         self,
