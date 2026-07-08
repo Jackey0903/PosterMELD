@@ -768,8 +768,20 @@ class MicroLayoutRefiner:
                 self.refine_config.get("max_section_title_font_size", title_font_size),
                 title_font_size,
             )
+            # One uniform dark title-bar height for every section so the bars line up neatly.
+            uniform_bar_height = float(
+                (self.config.get("poster_visual_style", {}) or {})
+                .get("section_title", {})
+                .get("bar_height_inches", 0.78)
+                or 0.78
+            )
             title_scale = title_font_size / max(original_font_size, 1)
             title_x_offset = section_title_element.get("x", lane["x"]) - container.get("x", lane["x"])
+            # Keep the title text inside the uniform bar so it never spills out of the dark block,
+            # which also stops per-section title-font differences from changing the bar height.
+            max_title_font_for_bar = int((uniform_bar_height - 0.06) * 72)
+            if max_title_font_for_bar >= self._min_section_title_font_size(template_layout):
+                title_font_size = min(title_font_size, max_title_font_for_bar)
             title_height = max((title_font_size / 72) + 0.05, section_title_element.get("height", 0.8) * title_scale)
 
             for child in title_elements:
@@ -787,12 +799,16 @@ class MicroLayoutRefiner:
                 else:
                     child["x"] = lane["x"] + child_x_offset
                     child["y"] = section_y + child_y_offset
-                    if child_type in {"title_accent_block", "title_accent_line"}:
+                    if child_type == "title_accent_block":
                         child["x"] = lane["x"]
                         child["width"] = lane["w"]
-                        # Keep the dark title bar at its original (layout-assigned) height instead
-                        # of scaling it by each section's title-font shrink ratio, so every
-                        # section's bar lines up at the same height across the poster.
+                        # Force one uniform dark-bar height for every section (instead of the
+                        # per-section layout-assigned or font-scaled height) so all section
+                        # title bars line up at the same height across the poster.
+                        child["height"] = uniform_bar_height
+                    elif child_type == "title_accent_line":
+                        child["x"] = lane["x"]
+                        child["width"] = lane["w"]
                         child["height"] = max(child.get("height", 0.3), 0.08)
                     else:
                         child["height"] = max(child.get("height", 0.3) * title_scale, 0.08)
