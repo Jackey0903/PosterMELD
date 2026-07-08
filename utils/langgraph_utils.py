@@ -87,6 +87,12 @@ def create_model(config: ModelConfig):
             'api_key': os.getenv('OPENAI_API_KEY'),
             'request_timeout': timeout_settings['request_timeout'],
             'max_retries': timeout_settings['max_retries'],
+            # Stream the completion. Reasoning models can spend 30-40s before the
+            # first token, and non-streaming requests get killed by relay/proxy
+            # gateway timeouts (~30s) with a 502; streaming keeps the connection
+            # alive with incremental chunks so heavy calls complete.
+            'streaming': True,
+            'stream_usage': True,
         }
         base_url = os.getenv('OPENAI_BASE_URL')
         if base_url:
