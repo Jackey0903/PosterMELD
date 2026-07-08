@@ -144,8 +144,8 @@ class AffiliationLogoAgent:
     def _paper_title(self, state: PosterState) -> Optional[str]:
         title = state.get("title") or state.get("paper_title")
         if not title:
-            narrative = state.get("narrative_content") or {}
-            title = (narrative.get("meta") or {}).get("title")
+            meta = (state.get("narrative_content") or {}).get("meta") or {}
+            title = meta.get("poster_title") or meta.get("title")
         title = str(title or "").strip()
         return title or None
 
