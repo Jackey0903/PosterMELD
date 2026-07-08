@@ -299,7 +299,7 @@ class LangGraphAgent:
         self.history = [SystemMessage(content=self.system_msg)]
     
     @retry(
-        stop=stop_after_attempt(5),
+        stop=stop_after_attempt(8),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception(is_retryable_model_error),
     )
