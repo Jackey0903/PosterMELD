@@ -98,9 +98,7 @@ class VisualLegibilityReviewer:
         image_data = self.vlm_client._encode_image(preview_path)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         try:
-            response = self.vlm_client._post_vlm_request(base_url, headers, model, prompt, image_data)
-            response.raise_for_status()
-            content = self.vlm_client._extract_response_text(response)
+            content = self.vlm_client._request_vlm_text(base_url, headers, model, prompt, image_data)
             review = self.vlm_client._parse_json(content)
             return self._normalize_review(review, source="vlm")
         except Exception as exc:

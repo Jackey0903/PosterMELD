@@ -86,9 +86,7 @@ class BlockVLMReviewer(VLMLayoutReviewer):
         image_data = self._encode_image(crop_info["contact_sheet_path"])
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         try:
-            response = self._post_vlm_request(base_url, headers, model, prompt, image_data)
-            response.raise_for_status()
-            content = self._extract_response_text(response)
+            content = self._request_vlm_text(base_url, headers, model, prompt, image_data)
             parsed = self._parse_json(content)
             review = self._normalize_review(parsed, occupancy)
             review["source"] = "vlm"

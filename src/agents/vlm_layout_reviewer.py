@@ -8,6 +8,7 @@ patches. Deterministic validation decides whether a patch can be applied.
 import base64
 import json
 import os
+import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -231,9 +232,7 @@ class VLMLayoutReviewer:
         image_data = self._encode_image(preview_path)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         try:
-            response = self._post_vlm_request(base_url, headers, model, prompt, image_data)
-            response.raise_for_status()
-            content = self._extract_response_text(response)
+            content = self._request_vlm_text(base_url, headers, model, prompt, image_data)
             review = self._parse_json(content)
             review.setdefault("source", "vlm")
             review.setdefault("patch", [])
@@ -288,6 +287,27 @@ class VLMLayoutReviewer:
         if not is_reasoning_model:
             payload["temperature"] = temperature
         return requests.post(f"{endpoint}/chat/completions", headers=headers, json=payload, timeout=timeout)
+
+    def _request_vlm_text(self, base_url: str, headers: Dict[str, str], model: str, prompt: str, image_data: str) -> str:
+        """Post a VLM request and return its text, retrying transient failures.
+
+        The relay endpoints are flaky and occasionally return a failed streamed
+        response or a 5xx even though the model is reachable, so retry a few
+        times before letting the caller fall back to the deterministic path.
+        """
+        attempts = max(int(self.review_config.get("request_attempts", 3)), 1)
+        retry_delay = float(self.review_config.get("retry_delay_seconds", 2.0))
+        last_exc: Optional[Exception] = None
+        for attempt in range(attempts):
+            try:
+                response = self._post_vlm_request(base_url, headers, model, prompt, image_data)
+                response.raise_for_status()
+                return self._extract_response_text(response)
+            except Exception as exc:  # noqa: BLE001 - retry any transient VLM failure
+                last_exc = exc
+                if attempt < attempts - 1:
+                    time.sleep(min(retry_delay * (attempt + 1), 6.0))
+        raise last_exc if last_exc else RuntimeError("VLM request failed with no exception")
 
     def _extract_response_text(self, response: requests.Response) -> str:
         content_type = response.headers.get("content-type", "")
