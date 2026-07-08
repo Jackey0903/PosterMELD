@@ -2756,7 +2756,11 @@ class MicroLayoutRefiner:
             item = deepcopy(element)
             relative_y = item.get("y", lane["y"]) - lane["y"]
             item["y"] = lane["y"] + relative_y * compression_ratio
-            item["height"] = max(item.get("height", 0.0) * compression_ratio, 0.05)
+            # Section title bars must stay one uniform height across every lane, so
+            # they are never compressed here (content below absorbs the space via the
+            # de-overlap pass + visual shrink in settle). All other elements compress.
+            if item.get("type") not in {"title_accent_block", "title_accent_line"}:
+                item["height"] = max(item.get("height", 0.0) * compression_ratio, 0.05)
 
             if item.get("type") == "visual":
                 original_width = item.get("width", 0.5)
@@ -2811,10 +2815,40 @@ class MicroLayoutRefiner:
                 )
 
             compressed.append(item)
+        compressed = self._push_content_below_title_bars(compressed)
         compressed = self._sync_container_bounds(compressed)
         compressed = self._stretch_table_visual_after_force_fit(compressed, lane)
         compressed = self._sync_container_bounds(compressed)
         return self._settle_force_fit_lane(compressed, lane, state, template_layout)
+
+    def _push_content_below_title_bars(self, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Keep the uniform-height title bar clear: shift a section's content down so
+        it starts below the bar, and overlay the title text on the bar. Any resulting
+        overflow is absorbed later by shrinking visuals in _settle_force_fit_lane."""
+        gap = max(float(self.refine_config.get("min_title_to_content_gap", 0.15) or 0.15), 0.06)
+        for bar in [e for e in elements if e.get("type") == "title_accent_block"]:
+            section_id = str(bar.get("section_id") or "")
+            bar_y = float(bar.get("y", 0.0) or 0.0)
+            bar_height = float(bar.get("height", 0.0) or 0.0)
+            threshold = bar_y + bar_height + gap
+            content = [
+                element
+                for element in elements
+                if element.get("type") in {"visual", "text"}
+                and str(element.get("section_id") or "") == section_id
+            ]
+            if content:
+                topmost = min(float(element.get("y", 0.0) or 0.0) for element in content)
+                if topmost < threshold - 1e-6:
+                    shift = threshold - topmost
+                    for element in content:
+                        element["y"] = float(element.get("y", 0.0) or 0.0) + shift
+            # keep the section title text overlaid on (and centered in) its uniform bar
+            for element in elements:
+                if element.get("type") == "section_title" and str(element.get("section_id") or "") == section_id:
+                    element["y"] = bar_y
+                    element["height"] = bar_height
+        return elements
 
     def _settle_force_fit_lane(
         self,
