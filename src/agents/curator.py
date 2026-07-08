@@ -157,9 +157,32 @@ class StoryBoardCurator:
                     log_agent_warning(self.name, "using deterministic keypoint-first story board fallback")
                     story_board = self._fallback_story_board_from_keypoints(state, visual_context, classified_visuals)
                     return story_board, 0, 0
-                if attempt == max_attempts - 1:
-                    raise ValueError("failed to create story board after multiple attempts")
-
+        # All attempts exhausted (repeated validation failures and/or transient
+        # endpoint errors). Fall back to a cached valid story board from a previous
+        # run, then to the deterministic keypoint-first plan, before failing hard —
+        # this keeps the pipeline resilient to a flaky text endpoint.
+        cached = self._load_cached_story_board(state)
+        if cached is not None and self._validate_story_board(cached, classified_visuals, visual_context):
+            log_agent_warning(self.name, "using cached story board after repeated generation failures")
+            self._record_degraded_state(
+                state,
+                component="curator",
+                category="story_board",
+                reason="story board generation failed repeatedly; reused cached story_board.json",
+                fallback="cached_story_board",
+            )
+            return cached, 0, 0
+        if int((visual_context or {}).get("keypoint_target_count") or 0):
+            log_agent_warning(self.name, "using deterministic keypoint-first story board fallback")
+            self._record_degraded_state(
+                state,
+                component="curator",
+                category="story_board",
+                reason="story board generation failed repeatedly; used deterministic keypoint-first fallback",
+                fallback="keypoint_first_story_board",
+            )
+            story_board = self._fallback_story_board_from_keypoints(state, visual_context, classified_visuals)
+            return story_board, 0, 0
         raise ValueError("failed to create story board")
 
     def _coerce_story_board_payload(self, payload: Any) -> Dict[str, Any]:
@@ -2086,6 +2109,27 @@ class StoryBoardCurator:
         total_height += section_spacing
         
         return total_height
+
+    def _load_cached_story_board(self, state: PosterState) -> Optional[Dict[str, Any]]:
+        """load a previously saved story board (used as a fallback when generation fails)"""
+        try:
+            path = Path(state["output_dir"]) / "content" / "story_board.json"
+            if not path.exists():
+                return None
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data or None
+        except Exception:
+            return None
+
+    def _record_degraded_state(self, state: PosterState, *, component: str, category: str, reason: str, fallback: str):
+        """record a non-blocking degraded quality state (ADR 0003/0006)"""
+        state.setdefault("degraded_quality_states", []).append({
+            "component": component,
+            "category": category,
+            "reason": reason,
+            "fallback": fallback,
+        })
 
     def _save_story_board(self, state: PosterState):
         """save story board to json file"""
