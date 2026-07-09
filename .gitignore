@@ -216,6 +216,11 @@ evaluation/
 output/
 hf/
 
+# Benchmark inputs, local test papers, and scratch results (data, not source)
+Benchmark/
+data/aaai_test/
+scratchpad_batch5_results.json
+
 # Local meeting/export artifacts
 /进度.pdf
 docs/weekly_meeting_pipeline*
