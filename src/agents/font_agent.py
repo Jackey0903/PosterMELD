@@ -94,6 +94,13 @@ class FontAgent:
             # add token usage
             state["tokens"].add_text(response.input_tokens, response.output_tokens)
 
+            # Some models return a non-object payload (a bare string/list, or a dict
+            # without section_keywords). Downstream styling assumes a dict, so validate
+            # the shape here and fall back to heuristic keywords rather than crashing.
+            if not isinstance(result, dict) or not isinstance(result.get("section_keywords"), dict):
+                log_agent_warning(self.name, "keyword payload had unexpected shape; using heuristic fallback")
+                return self._fallback_keywords(story_board)
+
             return result
         except Exception as exc:
             log_agent_warning(self.name, f"keyword extraction unavailable; using heuristic fallback: {exc}")
