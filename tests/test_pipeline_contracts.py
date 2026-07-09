@@ -3330,6 +3330,7 @@ def test_background_image_agent_uses_poster_preview_as_reference(tmp_path, monke
     agent.background_config["width_px"] = 160
     agent.background_config["height_px"] = 120
     agent.background_config["procedural_only"] = False
+    agent.background_config["condition_on_poster"] = True  # opt in to poster conditioning
 
     result = agent(state)
 
@@ -3337,6 +3338,40 @@ def test_background_image_agent_uses_poster_preview_as_reference(tmp_path, monke
     assert Path(result["background_image_path"]).exists()
     assert result["background_image_report"]["generation_mode"] == "poster_conditioned_image_api_with_procedural_fallback"
     assert result["background_image_report"]["reference_poster_path"] == str(preview_path)
+
+
+def test_background_image_agent_defaults_to_text_to_image_without_poster_reference(tmp_path, monkeypatch):
+    """By default the background must be generated text-to-image, never conditioned on
+    the rendered poster, so the image model cannot copy poster text into the background
+    (the cause of ghosted/duplicated text)."""
+
+    def fail_edit_image(self, image_path, prompt, output_path):
+        raise AssertionError("edit_image must not be called when conditioning is off")
+
+    def fake_generate_image(self, prompt, width, height, output_path):
+        assert "No reference image is provided" in prompt
+        Image.new("RGB", (width or 160, height or 120), color=(244, 249, 255)).save(output_path)
+        return output_path
+
+    monkeypatch.setattr("src.agents.background_image_agent.ImageTools.edit_image", fail_edit_image)
+    monkeypatch.setattr("src.agents.background_image_agent.ImageTools.generate_image", fake_generate_image)
+    state = create_state(str(tmp_path / "paper.pdf"), enable_generated_background=True, background_palette="light_blue")
+    state["output_dir"] = str(tmp_path / "output")
+    state["color_scheme"] = {"theme": "#0057B8", "mono_light": "#E6EAEF"}
+    preview_path = tmp_path / "draft.png"
+    Image.new("RGB", (160, 120), color=(255, 255, 255)).save(preview_path)
+    state["poster_preview_path"] = str(preview_path)
+    agent = BackgroundImageAgent()
+    agent.background_config["width_px"] = 160
+    agent.background_config["height_px"] = 120
+    agent.background_config["procedural_only"] = False
+
+    result = agent(state)
+
+    assert result["errors"] == []
+    assert Path(result["background_image_path"]).exists()
+    assert result["background_image_report"]["generation_mode"] == "image_api_with_procedural_fallback"
+    assert result["background_image_report"]["used_procedural_fallback"] is False
 
 
 def test_background_image_agent_rejects_background_that_copies_layout_text(tmp_path, monkeypatch):
@@ -3379,6 +3414,7 @@ def test_background_image_agent_rejects_background_that_copies_layout_text(tmp_p
     agent.background_config["width_px"] = 320
     agent.background_config["height_px"] = 160
     agent.background_config["procedural_only"] = False
+    agent.background_config["condition_on_poster"] = True  # contamination check only runs on the conditioned path
 
     result = agent(state)
     report = result["background_image_report"]
@@ -3433,6 +3469,7 @@ def test_background_image_agent_api_failure_falls_back_without_error(tmp_path, m
     agent.background_config["height_px"] = 120
     agent.background_config["procedural_only"] = False
     agent.background_config["api_timeout_seconds"] = 1
+    agent.background_config["condition_on_poster"] = True  # exercise the poster-conditioned failure path
 
     result = agent(state)
 

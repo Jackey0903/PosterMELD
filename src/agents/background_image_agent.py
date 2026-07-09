@@ -44,20 +44,21 @@ class BackgroundImageAgent:
             filename = self.background_config.get("output_filename", "generated_background.png")
             raw_path = asset_dir / f"raw_{filename}"
             final_path = asset_dir / filename
-            prompt = self._build_prompt(state, style_decision, palette_name)
             reference_path = self._reference_poster_path(state)
+            prompt = self._build_prompt(state, style_decision, palette_name, conditioned=self._condition_on_poster())
 
             width, height = self._background_dimensions(state)
             procedural_only = bool(self.background_config.get("procedural_only", False)) or os.getenv(
                 "PAPER2POSTER_PROCEDURAL_BACKGROUND"
             ) == "1"
+            condition_on_poster = self._condition_on_poster()
             if procedural_only:
                 self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                 used_fallback = True
                 generation_mode = "procedural_only"
                 raw_path_value = ""
                 postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "procedural_only"}
-            elif reference_path:
+            elif reference_path and condition_on_poster:
                 try:
                     generated_path = self._run_image_call_with_timeout(
                         lambda: ImageTools().edit_image(str(reference_path), prompt, output_path=str(raw_path))
@@ -190,6 +191,7 @@ class BackgroundImageAgent:
         state: PosterState,
         style_decision: Dict[str, Any] | None = None,
         palette_name: str | None = None,
+        conditioned: bool = False,
     ) -> str:
         style_decision = style_decision or self._background_style_decision(state)
         palette_name = palette_name or self._palette_name(state, style_decision)
@@ -207,13 +209,20 @@ class BackgroundImageAgent:
         poster_height = float(state.get("poster_height") or 0.0)
         orientation = "landscape" if poster_width >= poster_height else "portrait"
 
+        reference_clause = (
+            "Use the provided poster image only as a spatial and stylistic reference: infer where content blocks, "
+            "title, figures, logos, and white spaces are, then create a clean background underneath them. "
+            "Do not copy or redraw any visible poster text, logo, figure, table, chart, or number from the reference. "
+            if conditioned else
+            "No reference image is provided; generate the background purely from this description. "
+            "It will sit behind a dense multi-column poster, so keep the entire canvas even, calm, and uncluttered. "
+        )
+
         return (
             f"Create a {orientation} premium academic conference poster BACKGROUND ONLY, with no text, no letters, "
             "no numbers, no logos, no icons, no charts, no diagrams, and no readable symbols. "
             "The background must look intentionally designed, not plain white, while remaining light enough behind dense black poster text. "
-            "Use the provided poster image only as a spatial and stylistic reference: infer where content blocks, "
-            "title, figures, logos, and white spaces are, then create a clean background underneath them. "
-            "Do not copy or redraw any visible poster text, logo, figure, table, chart, or number from the reference. "
+            f"{reference_clause}"
             f"Use a refined top-tier AI conference poster palette based on {palette_label}. "
             "Keep text-heavy content regions calm, flat, and almost textureless. "
             "Do not create block frames, title bars, panel fills, headers, footers, or rectangular containers that compete with the real layout. "
@@ -226,6 +235,20 @@ class BackgroundImageAgent:
             f"Paper title context: {title}. "
             f"Section context: {', '.join(sections[:6])}."
         )
+
+    def _condition_on_poster(self) -> bool:
+        """Whether to condition background generation on the rendered draft poster.
+
+        Disabled by default: conditioning feeds the fully-rendered poster (text and
+        all) to an image-edit model, which frequently redraws that text into the
+        "background", producing ghosted/duplicated text behind the real content.
+        Text-to-image generation from the prompt alone cannot copy text it never
+        sees, so it eliminates the ghosting deterministically. Re-enable only with a
+        text-free layout reference.
+        """
+        if os.getenv("PAPER2POSTER_BACKGROUND_CONDITION_ON_POSTER") == "1":
+            return True
+        return bool(self.background_config.get("condition_on_poster", False))
 
     def _reference_poster_path(self, state: PosterState) -> Path | None:
         for key in ("poster_preview_path",):
