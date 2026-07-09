@@ -2756,7 +2756,12 @@ class MicroLayoutRefiner:
             item = deepcopy(element)
             relative_y = item.get("y", lane["y"]) - lane["y"]
             item["y"] = lane["y"] + relative_y * compression_ratio
-            item["height"] = max(item.get("height", 0.0) * compression_ratio, 0.05)
+            # Section title bars must keep one uniform height across every lane, so they
+            # are never compressed here. The uncompressed excess is reclaimed by pushing
+            # content below the bar and shrinking visuals in _settle_force_fit_lane; only a
+            # genuinely un-fittable lane compresses its bars (uniformly) as a last resort.
+            if item.get("type") not in {"title_accent_block", "title_accent_line"}:
+                item["height"] = max(item.get("height", 0.0) * compression_ratio, 0.05)
 
             if item.get("type") == "visual":
                 original_width = item.get("width", 0.5)
@@ -2811,10 +2816,41 @@ class MicroLayoutRefiner:
                 )
 
             compressed.append(item)
+        compressed = self._push_content_below_title_bars(compressed)
         compressed = self._sync_container_bounds(compressed)
         compressed = self._stretch_table_visual_after_force_fit(compressed, lane)
         compressed = self._sync_container_bounds(compressed)
         return self._settle_force_fit_lane(compressed, lane, state, template_layout)
+
+    def _push_content_below_title_bars(self, elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Keep the uniform-height title bar clear: shift a section's content down so it
+        starts below the bar, and overlay the title text on the bar. Any resulting overflow
+        is absorbed later by shrinking visuals (and, as a last resort, uniformly compressing
+        the bars) in _settle_force_fit_lane."""
+        gap = max(float(self.refine_config.get("min_title_to_content_gap", 0.15) or 0.15), 0.06)
+        for bar in [e for e in elements if e.get("type") == "title_accent_block"]:
+            section_id = str(bar.get("section_id") or "")
+            bar_y = float(bar.get("y", 0.0) or 0.0)
+            bar_height = float(bar.get("height", 0.0) or 0.0)
+            threshold = bar_y + bar_height + gap
+            content = [
+                element
+                for element in elements
+                if element.get("type") in {"visual", "text"}
+                and str(element.get("section_id") or "") == section_id
+            ]
+            if content:
+                topmost = min(float(element.get("y", 0.0) or 0.0) for element in content)
+                if topmost < threshold - 1e-6:
+                    shift = threshold - topmost
+                    for element in content:
+                        element["y"] = float(element.get("y", 0.0) or 0.0) + shift
+            # keep the section title text overlaid on (and centered in) its uniform bar
+            for element in elements:
+                if element.get("type") == "section_title" and str(element.get("section_id") or "") == section_id:
+                    element["y"] = bar_y
+                    element["height"] = bar_height
+        return elements
 
     def _settle_force_fit_lane(
         self,
@@ -2838,7 +2874,51 @@ class MicroLayoutRefiner:
             ):
                 break
             settled = self._sync_container_bounds(settled, allow_shrink=True)
+        # Last resort: a lane so over-full that shrinking visuals still cannot make room.
+        # Rather than overflow (which the deterministic quality gate hard-rejects), compress
+        # the title bars — but by a single shared ratio so every bar in this lane stays the
+        # same height as the others. This only triggers on pathologically dense lanes.
+        if self._lane_overflow(settled, lane) > overflow_tolerance:
+            settled = self._compress_bars_uniformly_to_fit(settled, lane, overflow_tolerance)
+            settled = self._sync_container_bounds(settled, allow_shrink=True)
         return settled
+
+    def _compress_bars_uniformly_to_fit(
+        self,
+        elements: List[Dict[str, Any]],
+        lane: Dict[str, Any],
+        tolerance: float,
+    ) -> List[Dict[str, Any]]:
+        overflow = self._lane_overflow(elements, lane)
+        if overflow <= tolerance:
+            return elements
+        accent_blocks = [e for e in elements if e.get("type") == "title_accent_block"]
+        total_bar_height = sum(float(e.get("height", 0.0) or 0.0) for e in accent_blocks)
+        if not accent_blocks or total_bar_height <= 0.0:
+            return elements
+        # Shared multiplicative ratio so every bar shrinks by the same proportion (keeping
+        # them equal within the lane); never shrink below 50% of the uniform height.
+        remove = min(overflow + tolerance, total_bar_height * 0.5)
+        ratio = max((total_bar_height - remove) / total_bar_height, 0.5)
+        for bar in sorted(accent_blocks, key=lambda e: float(e.get("y", 0.0) or 0.0)):
+            old_height = float(bar.get("height", 0.0) or 0.0)
+            new_height = max(old_height * ratio, 0.05)
+            delta = old_height - new_height
+            if delta <= 0.0:
+                continue
+            old_bottom = float(bar.get("y", 0.0) or 0.0) + old_height
+            bar["height"] = new_height
+            section_id = str(bar.get("section_id") or "")
+            for element in elements:
+                if element is bar:
+                    continue
+                # keep the overlaid title text inside the (now shorter) bar
+                if element.get("type") == "section_title" and str(element.get("section_id") or "") == section_id:
+                    element["height"] = min(float(element.get("height", 0.0) or 0.0), new_height)
+                element_y = float(element.get("y", 0.0) or 0.0)
+                if element_y >= old_bottom - 0.02:
+                    element["y"] = element_y - delta
+        return elements
 
     def _lane_overflow(self, elements: List[Dict[str, Any]], lane: Dict[str, Any]) -> float:
         if not elements:
