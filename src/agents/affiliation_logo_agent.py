@@ -23,13 +23,64 @@ class AffiliationLogoAgent:
     receive already-local image paths, while the renderer only paints those paths.
     """
 
+    # Built-in institution -> web domain seeds. Western services (Clearbit
+    # autocomplete, Google/DuckDuckGo favicons, Wikimedia) have poor coverage of
+    # Chinese/Asian universities, so seeding the real domain lets the site-icon
+    # resolver fetch the logo directly from the institution's own site. Config
+    # `known_domains` overrides these.
+    _DEFAULT_KNOWN_DOMAINS: Dict[str, str] = {
+        "Tsinghua University": "tsinghua.edu.cn",
+        "Peking University": "pku.edu.cn",
+        "Shanghai Jiao Tong University": "sjtu.edu.cn",
+        "Fudan University": "fudan.edu.cn",
+        "Zhejiang University": "zju.edu.cn",
+        "University of Science and Technology of China": "ustc.edu.cn",
+        "Nanjing University": "nju.edu.cn",
+        "East China Normal University": "ecnu.edu.cn",
+        "Beihang University": "buaa.edu.cn",
+        "Beijing Institute of Technology": "bit.edu.cn",
+        "Harbin Institute of Technology": "hit.edu.cn",
+        "Wuhan University": "whu.edu.cn",
+        "Huazhong University of Science and Technology": "hust.edu.cn",
+        "Sun Yat-sen University": "sysu.edu.cn",
+        "Xi'an Jiaotong University": "xjtu.edu.cn",
+        "Tongji University": "tongji.edu.cn",
+        "Nankai University": "nankai.edu.cn",
+        "Tianjin University": "tju.edu.cn",
+        "Sichuan University": "scu.edu.cn",
+        "Xiamen University": "xmu.edu.cn",
+        "Southeast University": "seu.edu.cn",
+        "Beijing University of Posts and Telecommunications": "bupt.edu.cn",
+        "Renmin University of China": "ruc.edu.cn",
+        "Central South University": "csu.edu.cn",
+        "Shandong University": "sdu.edu.cn",
+        "Beijing Normal University": "bnu.edu.cn",
+        "Dalian University of Technology": "dlut.edu.cn",
+        "South China University of Technology": "scut.edu.cn",
+        "University of Electronic Science and Technology of China": "uestc.edu.cn",
+        "Northwestern Polytechnical University": "nwpu.edu.cn",
+        "Chongqing University": "cqu.edu.cn",
+        "Jilin University": "jlu.edu.cn",
+        "Hunan University": "hnu.edu.cn",
+        "University of Chinese Academy of Sciences": "ucas.ac.cn",
+        "Chinese Academy of Sciences": "cas.cn",
+        "The Hong Kong University of Science and Technology": "ust.hk",
+        "Hong Kong University of Science and Technology": "ust.hk",
+        "The University of Hong Kong": "hku.hk",
+        "The Chinese University of Hong Kong": "cuhk.edu.hk",
+        "The Hong Kong Polytechnic University": "polyu.edu.hk",
+        "City University of Hong Kong": "cityu.edu.hk",
+        "Nanyang Technological University": "ntu.edu.sg",
+        "National University of Singapore": "nus.edu.sg",
+    }
+
     def __init__(self):
         self.name = "affiliation_logo_agent"
         self.config = load_config().get("affiliation_logos", {})
         self.timeout = self.config.get("request_timeout_seconds", 20)
         self.max_logos = self.config.get("max_logos", 4)
         self.clearbit_base_url = self.config.get("clearbit_base_url", "https://logo.clearbit.com").rstrip("/")
-        self.known_domains = self.config.get("known_domains", {})
+        self.known_domains = {**self._DEFAULT_KNOWN_DOMAINS, **self.config.get("known_domains", {})}
         self.official_logo_urls = self.config.get("official_logo_urls", {})
         self.known_commons_files = self.config.get("known_commons_files", {})
         self.local_dirs = self.config.get("local_dirs", ["affiliation_logos", "logos"])
@@ -213,6 +264,97 @@ class AffiliationLogoAgent:
         cache[key] = domain
         return domain
 
+    def _http_get(self, url: str) -> Optional[requests.Response]:
+        """GET with a browser UA; retry once without TLS verification, because some
+        university sites (notably Chinese .edu.cn) present incomplete cert chains."""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        }
+        try:
+            return requests.get(url, timeout=self.timeout, headers=headers, verify=True, allow_redirects=True)
+        except requests.exceptions.SSLError:
+            pass
+        except Exception:
+            return None
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+        try:
+            return requests.get(url, timeout=self.timeout, headers=headers, verify=False, allow_redirects=True)
+        except Exception:
+            return None
+
+    def _best_icon_url(self, html: str, base_url: str) -> Optional[str]:
+        """Pick the best icon URL declared in a page's <link rel=...icon...> tags,
+        preferring apple-touch-icon and the largest declared size; skip SVG/mask icons
+        (Pillow cannot rasterize them)."""
+        from urllib.parse import urljoin
+
+        best_url: Optional[str] = None
+        best_score = -(10 ** 9)
+        for tag in re.findall(r"<link\b[^>]*>", html, re.I):
+            rel = re.search(r"rel\s*=\s*[\"']([^\"']+)[\"']", tag, re.I)
+            href = re.search(r"href\s*=\s*[\"']([^\"']+)[\"']", tag, re.I)
+            if not rel or not href:
+                continue
+            rel_val = rel.group(1).lower()
+            if "icon" not in rel_val:
+                continue
+            url = urljoin(base_url, href.group(1).strip())
+            path = url.lower().split("?")[0]
+            size_match = re.search(r"sizes\s*=\s*[\"']?(\d+)", tag, re.I)
+            score = int(size_match.group(1)) if size_match else 0
+            if "apple-touch" in rel_val:
+                score += 200  # apple-touch icons are usually >=180px, good base quality
+            if "mask-icon" in rel_val or path.endswith(".svg"):
+                score -= 5000  # monochrome/vector, unusable as a color logo
+            if score > best_score:
+                best_score, best_url = score, url
+        return best_url
+
+    def _download_site_icon_logo(self, domain: str, output_path: Path) -> Optional[str]:
+        """Fetch the institution's own homepage and download the icon it declares via
+        <link rel="icon"/"apple-touch-icon">. Far more reliable than third-party
+        favicon services for sites (e.g. Chinese .edu.cn) that Google/DuckDuckGo cannot
+        crawl, and often higher-resolution than a bare /favicon.ico."""
+        if not domain:
+            return None
+        from io import BytesIO
+        from urllib.parse import urljoin
+
+        html = None
+        base_url = None
+        for candidate in (f"https://www.{domain}/", f"https://{domain}/"):
+            resp = self._http_get(candidate)
+            if resp is not None and resp.status_code == 200 and resp.text:
+                html, base_url = resp.text, str(resp.url)
+                break
+        if not html:
+            return None
+
+        icon_url = self._best_icon_url(html, base_url) or urljoin(base_url, "/favicon.ico")
+        resp = self._http_get(icon_url)
+        if resp is None or resp.status_code != 200 or len(resp.content) < 400:
+            return None
+        try:
+            with Image.open(BytesIO(resp.content)) as img:
+                img = img.convert("RGBA")
+                long_edge = max(img.size)
+                target = max(self.min_logo_long_edge + 192, 512)
+                if long_edge < target:
+                    scale = target / max(long_edge, 1)
+                    img = img.resize((round(img.size[0] * scale), round(img.size[1] * scale)), Image.LANCZOS)
+                img.save(output_path, "PNG")
+            if self._normalize_image_file(output_path):
+                return str(output_path)
+            output_path.unlink(missing_ok=True)
+        except Exception:
+            output_path.unlink(missing_ok=True)
+        return None
+
     def _download_favicon_logo(self, domain: str, output_path: Path) -> Optional[str]:
         """Last-resort, license-safe logo: the site's high-res favicon. Lower quality
         than a real logo but reliable when no logo asset can be found."""
@@ -274,6 +416,9 @@ class AffiliationLogoAgent:
             downloaded = self._download_clearbit_logo(domain, output_path)
             if downloaded:
                 return self._make_logo_entry(institution, domain, downloaded, "clearbit", "resolved")
+            site_icon = self._download_site_icon_logo(domain, output_path)
+            if site_icon:
+                return self._make_logo_entry(institution, domain, site_icon, "site_icon", "resolved")
             favicon = self._download_favicon_logo(domain, output_path)
             if favicon:
                 return self._make_logo_entry(institution, domain, favicon, "favicon", "resolved")
