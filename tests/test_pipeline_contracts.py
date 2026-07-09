@@ -1,6 +1,7 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+import zipfile
 
 import pytest
 from PIL import Image
@@ -54,6 +55,7 @@ from src.workflow.pipeline import (
     _section_geometry_issues,
     resolve_poster_dimensions,
 )
+from src.tools.mineru_api import MinerUClient, MinerUExtraction
 
 
 def test_parser_visual_assets_registry_matches_images_tables():
@@ -79,6 +81,147 @@ def test_parser_visual_assets_registry_matches_images_tables():
     assert visual_assets["figure_1"]["asset_type"] == "figure"
     assert visual_assets["table_2"]["source_path"] == tables["2"]["path"]
     assert visual_assets["table_2"]["asset_type"] == "table"
+
+
+def test_parser_extracts_mineru_assets_from_content_list(tmp_path):
+    extract_dir = tmp_path / "content" / "mineru_raw"
+    images_dir = extract_dir / "images"
+    images_dir.mkdir(parents=True)
+    Image.new("RGB", (120, 60), "white").save(images_dir / "figure-a.jpg")
+    Image.new("RGB", (200, 80), "white").save(images_dir / "table-a.jpg")
+    content_list_path = extract_dir / "paper_content_list.json"
+    items = [
+        {
+            "type": "image",
+            "img_path": "images/figure-a.jpg",
+            "image_caption": ["Figure 1: Architecture overview."],
+            "page_idx": 0,
+            "bbox": [1, 2, 3, 4],
+        },
+        {
+            "type": "table",
+            "img_path": "images/table-a.jpg",
+            "table_caption": ["Table 1: Main results."],
+            "page_idx": 1,
+        },
+    ]
+    content_list_path.write_text(json.dumps(items), encoding="utf-8")
+    extraction = MinerUExtraction(
+        raw_text="# Paper",
+        extract_dir=extract_dir,
+        zip_path=extract_dir / "mineru_result.zip",
+        content_list_path=content_list_path,
+        content_items=items,
+        report={"backend": "mineru"},
+    )
+    parser = Parser.__new__(Parser)
+    parser.name = "parser"
+
+    figures, tables = parser._extract_mineru_assets(extraction, tmp_path / "assets")
+
+    assert figures["1"]["caption"] == "Figure 1: Architecture overview."
+    assert figures["1"]["aspect"] == 2.0
+    assert Path(figures["1"]["path"]).exists()
+    assert tables["1"]["caption"] == "Table 1: Main results."
+    assert tables["1"]["aspect"] == 2.5
+    assert Path(tables["1"]["path"]).exists()
+
+
+def test_mineru_client_uploads_polls_and_unpacks_zip(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    fixture_dir = tmp_path / "fixture"
+    (fixture_dir / "images").mkdir(parents=True)
+    Image.new("RGB", (80, 40), "white").save(fixture_dir / "images" / "figure-a.png")
+    (fixture_dir / "full.md").write_text("# Parsed Paper\n\nBody.", encoding="utf-8")
+    (fixture_dir / "paper_content_list.json").write_text(
+        json.dumps([{"type": "image", "img_path": "images/figure-a.png", "image_caption": ["Figure"]}]),
+        encoding="utf-8",
+    )
+    zip_path = tmp_path / "mineru_fixture.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.write(fixture_dir / "full.md", "full.md")
+        zf.write(fixture_dir / "paper_content_list.json", "paper_content_list.json")
+        zf.write(fixture_dir / "images" / "figure-a.png", "images/figure-a.png")
+
+    calls = {"post": 0, "put": 0, "get": 0}
+
+    class FakeResponse:
+        def __init__(self, payload=None, content=b"", status_code=200):
+            self._payload = payload or {}
+            self.content = content
+            self.status_code = status_code
+            self.text = json.dumps(self._payload)
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.text)
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls["post"] += 1
+        assert headers["Authorization"] == "Bearer test-key"
+        assert json["model_version"] == "vlm"
+        return FakeResponse({"code": 0, "data": {"batch_id": "batch-1", "file_urls": [{"url": "https://upload"}]}})
+
+    def fake_put(url, data=None, headers=None, timeout=None):
+        calls["put"] += 1
+        assert url == "https://upload"
+        assert headers is None
+        return FakeResponse({})
+
+    def fake_get(url, headers=None, timeout=None):
+        calls["get"] += 1
+        if "extract-results" in url:
+            return FakeResponse({
+                "code": 0,
+                "data": {
+                    "extract_result": [
+                        {"file_name": "paper.pdf", "state": "done", "full_zip_url": "https://download/result.zip"}
+                    ]
+                },
+            })
+        return FakeResponse(content=zip_path.read_bytes())
+
+    monkeypatch.setattr("src.tools.mineru_api.requests.post", fake_post)
+    monkeypatch.setattr("src.tools.mineru_api.requests.put", fake_put)
+    monkeypatch.setattr("src.tools.mineru_api.requests.get", fake_get)
+
+    client = MinerUClient("test-key", base_url="https://mineru.net", poll_interval=0.01)
+    extraction = client.parse_pdf(pdf_path, tmp_path / "content")
+
+    assert extraction.raw_text.startswith("# Parsed Paper")
+    assert extraction.content_list_path is not None
+    assert extraction.content_items[0]["type"] == "image"
+    assert calls == {"post": 1, "put": 1, "get": 2}
+
+
+def test_parser_falls_back_to_marker_when_mineru_fails(tmp_path, monkeypatch):
+    parser = Parser.__new__(Parser)
+    parser.name = "parser"
+    parser.config_data = {
+        "pdf_processing": {
+            "backend": "mineru",
+            "fallback_backend": "marker",
+            "mineru": {"model_version": "vlm"},
+        }
+    }
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+
+    monkeypatch.setattr("src.agents.parser.MinerUClient.from_env", lambda config: (_ for _ in ()).throw(RuntimeError("mineru down")))
+    monkeypatch.setattr(parser, "_extract_raw_text_with_marker", lambda pdf_path, content_dir: ("marker raw", ("marker",)))
+
+    raw_text, raw_result = parser._extract_raw_text(str(tmp_path / "paper.pdf"), content_dir)
+    report = json.loads((content_dir / "mineru_report.json").read_text(encoding="utf-8"))
+
+    assert raw_text == "marker raw"
+    assert raw_result == ("marker",)
+    assert report["fallback_used"] is True
+    assert report["fallback_backend"] == "marker"
+    assert "api_key" not in report
 
 
 def test_parser_extracts_affiliations_from_paper_header():
@@ -2159,7 +2302,7 @@ def test_layout_agent_uses_manual_aff_logo_with_conference_logo(tmp_path):
     assert conference_logo["height"] >= 2.4
 
 
-def test_layout_agent_supports_five_affiliation_logos_without_overflow(tmp_path):
+def test_layout_agent_limits_affiliation_logos_to_three_without_overflow(tmp_path):
     logo_paths = []
     for index in range(5):
         path = tmp_path / f"logo_{index}.png"
@@ -2184,7 +2327,7 @@ def test_layout_agent_supports_five_affiliation_logos_without_overflow(tmp_path)
     logos = [element for element in elements if element.get("type") == "institution_logo"]
     region = agent._title_logo_region(template, False)
 
-    assert len(logos) == 5
+    assert len(logos) == 3
     assert all(region["x"] <= logo["x"] for logo in logos)
     assert all(logo["x"] + logo["width"] <= region["x"] + region["w"] + 1e-6 for logo in logos)
     assert all(region["y"] <= logo["y"] for logo in logos)
