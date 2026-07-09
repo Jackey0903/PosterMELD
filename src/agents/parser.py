@@ -3,7 +3,9 @@ pdf text and asset extraction
 """
 
 import json
+import os
 import re
+import shutil
 from pathlib import Path
 from typing import Dict, Any, Tuple
 
@@ -13,8 +15,10 @@ from marker.models import create_model_dict
 from marker.output import text_from_rendered
 from marker.schema import BlockTypes
 from jinja2 import Template
+from PIL import Image
 
 from src.state.poster_state import PosterState
+from src.tools.mineru_api import MinerUClient, MinerUExtraction
 from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error, log_agent_warning
 from src.config.poster_config import load_config
@@ -25,8 +29,9 @@ class Parser:
     def __init__(self):
         self.name = "parser"
         config_data = load_config()
+        self.config_data = config_data
         batch_config = config_data["pdf_processing"]["batch_sizes"]
-        config = {
+        self.marker_config = {
             "recognition_batch_size": batch_config["recognition"],
             "layout_batch_size": batch_config["layout"],
             "detection_batch_size": batch_config["detection"], 
@@ -36,7 +41,7 @@ class Parser:
             "disable_tqdm": False,
         }
         
-        self.converter = PdfConverter(artifact_dict=create_model_dict(), config=config)
+        self.converter = None
         self.clean_pattern = re.compile(r"<!--[\s\S]*?-->")
         self.enhanced_abt_prompt = load_prompt("config/prompts/narrative_abt_extraction.txt")
         self.visual_classification_prompt = load_prompt("config/prompts/classify_visuals.txt")
@@ -184,11 +189,44 @@ class Parser:
         return None
     
     def _extract_raw_text(self, pdf_path: str, content_dir: Path) -> Tuple[str, Any]:
+        pdf_config = self.config_data.get("pdf_processing", {}) if hasattr(self, "config_data") else {}
+        backend = os.getenv("PDF_PARSER_BACKEND", str(pdf_config.get("backend") or "mineru")).strip().lower()
+        fallback_backend = str(pdf_config.get("fallback_backend") or "marker").strip().lower()
+
+        if backend == "mineru":
+            try:
+                extraction = self._extract_raw_text_with_mineru(pdf_path, content_dir)
+                self._write_mineru_report(content_dir, extraction.report)
+                return extraction.raw_text, extraction
+            except Exception as exc:
+                log_agent_warning(self.name, f"MinerU extraction failed; falling back to marker: {exc}")
+                self._write_mineru_report(content_dir, {
+                    "backend": "mineru",
+                    "model_version": os.getenv("MINERU_MODEL_VERSION", str((pdf_config.get("mineru") or {}).get("model_version") or "vlm")),
+                    "fallback_used": True,
+                    "fallback_backend": fallback_backend,
+                    "error_summary": str(exc)[:1000],
+                })
+                if fallback_backend != "marker":
+                    raise
+
+        return self._extract_raw_text_with_marker(pdf_path, content_dir)
+
+    def _extract_raw_text_with_mineru(self, pdf_path: str, content_dir: Path) -> MinerUExtraction:
+        mineru_config = (self.config_data.get("pdf_processing", {}) if hasattr(self, "config_data") else {}).get("mineru", {})
+        client = MinerUClient.from_env(mineru_config)
+        log_agent_info(self.name, f"converting pdf to raw text with MinerU ({client.model_version})")
+        extraction = client.parse_pdf(pdf_path, content_dir)
+        log_agent_info(self.name, f"MinerU extracted {len(extraction.raw_text)} chars")
+        return extraction
+
+    def _extract_raw_text_with_marker(self, pdf_path: str, content_dir: Path) -> Tuple[str, Any]:
         log_agent_info(self.name, "converting pdf to raw text")
-        document = self.converter.build_document(pdf_path)
+        converter = self._marker_converter()
+        document = converter.build_document(pdf_path)
         
         # create renderer and get rendered output from the existing document
-        renderer = self.converter.resolve_dependencies(MarkdownRenderer)
+        renderer = converter.resolve_dependencies(MarkdownRenderer)
         rendered = renderer(document)
         
         text, _, images = text_from_rendered(rendered)
@@ -200,6 +238,17 @@ class Parser:
         
         raw_result = (document, rendered, images)
         return text, raw_result
+
+    def _marker_converter(self):
+        if self.converter is None:
+            self.converter = PdfConverter(artifact_dict=create_model_dict(), config=self.marker_config)
+        return self.converter
+
+    def _write_mineru_report(self, content_dir: Path, report: Dict[str, Any]) -> None:
+        sanitized = dict(report)
+        sanitized.pop("api_key", None)
+        with open(content_dir / "mineru_report.json", "w", encoding="utf-8") as f:
+            json.dump(sanitized, f, indent=2, ensure_ascii=False)
 
     def _extract_doi(self, raw_text: str) -> str | None:
         """Extract a paper DOI from the header area, not from references."""
@@ -314,6 +363,9 @@ class Parser:
     
     def _extract_assets(self, result, name: str, assets_dir: Path) -> Tuple[Dict, Dict]:
         log_agent_info(self.name, "extracting assets")
+
+        if isinstance(result, MinerUExtraction):
+            return self._extract_mineru_assets(result, assets_dir)
         
         document, rendered, marker_images = result
         
@@ -360,6 +412,126 @@ class Parser:
             json.dump(caption_map, f, indent=2, ensure_ascii=False)
         
         return figures, tables
+
+    def _extract_mineru_assets(self, extraction: MinerUExtraction, assets_dir: Path) -> Tuple[Dict, Dict]:
+        figures: Dict[str, Dict[str, Any]] = {}
+        tables: Dict[str, Dict[str, Any]] = {}
+        caption_map: Dict[str, Dict[str, Any]] = {}
+        image_count = 0
+        table_count = 0
+
+        for item in extraction.content_items:
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type in {"image", "chart", "figure"}:
+                image_count += 1
+                asset = self._copy_mineru_asset(
+                    extraction,
+                    item,
+                    assets_dir / f"figure-{image_count}.png",
+                    fallback_caption=f"Figure {image_count}",
+                    caption_keys=("image_caption", "caption", "img_caption"),
+                )
+                if asset:
+                    figures[str(image_count)] = asset
+                    caption_map[f"figure-{image_count}.png"] = self._mineru_caption_entry(item, asset["caption"])
+                else:
+                    image_count -= 1
+            elif item_type == "table":
+                table_count += 1
+                asset = self._copy_mineru_asset(
+                    extraction,
+                    item,
+                    assets_dir / f"table-{table_count}.png",
+                    fallback_caption=f"Table {table_count}",
+                    caption_keys=("table_caption", "caption"),
+                )
+                if asset:
+                    tables[str(table_count)] = asset
+                    caption_map[f"table-{table_count}.png"] = self._mineru_caption_entry(item, asset["caption"])
+                else:
+                    table_count -= 1
+
+        with open(assets_dir / "figures.json", 'w', encoding='utf-8') as f:
+            json.dump(figures, f, indent=2)
+        with open(assets_dir / "tables.json", 'w', encoding='utf-8') as f:
+            json.dump(tables, f, indent=2)
+        with open(assets_dir / "fig_tab_caption_mapping.json", 'w', encoding='utf-8') as f:
+            json.dump(caption_map, f, indent=2, ensure_ascii=False)
+
+        extraction.report.update({
+            "figure_count": len(figures),
+            "table_count": len(tables),
+        })
+        self._write_mineru_report(extraction.extract_dir.parent, extraction.report)
+
+        return figures, tables
+
+    def _copy_mineru_asset(
+        self,
+        extraction: MinerUExtraction,
+        item: Dict[str, Any],
+        target_path: Path,
+        *,
+        fallback_caption: str,
+        caption_keys: Tuple[str, ...],
+    ) -> Dict[str, Any] | None:
+        source = self._resolve_mineru_asset_path(extraction, item)
+        if source is None or not source.exists():
+            log_agent_warning(self.name, f"MinerU asset missing img_path: {item.get('img_path') or item.get('image_path')}")
+            return None
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with Image.open(source) as image:
+                image.convert("RGB").save(target_path, "PNG")
+                width, height = image.size
+        except Exception:
+            shutil.copyfile(source, target_path)
+            with Image.open(target_path) as image:
+                width, height = image.size
+
+        return {
+            "caption": self._mineru_caption(item, caption_keys, fallback_caption),
+            "path": str(target_path),
+            "width": width,
+            "height": height,
+            "aspect": width / height if height > 0 else 1,
+        }
+
+    def _resolve_mineru_asset_path(self, extraction: MinerUExtraction, item: Dict[str, Any]) -> Path | None:
+        raw_path = item.get("img_path") or item.get("image_path") or item.get("path")
+        if not raw_path:
+            return None
+        candidate = Path(str(raw_path))
+        if candidate.is_absolute():
+            return candidate
+        candidates = [extraction.extract_dir / candidate]
+        if extraction.content_list_path is not None:
+            candidates.append(extraction.content_list_path.parent / candidate)
+        for path in candidates:
+            if path.exists():
+                return path
+        return candidates[0]
+
+    def _mineru_caption(self, item: Dict[str, Any], keys: Tuple[str, ...], fallback: str) -> str:
+        for key in keys:
+            value = item.get(key)
+            if isinstance(value, list):
+                text = " ".join(str(part).strip() for part in value if str(part).strip())
+            else:
+                text = str(value or "").strip()
+            if text:
+                return text
+        return fallback
+
+    def _mineru_caption_entry(self, item: Dict[str, Any], caption: str) -> Dict[str, Any]:
+        return {
+            "block_id": str(item.get("id") or item.get("block_id") or ""),
+            "block_type": str(item.get("type") or ""),
+            "captions": [caption] if caption else [],
+            "page": item.get("page_idx"),
+            "bbox": item.get("bbox"),
+        }
 
     def _build_visual_registry(self, figures: Dict, tables: Dict) -> Dict[str, Dict[str, Any]]:
         """Build the canonical visual asset registry for downstream agents."""

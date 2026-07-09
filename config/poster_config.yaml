@@ -317,7 +317,21 @@ text_measurement:
   
   newline_offset_ratio: 1.0       # font_size/72 per newline
 
-pdf_processing: # for marker PDF converter
+pdf_processing:
+  backend: "mineru"
+  fallback_backend: "marker"
+  mineru:
+    base_url: "https://mineru.net"
+    model_version: "vlm"
+    language: "en"
+    enable_table: true
+    enable_formula: true
+    is_ocr: false
+    request_timeout_seconds: 60
+    poll_interval_seconds: 5
+    poll_timeout_seconds: 900
+
+  # for marker PDF converter fallback
   batch_sizes:
     recognition: 4
     layout: 4
@@ -344,7 +358,7 @@ poster_visual_style:
     author_font_family: "Arial"
     author_font_color: "#111111"
     shadow:
-      enabled: true
+      enabled: false
       color: "#AEB5CC"
       offset_x_inches: 0.035
       offset_y_inches: 0.035
@@ -355,7 +369,7 @@ poster_visual_style:
     author_font_family: "Arial"
     author_font_color: "#211517"
     shadow:
-      enabled: true
+      enabled: false
       color: "#D8B7BE"
       offset_x_inches: 0.035
       offset_y_inches: 0.035
@@ -365,7 +379,7 @@ poster_visual_style:
     font_weight: "bold"
     font_color: "#FFFFFF"
     shadow:
-      enabled: true
+      enabled: false
       color: "#9FB7BC"
       offset_x_inches: 0.025
       offset_y_inches: 0.025
@@ -383,7 +397,7 @@ poster_visual_style:
     small_number_width_inches: 0.46
     small_number_gap_inches: 0.12
     shadow:
-      enabled: true
+      enabled: false
       color: "#B4BDD8"
       offset_x_inches: 0.02
       offset_y_inches: 0.02
