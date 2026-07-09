@@ -1288,11 +1288,13 @@ def main():
     parser.add_argument("paper_path_positional", nargs="?", help="Path to the PDF paper")
     parser.add_argument("--paper_path", type=str, required=False, help="Path to the PDF paper")
     parser.add_argument("--text_model", type=str, default=default_text_model,
-                       choices=["gpt-5", "gpt-5.1", "gpt-5.4", "gpt-5.4-xhigh", "gpt-5.5-xhigh", "gpt-4o-2024-08-06", "gpt-4.1-2025-04-14", "gpt-4.1-mini-2025-04-14", "claude-sonnet-4-20250514", "claude-opus-4.5", "gemini-2.5-pro", "glm-4.6", "glm-4.5", "glm-4.5-air", "glm-4", "kimi-k2-turbo-preview", "MiniMax-M2", "qwen3-max"],
-                       help="Text model for content processing")
+                       help="Text model for content processing (overrides PAPER2POSTER_TEXT_MODEL/PAPER2POSTER_MODEL env). "
+                            "Any model resolvable by _get_model_config is accepted: a known alias "
+                            "(e.g. gpt-5, gpt-5.4, gpt-4o, gpt-4.1-2025-04-14, claude-opus-4.5, gemini-2.5-pro, glm-4.6), "
+                            "an explicit provider/model (e.g. openai/gpt-4o, anthropic/claude-opus-4.5), or any OpenAI-family name.")
     parser.add_argument("--vision_model", type=str, default=default_vision_model,
-                       choices=["gpt-5", "gpt-5.1", "gpt-5.4", "gpt-5.4-xhigh", "gpt-5.5-xhigh", "gpt-4o-2024-08-06", "gpt-4.1-2025-04-14", "gpt-4.1-mini-2025-04-14", "claude-sonnet-4-20250514", "claude-opus-4.5", "gemini-2.5-pro", "glm-4.6v", "glm-4.5v", "glm-4v", "moonshot-v1-8k-vision-preview", "MiniMax-M2", "qwen3-vl-plus"],
-                       help="Vision model for image analysis")
+                       help="Vision model for image analysis (overrides env). Same resolution rules as --text_model "
+                            "(e.g. gpt-5, gpt-4o, glm-4.6v, qwen3-vl-plus, or provider/model).")
     parser.add_argument("--poster_width", type=float, default=None, help="Poster width in inches")
     parser.add_argument("--poster_height", type=float, default=None, help="Poster height in inches")
     parser.add_argument(

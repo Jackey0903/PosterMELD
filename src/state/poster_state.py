@@ -410,7 +410,17 @@ def create_state(
 
 
 def _get_model_config(model_id: str) -> ModelConfig:
-    """get model configuration"""
+    """Resolve a model id (typically from --text_model / --vision_model on the CLI,
+    which already override env defaults) into a ModelConfig.
+
+    Resolution order:
+      1. exact known alias in the table below;
+      2. explicit ``provider/model`` form -> ModelConfig(model, provider);
+      3. OpenAI-family passthrough (gpt-*, o1/o3/o4, chatgpt-*) -> provider "openai",
+         so any OpenAI model name (e.g. ``gpt-4o``) works even if not pre-listed
+         instead of silently degrading to the gpt-4.1 fallback;
+      4. otherwise fall back to gpt-4.1.
+    """
     configs = {
         "claude": ModelConfig("claude-sonnet-4-20250514", "anthropic"),
         "claude-sonnet-4-20250514": ModelConfig("claude-sonnet-4-20250514", "anthropic"),
@@ -438,5 +448,18 @@ def _get_model_config(model_id: str) -> ModelConfig:
         "MiniMax-M2": ModelConfig("MiniMax-M2", "Minimax"),
         "qwen3-max": ModelConfig("qwen3-max", "Alibaba"),
         "qwen3-vl-plus": ModelConfig("qwen3-vl-plus", "Alibaba"),
+        "gpt-4o": ModelConfig("gpt-4o", "openai"),
     }
-    return configs.get(model_id, configs["gpt-4.1-2025-04-14"])
+    if not model_id:
+        return configs["gpt-4.1-2025-04-14"]
+    model_id = model_id.strip()
+    if model_id in configs:
+        return configs[model_id]
+    if "/" in model_id:
+        provider, _, name = model_id.partition("/")
+        provider, name = provider.strip(), name.strip()
+        if provider and name:
+            return ModelConfig(name, provider)
+    if model_id.lower().startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+        return ModelConfig(model_id, "openai")
+    return configs["gpt-4.1-2025-04-14"]
