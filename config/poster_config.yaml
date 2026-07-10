@@ -51,7 +51,8 @@ header_planner:
   short_title_max_words: 11
   subtitle_max_chars: 86
   portrait_subtitle_max_chars: 62
-  title_logo_gap_inches: 0.46
+  title_logo_gap_inches: 1.2   # clearance between the title column and the header logos so a
+                               # width-filling title never crowds the logos (long titles wrap instead)
   min_title_logo_gap_inches: 0.20
   min_title_width_fraction: 0.42
   max_logo_header_fraction: 0.78
