@@ -441,6 +441,10 @@ class HeaderPlanner:
                 author_font_size,
                 template_layout,
             )
+            if title_wrap_policy == "two_line":
+                # A wrapped title dominates the header; keep the authors clearly smaller so
+                # the title can be large and fill the width instead of leaving an empty band.
+                author_font_size = min(author_font_size, self._wrapped_title_author_font_cap(title_box["h"]))
         else:
             display_title = self._display_title_text(title, title_wrap_policy)
             if title_wrap_policy == "single_line":
@@ -666,14 +670,30 @@ class HeaderPlanner:
             return "single_line" if self.header_config.get("force_single_line_title", True) else "two_line"
         return "auto"
 
-    def _available_title_height(self, box_height: float, author_font_size: int) -> float:
+    def _wrapped_title_author_strip(self, box_height: float) -> float:
+        """Height reserved for the author line under a wrapped (two-line) title. Kept
+        compact so the title can grow large and fill the header width instead of leaving
+        a big empty band; the author font is capped to match this strip."""
+        frac = float(self.header_config.get("wrapped_title_author_strip_frac", 0.19))
+        return max(box_height * frac, 0.55)
+
+    def _wrapped_title_author_font_cap(self, box_height: float) -> int:
+        """Author font that fits the compact strip reserved under a wrapped title."""
+        strip = self._wrapped_title_author_strip(box_height)
+        return max(int(strip / 1.12 * 72), 38)
+
+    def _available_title_height(self, box_height: float, author_font_size: int, two_line: bool = False) -> float:
         """Vertical room left for the title text once the author line is placed, mirroring
-        the landscape allocation in _title_metrics so the fitted font and the box agree."""
+        the landscape allocation in _title_metrics so the fitted font and the box agree.
+        For a two-line title the author strip is compact so the title can be large."""
         author_gap = float(self.config["typography"].get("title_author_gap_points", 16)) / 72
-        author_box_h = min(
-            max((author_font_size / 72) * 1.12, 0.45),
-            max(box_height * 0.30, 0.45),
-        )
+        if two_line:
+            author_box_h = self._wrapped_title_author_strip(box_height)
+        else:
+            author_box_h = min(
+                max((author_font_size / 72) * 1.12, 0.45),
+                max(box_height * 0.30, 0.45),
+            )
         return max(box_height - author_gap - author_box_h, box_height * 0.38)
 
     def _resolve_auto_title_layout(
@@ -700,7 +720,7 @@ class HeaderPlanner:
             width_inches,
             base_font_size,
             template_layout,
-            max_height_inches=self._available_title_height(box_height, author_font_size),
+            max_height_inches=self._available_title_height(box_height, author_font_size, two_line=True),
         )
         gain_threshold = int(self.header_config.get("title_auto_wrap_gain_threshold", 6))
         if two_size >= single_size + gain_threshold:

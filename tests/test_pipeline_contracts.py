@@ -1553,6 +1553,8 @@ def test_header_planner_wraps_long_landscape_title_to_keep_font_large(tmp_path):
     # font stays large — far bigger than the shrunk single-line fit for this narrow box
     assert title["font_size"] >= 58
     assert title["font_size"] > single_line_size
+    # the wrapped title dominates: it is clearly larger than the author line
+    assert title["font_size"] > plan["authors"]["font_size"]
     assert plan["validation"]["passed"]
 
 
