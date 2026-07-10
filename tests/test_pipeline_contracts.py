@@ -465,6 +465,13 @@ def test_curator_normalizes_poster_text_items():
     assert normalize_text_for_poster(
         "Overall empirical conclusion: HAGS is the strongest method across cost."
     ) == "Overall empirical conclusion: HAGS is the strongest method."
+    # unrendered LaTeX math and sub/sup markup are stripped so they neither show as
+    # garbage nor bloat a block past its panel
+    assert "$" not in normalize_text_for_poster("For anchor $x_{i}$ the loss $$\\mathcal{L} = -\\log p$$ holds.")
+    assert "\\" not in normalize_text_for_poster("For anchor $x_{i}$ the loss $$\\mathcal{L} = -\\log p$$ holds.")
+    assert normalize_text_for_poster("The score S<sub>i</sub> uses the k<sup>th</sup> layer.") == (
+        "The score Si uses the kth layer."
+    )
     assert LayoutAgent()._section_title_label({}, "Paper S Main", create_state("/tmp/paper.pdf"))["title"] == "Paper's Main"
     assert normalize_title_for_poster("Active Geospatial Search For Effcient Tenant Eviction Outreach") == (
         "Active Geospatial Search for Efficient Tenant Eviction Outreach"

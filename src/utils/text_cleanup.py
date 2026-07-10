@@ -67,12 +67,38 @@ def repair_mojibake(text: str) -> str:
     return text
 
 
+def strip_latex_and_markup(text: str) -> str:
+    """Strip unrendered LaTeX math and HTML sub/sup markup from poster body text.
+
+    Generated text sometimes contains raw LaTeX (``$x_i$``, ``$$ \\mathcal{L} = ...$$``)
+    and ``<sub>``/``<sup>`` tags that PowerPoint renders verbatim. Besides looking wrong,
+    these fragments (often truncated mid-equation) add several extra lines and push a
+    block past its panel. Plainise them: unwrap sub/sup, drop math delimiters and LaTeX
+    commands/braces, and tighten subscript underscores.
+    """
+    if not isinstance(text, str) or "$" not in text and "\\" not in text and "<su" not in text.lower():
+        return text
+    # <sub>i</sub> / <sup>2</sup> -> i / 2, then drop any stray sub/sup tags
+    text = re.sub(r"<\s*sub\s*>(.*?)<\s*/\s*sub\s*>", r"\1", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<\s*sup\s*>(.*?)<\s*/\s*sup\s*>", r"\1", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"</?\s*(?:sub|sup)\s*>", "", text, flags=re.IGNORECASE)
+    # math delimiters ($$ display, $ inline), LaTeX commands (\mathcal, \frac, ...), braces
+    text = text.replace("$$", " ").replace("$", " ")
+    text = re.sub(r"\\[a-zA-Z]+", " ", text)
+    text = re.sub(r"[{}]", " ", text)
+    # tighten "x _ i" subscript spacing to "x_i" and collapse whitespace
+    text = re.sub(r"\s*_\s*", "_", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text
+
+
 def normalize_text_for_poster(text: str) -> str:
     """Normalize generated poster text before it reaches PowerPoint."""
     if not isinstance(text, str) or not text:
         return text
 
     text = repair_mojibake(text)
+    text = strip_latex_and_markup(text)
     text = text.replace("\u00a0", " ")
     text = text.replace("–", "-")
     text = text.replace("—", "-")
