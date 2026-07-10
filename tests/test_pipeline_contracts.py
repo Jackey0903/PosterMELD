@@ -1515,6 +1515,47 @@ def test_header_planner_generates_centered_subtitle_for_short_title(tmp_path):
     assert plan["validation"]["passed"]
 
 
+def test_header_planner_wraps_long_landscape_title_to_keep_font_large(tmp_path):
+    """A long landscape title must wrap to two lines at a large font instead of shrinking
+    to a tiny single line (which previously left the title smaller than the authors).
+
+    Header logos narrow the title box (as on a real poster), so a single line would have
+    to shrink a lot; the planner should wrap to two lines and keep the font large."""
+    conf_path = tmp_path / "conference.png"
+    aff_path = tmp_path / "affiliation.png"
+    Image.new("RGBA", (900, 420), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (700, 700), (160, 40, 60, 255)).save(aff_path)
+    long_title = "Audio-Assisted Face Video Restoration with Temporal and Identity Complementary Learning"
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        logo_path=str(conf_path),
+        aff_logo_path=str(aff_path),
+        header_route="classic_left",
+        header_subtitle_policy="off",
+    )
+    state["affiliation_logos"] = [
+        {"institution": "Test University", "logo_path": str(aff_path), "domain": None, "source": "test", "aspect": 1.0}
+    ]
+    state["narrative_content"] = {"meta": {"poster_title": long_title, "authors": "A. One, B. Two, C. Three"}}
+
+    plan = HeaderPlanner()(state)["header_plan"]
+    title = plan["title"]
+
+    single_line_size = HeaderPlanner()._fit_single_line_font_size(
+        title["text"], plan["title_box"]["w"], 100, {"orientation": "landscape"}
+    )
+    assert title["wrap_policy"] == "two_line"
+    assert title["single_line"] is False
+    assert "\n" in title["display_text"]
+    # font stays large — far bigger than the shrunk single-line fit for this narrow box
+    assert title["font_size"] >= 58
+    assert title["font_size"] > single_line_size
+    assert plan["validation"]["passed"]
+
+
 def test_header_planner_auto_defaults_to_stable_classic_left_without_seed(tmp_path):
     routes = []
     subtitles = []

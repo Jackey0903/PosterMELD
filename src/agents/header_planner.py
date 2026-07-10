@@ -432,21 +432,32 @@ class HeaderPlanner:
             title_box = {**title_box, "x": text_band["x"], "w": text_band["w"]}
         title_box = self._apply_title_vertical_offset(template_layout, title_box, physical_route)
         title_wrap_policy = self._resolve_title_wrap_policy(state, template_layout, route, physical_route)
-        display_title = self._display_title_text(title, title_wrap_policy)
-        if title_wrap_policy == "single_line":
-            title_font_size = self._fit_single_line_font_size(
+        if title_wrap_policy == "auto":
+            title_wrap_policy, title_font_size, display_title = self._resolve_auto_title_layout(
                 title,
                 title_box["w"],
+                title_box["h"],
                 title_font_size,
+                author_font_size,
                 template_layout,
             )
         else:
-            title_font_size = self._fit_wrapped_title_font_size(
-                display_title,
-                title_box["w"],
-                title_font_size,
-                template_layout,
-            )
+            display_title = self._display_title_text(title, title_wrap_policy)
+            if title_wrap_policy == "single_line":
+                title_font_size = self._fit_single_line_font_size(
+                    title,
+                    title_box["w"],
+                    title_font_size,
+                    template_layout,
+                )
+            else:
+                title_font_size = self._fit_wrapped_title_font_size(
+                    display_title,
+                    title_box["w"],
+                    title_font_size,
+                    template_layout,
+                    max_height_inches=self._available_title_height(title_box["h"], author_font_size),
+                )
         if subtitle_text:
             subtitle_font_size = self._fit_single_line_font_size(
                 subtitle_text,
@@ -647,7 +658,54 @@ class HeaderPlanner:
             and str(physical_route).startswith("portrait_split_logos")
         ):
             return "two_line"
-        return "single_line" if self.header_config.get("force_single_line_title", True) else "two_line"
+        # Landscape auto: defer the single-vs-two-line choice to _resolve_auto_title_layout,
+        # which wraps long titles to a second line instead of shrinking them to an
+        # unreadably small single line. Portrait routes keep their prior single-line
+        # default (their vertical budget and logo strips are tuned for one line).
+        if template_layout.get("orientation") == "portrait":
+            return "single_line" if self.header_config.get("force_single_line_title", True) else "two_line"
+        return "auto"
+
+    def _available_title_height(self, box_height: float, author_font_size: int) -> float:
+        """Vertical room left for the title text once the author line is placed, mirroring
+        the landscape allocation in _title_metrics so the fitted font and the box agree."""
+        author_gap = float(self.config["typography"].get("title_author_gap_points", 16)) / 72
+        author_box_h = min(
+            max((author_font_size / 72) * 1.12, 0.45),
+            max(box_height * 0.30, 0.45),
+        )
+        return max(box_height - author_gap - author_box_h, box_height * 0.38)
+
+    def _resolve_auto_title_layout(
+        self,
+        title: str,
+        width_inches: float,
+        box_height: float,
+        base_font_size: int,
+        author_font_size: int,
+        template_layout: Dict[str, Any],
+    ) -> Tuple[str, int, str]:
+        """Choose single- vs two-line title layout to keep the title as large as possible.
+
+        A single line is kept only when it does not have to shrink much; otherwise the
+        title wraps to two balanced lines, which lets the font be far larger than a shrunk
+        single line (the two-line font is capped to the available header height so it never
+        overlaps the authors)."""
+        single_size = self._fit_single_line_font_size(title, width_inches, base_font_size, template_layout)
+        wrapped_display = self._display_title_text(title, "two_line")
+        if len([ln for ln in wrapped_display.splitlines() if ln.strip()]) < 2:
+            return "single_line", single_size, re.sub(r"\s+", " ", str(title or "")).strip()
+        two_size = self._fit_wrapped_title_font_size(
+            wrapped_display,
+            width_inches,
+            base_font_size,
+            template_layout,
+            max_height_inches=self._available_title_height(box_height, author_font_size),
+        )
+        gain_threshold = int(self.header_config.get("title_auto_wrap_gain_threshold", 6))
+        if two_size >= single_size + gain_threshold:
+            return "two_line", two_size, wrapped_display
+        return "single_line", single_size, re.sub(r"\s+", " ", str(title or "")).strip()
 
     def _display_title_text(self, title: str, wrap_policy: str) -> str:
         clean_title = re.sub(r"\s+", " ", str(title or "")).strip()
@@ -680,6 +738,7 @@ class HeaderPlanner:
         width_inches: float,
         desired_size: int,
         template_layout: Dict[str, Any],
+        max_height_inches: float | None = None,
     ) -> int:
         clean_lines = [
             re.sub(r"\s+", " ", line).strip()
@@ -701,6 +760,10 @@ class HeaderPlanner:
         usable_width = max(width_inches * width_safety, 0.1)
         max_line_len = max(len(line) for line in clean_lines)
         estimated_size = int((usable_width * 72) / max(max_line_len * avg_char_width, 1))
+        if max_height_inches and max_height_inches > 0:
+            line_height = float(self.header_config.get("wrapped_title_line_height_em", 1.15))
+            height_cap = int((max_height_inches * 72) / max(len(clean_lines) * line_height, 1))
+            estimated_size = min(estimated_size, height_cap)
         min_key = (
             "portrait_wrapped_title_min_font_size"
             if template_layout.get("orientation") == "portrait"
@@ -1248,7 +1311,10 @@ class HeaderPlanner:
             available_title_h = max(box_height - subtitle_gap - subtitle_box_h - author_gap - author_box_h, 0.45)
             title_box_h = min(max(desired_title_h, box_height * 0.28), available_title_h)
         else:
-            title_box_h = max(box_height - subtitle_gap - subtitle_box_h - author_gap - author_box_h, box_height * 0.46)
+            title_line_height = float(self.header_config.get("wrapped_title_line_height_em", 1.15))
+            desired_title_h = (title_font_size / 72) * title_line_height * max(title_line_count, 1)
+            available_title_h = box_height - subtitle_gap - subtitle_box_h - author_gap - author_box_h
+            title_box_h = min(max(desired_title_h, box_height * 0.46), max(available_title_h, box_height * 0.38))
         if title_box_h + subtitle_gap + subtitle_box_h + author_gap + author_box_h > box_height:
             title_box_h = max(box_height - subtitle_gap - subtitle_box_h - author_gap - author_box_h, box_height * 0.38)
         return {
