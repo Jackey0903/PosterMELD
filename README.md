@@ -116,18 +116,9 @@ output/<paper_name>/
 
 ## 工作流程
 
-```mermaid
-flowchart LR
-    A[论文 PDF] --> B[论文理解<br/>正文 · 图表 · 作者机构]
-    B --> C[容量规划<br/>模板 · Block · Keypoints]
-    C --> D[内容与视觉编排<br/>文字 · 图表 · 风格]
-    D --> E[可编辑初稿<br/>PPTX + PNG]
-    E --> F{质量复核<br/>确定性门 + VLM}
-    F -->|不通过| G[有界修复<br/>改写 · 重排 · 重渲染]
-    G --> E
-    F -->|通过| H[背景美化<br/>Poster-conditioned]
-    H --> I[最终输出<br/>PPTX + PNG + 报告]
-```
+<p align="center">
+  <img src="docs/readme/posterloom-workflow.png" width="100%" alt="PosterLoom 工作流程：论文理解、容量规划、内容编排、质量复核、有界修复、背景美化与最终输出" />
+</p>
 
 质量复核失败后不会返回论文解析阶段，也不会无限重跑。系统只对定位到的问题执行有限次数的改写、缩放或重排，然后重新渲染和验收；外部 VLM / 图像服务不可用时会记录降级状态并走确定性兜底。
 
@@ -404,9 +395,9 @@ Teaser 和背景属于可选 Generative Asset。服务不可用、余额不足�
 
 项目通过 ADR 固化关键边界，包括受控多样性、用户指定模板不被静默替换、生成资产降级策略、确定性质量门和 benchmark 与核心仓库的职责划分。详见 [`docs/adr/`](docs/adr/) 与 [`CONTEXT.md`](CONTEXT.md)。
 
-## 致谢
+## 开源依赖
 
-本项目从 [PosterGen](https://github.com/Y-Research-SBU/PosterGen) 演进而来，并使用或集成了 [LangGraph](https://github.com/langchain-ai/langgraph)、[MinerU](https://github.com/opendatalab/MinerU)、[python-pptx](https://github.com/scanny/python-pptx) 与 [LibreOffice](https://www.libreoffice.org/) 等开源工具。
+项目使用或集成了 [LangGraph](https://github.com/langchain-ai/langgraph)、[MinerU](https://github.com/opendatalab/MinerU)、[python-pptx](https://github.com/scanny/python-pptx) 与 [LibreOffice](https://www.libreoffice.org/) 等开源工具。
 
 ## License
 

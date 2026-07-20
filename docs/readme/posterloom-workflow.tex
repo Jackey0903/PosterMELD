@@ -1,0 +1,132 @@
+\documentclass[tikz,border=0pt]{standalone}
+
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usetikzlibrary{arrows.meta,calc,positioning}
+
+\setmainfont{Helvetica Neue}
+\setCJKmainfont[AutoFakeBold=2.2]{Hiragino Sans GB}
+
+\definecolor{Canvas}{HTML}{F7F9FC}
+\definecolor{Navy}{HTML}{0A2A5E}
+\definecolor{Blue}{HTML}{2867C7}
+\definecolor{Teal}{HTML}{0B7A75}
+\definecolor{Coral}{HTML}{E45745}
+\definecolor{Ink}{HTML}{172033}
+\definecolor{Muted}{HTML}{5C687B}
+\definecolor{Border}{HTML}{C9D5E7}
+\definecolor{SoftBlue}{HTML}{EAF1FB}
+\definecolor{SoftTeal}{HTML}{E6F3F1}
+\definecolor{SoftCoral}{HTML}{FDEDEA}
+
+\tikzset{
+  stage/.style={
+    draw=Border,
+    line width=0.8pt,
+    fill=white,
+    rounded corners=3pt,
+    minimum width=4.15cm,
+    minimum height=1.72cm,
+    inner sep=0pt
+  },
+  number/.style={
+    circle,
+    minimum size=0.56cm,
+    inner sep=0pt,
+    text=white,
+    font=\bfseries\fontsize{8.5}{9}\selectfont
+  },
+  flow/.style={
+    -{Stealth[length=2.5mm,width=1.8mm]},
+    line width=1.15pt,
+    draw=Navy,
+    rounded corners=4pt
+  },
+  pass/.style={
+    -{Stealth[length=2.5mm,width=1.8mm]},
+    line width=1.25pt,
+    draw=Teal,
+    rounded corners=4pt
+  },
+  repairflow/.style={
+    -{Stealth[length=2.5mm,width=1.8mm]},
+    line width=1.15pt,
+    draw=Coral,
+    dashed,
+    rounded corners=4pt
+  }
+}
+
+\newcommand{\Stage}[7]{%
+  \node[stage,draw=#7!48] (#1) at (#2,#3) {};
+  \fill[#7] ([xshift=0.02cm,yshift=-0.02cm]#1.north west)
+    rectangle ([xshift=0.12cm,yshift=0.02cm]#1.south west);
+  \node[number,fill=#7] at ([xshift=0.48cm,yshift=0.32cm]#1.west) {#4};
+  \node[anchor=west,text=Ink,font=\bfseries\fontsize{11}{13}\selectfont]
+    at ([xshift=0.90cm,yshift=0.32cm]#1.west) {#5};
+  \draw[Border,line width=0.45pt]
+    ([xshift=0.34cm,yshift=-0.06cm]#1.west) --
+    ([xshift=-0.34cm,yshift=-0.06cm]#1.east);
+  \node[anchor=west,text=Muted,font=\fontsize{7.7}{9.2}\selectfont]
+    at ([xshift=0.34cm,yshift=-0.45cm]#1.west) {#6};
+}
+
+\begin{document}
+\begin{tikzpicture}[x=1cm,y=1cm]
+  \fill[Canvas] (-9.45,-4.55) rectangle (9.45,4.75);
+
+  \node[text=Navy,font=\bfseries\fontsize{24}{28}\selectfont] at (0,4.10)
+    {PosterLoom 工作流程};
+  \node[text=Teal,font=\fontsize{8.5}{10}\selectfont] at (0,3.52)
+    {论文理解 · 模板约束 · 质量闭环};
+  \draw[Blue!65,line width=0.8pt] (-3.15,3.25) -- (3.15,3.25);
+
+  \Stage{s1}{-7.00}{1.95}{01}{论文输入}{正文 · 图表 · 作者机构}{Blue}
+  \Stage{s2}{-2.35}{1.95}{02}{论文理解}{结构化解析 · 事实提取}{Blue}
+  \Stage{s3}{ 2.30}{1.95}{03}{容量规划}{模板 · Block · Keypoints}{Teal}
+  \Stage{s4}{ 6.95}{1.95}{04}{内容与视觉编排}{文字 · 图表 · 风格}{Teal}
+
+  \draw[flow] (s1.east) -- (s2.west);
+  \draw[flow] (s2.east) -- (s3.west);
+  \draw[flow] (s3.east) -- (s4.west);
+
+  \Stage{s8}{-7.00}{-0.20}{08}{最终输出}{PPTX + PNG + 报告}{Teal}
+  \Stage{s7}{-2.35}{-0.20}{07}{背景美化}{Poster-conditioned}{Teal}
+  \Stage{s6}{ 2.30}{-0.20}{06}{质量复核}{确定性门 + VLM}{Coral}
+  \Stage{s5}{ 6.95}{-0.20}{05}{可编辑初稿}{PPTX + PNG}{Blue}
+
+  \draw[flow] (s4.south) -- (s5.north);
+  \draw[flow] (s5.west) -- (s6.east);
+  \draw[pass] (s6.west) -- (s7.east);
+  \draw[pass] (s7.west) -- (s8.east);
+
+  \node[
+    draw=Coral!60,
+    fill=SoftCoral,
+    line width=0.8pt,
+    rounded corners=3pt,
+    minimum width=4.15cm,
+    minimum height=1.08cm,
+    align=center
+  ] (repair) at (4.62,-2.68) {};
+  \node[text=Coral,font=\bfseries\fontsize{10}{12}\selectfont] at ([yshift=0.20cm]repair.center)
+    {有界修复};
+  \node[text=Muted,font=\fontsize{7.4}{9}\selectfont] at ([yshift=-0.22cm]repair.center)
+    {改写 · 重排 · 重渲染};
+
+  \draw[repairflow]
+    (s6.south) -- ++(0,-0.55)
+    node[pos=0.58,left,text=Coral,font=\bfseries\fontsize{7}{8}\selectfont] {不通过}
+    -| (repair.west);
+  \draw[repairflow]
+    (repair.east) -| (s5.south);
+
+  \draw[Border,line width=0.55pt] (-6.00,-3.72) -- (-2.62,-3.72);
+  \node[text=Navy,font=\bfseries\fontsize{9.2}{11}\selectfont] at (0,-3.72)
+    {质量优先 · 有界修复 · 可编辑输出};
+  \draw[Border,line width=0.55pt] (2.62,-3.72) -- (6.00,-3.72);
+
+  \node[text=Muted,font=\fontsize{6.5}{8}\selectfont] at (0,-4.18)
+    {VLM 负责定位问题，确定性规则负责约束，修复循环保持有限且可追踪};
+\end{tikzpicture}
+\end{document}
