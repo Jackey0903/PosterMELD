@@ -1,13 +1,13 @@
 <div align="center">
-  <img src="docs/readme/posterloom-logo.svg" width="132" alt="PosterLoom logo" />
-  <h1>PosterLoom</h1>
-  <p><strong>Editable, Print-Ready, and Diverse Academic Poster Generation from Scientific Papers</strong></p>
-  <p>从论文 PDF 自动生成内容可靠、版式完整、可继续编辑的学术海报</p>
+  <img src="docs/readme/postermeld-logo.svg" width="132" alt="PosterMELD logo" />
+  <h1>PosterMELD</h1>
+  <p><strong>PosterMELD: Multi-Agent Paper-to-Poster Generation for Design Diversity with Editable Print-Ready Outputs</strong></p>
+  <p><strong>M</strong>ulti-Agent · <strong>E</strong>ditable · <strong>L</strong>ayouts · <strong>D</strong>esign diversity</p>
+  <p>从论文 PDF 生成具有设计多样性、可编辑且可直接打印的学术海报</p>
 
   <p>
-    <a href="https://jackey0903.github.io/PosterLoom/"><strong>项目主页</strong></a>
-    · <a href="#快速开始">快速开始</a>
-    · <a href="#工作流程">工作流程</a>
+    <a href="#快速开始"><strong>快速开始</strong></a>
+    · <a href="#方法概览">方法概览</a>
     · <a href="#效果展示">效果展示</a>
     · <a href="#配置参考">配置参考</a>
   </p>
@@ -22,22 +22,23 @@
 
 ---
 
-PosterLoom 是一个面向学术海报生成的多智能体系统。它从论文中解析正文、图表、作者与机构信息，先根据模板空间规划内容容量，再完成要点提炼、图文编排、可编辑 PPTX 渲染和局部 / 全局质量复核。系统同时保留标准模板模式与无模板自适应模式，并通过显式的样式、密度、背景和标题参数生成可复现的 Poster Variant。
+PosterMELD 是一个面向学术海报生成的多智能体系统。它从论文中解析正文、图表、作者与机构信息，先根据模板空间规划内容容量，再完成要点提炼、图文编排、可编辑 PPTX 渲染和局部 / 全局质量复核。系统同时保留标准模板模式与无模板自适应模式，并通过显式的样式、密度、背景和标题参数生成可复现的 Poster Variant。
 
 > 核心目标不是生成一张扁平化图片，而是交付一份可以继续修改、打印和导出的 `.pptx`，以及与其一致的 `.png` 预览图。
 
 <p align="center">
-  <img src="docs/readme/framework.png" width="100%" alt="PosterLoom framework" />
+  <img src="docs/readme/framework.png" width="100%" alt="PosterMELD framework" />
 </p>
 
 ## 核心能力
 
 | 能力 | 说明 |
 |---|---|
-| **论文内容落地** | 默认使用 MinerU 解析正文、公式、图片和表格，失败时回退 Marker；海报内容只允许来自论文事实。 |
-| **模板容量规划** | 在写正文前读取 block 几何与视觉策略，按可用宽高规划 keypoints、文字量、图片和表格。 |
-| **可编辑输出** | 标题、正文、形状、图片和表格尽可能保留为原生 PowerPoint 元素，而不是整页栅格图。 |
-| **受控多样性** | 支持 24 个标准模板、3 套 Poster Style、3 档 Visual Density、可选背景和多种 Header 版式。 |
+| **Multi-Agent** | 专门化 agents 分别负责论文理解、内容组织、模板映射、视觉编排、渲染与质量复核。 |
+| **Editable** | 标题、正文、形状、图片和表格尽可能保留为原生 PowerPoint 元素，而不是整页栅格图。 |
+| **Layouts** | 支持 24 个标准模板与无模板自适应布局，并在写作前根据 block 几何规划内容容量。 |
+| **Design diversity** | 通过模板、Poster Style、Visual Density、Header 和背景生成可复现的设计变体。 |
+| **论文事实约束** | 默认使用 MinerU 解析正文、公式、图片和表格，失败时回退 Marker；海报内容只允许来自论文事实。 |
 | **质量闭环** | 结合确定性检查与 VLM 审查，检查重叠、溢出、留白、阅读顺序、图表小字和内容忠实度。 |
 | **可追踪运行** | 保存 story board、slot contract、布局、质量门、降级状态、耗时和 token 用量等过程报告。 |
 
@@ -114,17 +115,20 @@ output/<paper_name>/
 └── content/                   # 各阶段结构化报告
 ```
 
-## 工作流程
+## 方法概览
 
-<p align="center">
-  <img src="docs/readme/posterloom-workflow.png" width="100%" alt="PosterLoom 工作流程：论文理解、容量规划、内容编排、质量复核、有界修复、背景美化与最终输出" />
-</p>
+1. **Paper understanding**：解析论文正文、图表、作者和机构信息，形成统一且可追踪的论文事实与视觉资产。
+2. **Layout-aware planning**：选择标准模板或自适应布局，计算每个 block 的文字与图表容量，再分配 keypoints。
+3. **Multi-agent composition**：内容、标题、色彩、字体、视觉资产和微排版 agents 在共同状态上协作生成初稿。
+4. **Editable rendering**：将内容渲染为原生 PPTX 元素，并生成一致的 PNG 预览用于质量检查。
+5. **Quality-guided refinement**：确定性规则与 VLM 共同检查重叠、溢出、留白和可读性；不通过时只执行有限修复。
+6. **Print-ready output**：质量通过后完成背景美化，输出最终 PPTX、PNG 和运行报告。
 
 质量复核失败后不会返回论文解析阶段，也不会无限重跑。系统只对定位到的问题执行有限次数的改写、缩放或重排，然后重新渲染和验收；外部 VLM / 图像服务不可用时会记录降级状态并走确定性兜底。
 
 ### 为什么先规划模板容量
 
-传统“先写内容、再硬塞模板”的流程容易造成某些 block 过空、某些 block 溢出。PosterLoom 在正式写作前建立 slot contract：
+传统“先写内容、再硬塞模板”的流程容易造成某些 block 过空、某些 block 溢出。PosterMELD 在正式写作前建立 slot contract：
 
 ```text
 模板与画布
@@ -164,14 +168,12 @@ output/<paper_name>/
   </tr>
 </table>
 
-更多大图与交互展示见 [PosterLoom 项目主页](https://jackey0903.github.io/PosterLoom/)。
-
 ## 模板与自适应布局
 
 标准模板库包含 **16 个横版模板**与 **8 个竖版模板**。模板只提供经过验证的空间拓扑，运行时仍会根据标题、logo、图表数量和内容容量做 soft geometry 微调。
 
 <p align="center">
-  <img src="docs/readme/template-library.png" width="100%" alt="Representative PosterLoom templates" />
+  <img src="docs/readme/template-library.png" width="100%" alt="Representative PosterMELD templates" />
 </p>
 
 | 模式 | 用法 | 适合场景 |
@@ -406,5 +408,5 @@ Teaser 和背景属于可选 Generative Asset。服务不可用、余额不足�
 ---
 
 <div align="center">
-  <strong>One paper, many valid posters.</strong>
+  <strong>Multi-Agent · Editable · Layouts · Design diversity</strong>
 </div>
