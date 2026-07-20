@@ -6,7 +6,7 @@
   <p>从论文 PDF 生成具有设计多样性、可编辑且可直接打印的学术海报</p>
 
   <p>
-    <a href="https://jackey0903.github.io/PosterLoom/"><strong>项目展示网页</strong></a>
+    <a href="https://jackey0903.github.io/PosterMELD/"><strong>项目展示网页</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="#方法概览">方法概览</a>
     · <a href="#效果展示">效果展示</a>
@@ -169,7 +169,7 @@ output/<paper_name>/
   </tr>
 </table>
 
-更多完整尺寸海报与交互展示见 [PosterMELD 项目展示网页](https://jackey0903.github.io/PosterLoom/)。
+更多完整尺寸海报与交互展示见 [PosterMELD 项目展示网页](https://jackey0903.github.io/PosterMELD/)。
 
 ## 模板与自适应布局
 
