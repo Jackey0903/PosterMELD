@@ -1,140 +1,99 @@
-# Paper2Poster
+<div align="center">
+  <img src="docs/readme/posterloom-logo.svg" width="132" alt="PosterLoom logo" />
+  <h1>PosterLoom</h1>
+  <p><strong>Editable, Print-Ready, and Diverse Academic Poster Generation from Scientific Papers</strong></p>
+  <p>从论文 PDF 自动生成内容可靠、版式完整、可继续编辑的学术海报</p>
 
-Paper2Poster 是一个把论文 PDF 自动转换成学术海报的多智能体系统（基于 LangGraph）。它从论文解析、内容提炼、模板适配、版面渲染，到视觉质量检查和最终 PPTX / PNG 输出，走完一条完整的 research prototype pipeline。
+  <p>
+    <a href="https://jackey0903.github.io/PosterLoom/"><strong>项目主页</strong></a>
+    · <a href="#快速开始">快速开始</a>
+    · <a href="#工作流程">工作流程</a>
+    · <a href="#效果展示">效果展示</a>
+    · <a href="#配置参考">配置参考</a>
+  </p>
 
-系统当前已能生成**可编辑的 PowerPoint 海报**，支持标准模板库、无模板自适应布局、局部 / 全局 VLM 质检、以及基于最终 poster 生成的淡色学术背景图。默认输出一张横版、内容填满、可读性优先的标准海报，横版效果明显优于竖版。
-
-> 设计事实来源：领域术语见 [`CONTEXT.md`](CONTEXT.md)，架构决策见 [`docs/adr/`](docs/adr/)。真实运行流程以 [`src/workflow/pipeline.py`](src/workflow/pipeline.py) 的 `create_workflow_graph` 为准。
-
----
-
-## 功能概览
-
-- **PDF 解析**：抽取正文、作者、机构、图、表和结构化章节，统一建立 `visual_assets`。
-- **内容规划**：从全文提取约 10 个 poster-worthy keypoints，作为内容池，由 curator 合并成 4–7 个 poster sections。
-- **模板优先填充**：先确定模板和每个 block 的容量，再按容量组织文字和视觉资产，让初稿就接近目标利用率（尽量零留白）。
-- **确定性微排版**：micro-layout 避免重叠、溢出、文字越界，并在 block 偏空时从论文事实中补充内容。
-- **多层质检**：局部（每个 block 的空 / 挤 / 溢出 / 图表可读性）+ 全局（标题可读性、留白、阅读顺序、视觉层级）。
-- **可控多样性**：默认稳定输出 `cluster_43_landscape`；用户可显式指定任意标准模板 / 风格 / 背景，作为可复现的 Poster Variant。
-- **降级而非静默失败**：外部服务（VLM、图像生成）失败时走确定性兜底，并在产物中记录 Degraded Quality State。
-- **最终输出**：可编辑 `.pptx` + 预览 `.png`，附带 `timing_cost_log.json` 成本日志和各阶段 JSON 报告。
-
----
-
-## 完整流程
-
-```mermaid
-flowchart TD
-    A[论文 PDF] --> P[parser<br/>文本/图/表/作者机构 + 视觉分类]
-    P --> AL[affiliation_logo_agent]
-    AL --> STP[standard_template_preselector<br/>选标准模板]
-    STP --> TCP[template_capacity_planner<br/>估算每个 block 容量]
-    TCP --> KP[poster_keypoint_selector<br/>约 10 个 keypoints]
-    KP --> CU[curator<br/>合并成 sections + story board]
-    CU --> CA[color_agent] --> HP[header_planner] --> GT[generated_teaser_agent]
-    GT --> TBP[template_block_planner<br/>section→slot 映射]
-    TBP --> STD[section_title_designer] --> LO[layout_optimizer]
-    LO --> FA[font_agent] --> ML[micro_layout_refiner<br/>确定性微排版/补文]
-    ML --> VA[visual_asset_agent] --> R1[renderer draft]
-    R1 -->|质检回环| RV{block占用 / 图表可读性 / VLM布局}
-    RV -->|需修复| LO
-    RV -->|通过| PF[prepare_final_render]
-    PF --> BG[background_image_agent<br/>poster-conditioned 背景]
-    BG --> R2[renderer final] --> OUT[PPTX + PNG]
-```
-
-**为什么是「模板优先」而不是「生成后硬修」**：先选模板 → 计算每个 block 容量 → 再生成对应长度的内容，让初稿就接近目标利用率，减少反复重排和大面积留白。
+  <p>
+    <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11" />
+    <img src="https://img.shields.io/badge/Output-Editable%20PPTX-0F766E?style=flat-square" alt="Editable PPTX" />
+    <img src="https://img.shields.io/badge/Templates-24-7C3AED?style=flat-square" alt="24 templates" />
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-111827?style=flat-square" alt="MIT License" /></a>
+  </p>
+</div>
 
 ---
 
-## 核心设计原则
+PosterLoom 是一个面向学术海报生成的多智能体系统。它从论文中解析正文、图表、作者与机构信息，先根据模板空间规划内容容量，再完成要点提炼、图文编排、可编辑 PPTX 渲染和局部 / 全局质量复核。系统同时保留标准模板模式与无模板自适应模式，并通过显式的样式、密度、背景和标题参数生成可复现的 Poster Variant。
 
-详见 [`docs/adr/`](docs/adr/)。要点：
+> 核心目标不是生成一张扁平化图片，而是交付一份可以继续修改、打印和导出的 `.pptx`，以及与其一致的 `.png` 预览图。
 
-1. **默认标准变体 + 显式多样性**（[ADR 0001](docs/adr/0001-controlled-diversity.md) / [0002](docs/adr/0002-user-specified-variants-with-standard-default.md)）
-   不指定时默认走 `auto` → 稳定落到 `cluster_43_landscape`（横版、开启默认 teaser / 背景）。多样性来自用户**显式指定**模板 / 风格 / 生成资产，每个变体记录模板、Style Profile、seed，可复现。
-2. **用户请求的模板不被静默替换**（[ADR 0008](docs/adr/0008-user-requested-templates-are-not-silently-replaced.md)）
-   显式指定的模板即使兼容性弱也会被尊重，靠质量门 / 修复决定成败；仅 `auto` 选择的变体允许模板回退。
-3. **零留白由确定性逻辑保证**：目标 block 利用率 `target=0.965`、`final_min=0.96`。偏空只允许从论文事实补充内容，偏挤只允许压缩 / 删减，**禁止编造论文没有的结果**。
-4. **确定性缺陷阻塞，可选服务失败降级**（[ADR 0003](docs/adr/0003-generative-asset-fallbacks-are-deterministic-and-degraded.md) / [0006](docs/adr/0006-deterministic-quality-failures-block-optional-service-failures-degrade.md)）
-   溢出 / 重叠 / 缺产物 / 无关领域内容泄漏等确定性缺陷会 reject；VLM / 图像 API 不可用则走确定性兜底并记录为 Degraded State。
-5. **VLM 只做检查和小修，不主导布局**；**背景图最后加**，不影响正文 / 图表 / logo 排版。
+<p align="center">
+  <img src="docs/readme/framework.png" width="100%" alt="PosterLoom framework" />
+</p>
 
----
+## 核心能力
 
-## 安装
+| 能力 | 说明 |
+|---|---|
+| **论文内容落地** | 默认使用 MinerU 解析正文、公式、图片和表格，失败时回退 Marker；海报内容只允许来自论文事实。 |
+| **模板容量规划** | 在写正文前读取 block 几何与视觉策略，按可用宽高规划 keypoints、文字量、图片和表格。 |
+| **可编辑输出** | 标题、正文、形状、图片和表格尽可能保留为原生 PowerPoint 元素，而不是整页栅格图。 |
+| **受控多样性** | 支持 24 个标准模板、3 套 Poster Style、3 档 Visual Density、可选背景和多种 Header 版式。 |
+| **质量闭环** | 结合确定性检查与 VLM 审查，检查重叠、溢出、留白、阅读顺序、图表小字和内容忠实度。 |
+| **可追踪运行** | 保存 story board、slot contract、布局、质量门、降级状态、耗时和 token 用量等过程报告。 |
 
-推荐 Python 3.11。
+## 快速开始
+
+### 1. 安装
+
+要求 Python `3.11`。建议安装 [LibreOffice](https://www.libreoffice.org/) 以获得稳定的 PPTX → PNG 渲染。
 
 ```bash
+git clone https://github.com/Jackey0903/paper2poster.git
+cd paper2poster
+
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-或使用 `uv`：
+也可以使用 `uv`：
 
 ```bash
 uv sync
 ```
 
----
+### 2. 配置最小环境
 
-## 环境变量
-
-参考 [`.env.example`](.env.example) 创建 `.env`（不要提交 `.env` 或任何真实 API key）。
-
-**文本模型**（内容生成）：
+从 [`.env.example`](.env.example) 创建本地 `.env`。不要把真实密钥提交到 Git。
 
 ```bash
-OPENAI_API_KEY=your_key
+OPENAI_API_KEY=your_text_model_key
 OPENAI_BASE_URL=https://your-text-endpoint/v1
 OPENAI_API_BASE=https://your-text-endpoint/v1
-# 默认文本模型 gpt-5.4，可覆盖：
 PAPER2POSTER_TEXT_MODEL=gpt-5.4
+
+# 推荐：MinerU 精准 PDF 解析；未配置或调用失败时自动回退 Marker
+MINERU_API_KEY=your_mineru_key
+MINERU_MODEL_VERSION=vlm
 ```
 
-**VLM 质检**（截图审阅）：
+### 3. 生成第一张海报
+
+最小运行方式：
 
 ```bash
-VLM_API_KEY=your_vlm_key
-VLM_BASE_URL=https://your-vlm-endpoint/v1
-VLM_MODEL=gpt-5.4
-```
-
-**背景 / teaser 图像生成**：
-
-```bash
-IMAGE_API_KEY=your_image_key
-IMAGE_BASE_URL=https://your-image-endpoint/v1
-IMAGE_MODEL=gpt-image-2
-# 可选：多个中转站轮询 + fallback 模型
-IMAGE_BASE_URLS="https://ep1/v1 https://ep2/v1 https://ep3/v1"
-IMAGE_MODELS="gpt-image-2 gemini-3.1-flash-image-preview"   # 或 IMAGE_FALLBACK_MODELS
-IMAGE_RETRY_ATTEMPTS=5
-IMAGE_RETRY_DELAY_SECONDS=6
-```
-
-> **⚠️ 推理模型的 temperature 限制**：`gpt-5.x` / `o1` / `o3` / `o4` 等推理模型**只接受默认 temperature（1）**。pipeline 已自动对这些模型省略 / 固定 temperature；如果你换用别的推理模型端点，遇到 `400 "operation not allowed in this deployment"`，通常就是端点拒绝了非默认 temperature，属正常限制。见「故障排查」。
-
----
-
-## 快速开始
-
-查看可用模板：
-
-```bash
-PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline --list-layout-templates
-```
-
-**推荐运行方式**（默认标准变体 + 全部生成资产 + 质检）：
-
-```bash
-PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
-  data/Active_Geospatial_Search_for_Efficient_Tenant_Eviction_Outreach/paper.pdf \
+PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline /path/to/paper.pdf \
   --layout-template auto \
-  --logo data/Active_Geospatial_Search_for_Efficient_Tenant_Eviction_Outreach/logo.png \
-  --aff-logo data/Active_Geospatial_Search_for_Efficient_Tenant_Eviction_Outreach/aff.png \
+  --disable-generated-teaser \
+  --disable-generated-background
+```
+
+完整运行方式，包括会议标识、生成式 teaser、poster-conditioned 背景和质量复核：
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline /path/to/paper.pdf \
+  --layout-template auto \
+  --conference AAAI \
   --poster-style navy_serif \
   --visual-density rich \
   --enable-generated-teaser \
@@ -143,159 +102,318 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline \
   --background-palette auto
 ```
 
-固定使用某个横版模板：
+输出默认保存在：
 
-```bash
-PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline <paper.pdf> \
-  --layout-template cluster_104_landscape --enable-generated-background
+```text
+output/<paper_name>/
+├── <paper_name>.pptx          # 可编辑海报
+├── <paper_name>.png           # 最终预览
+├── <paper_name>_draft.*       # 质量复核前草稿
+├── timing_cost_log.json       # 时间、调用次数和 token
+├── assets/                    # 论文图表、logo、背景和生成资产
+└── content/                   # 各阶段结构化报告
 ```
 
-无模板自适应模式：
+## 工作流程
 
-```bash
-PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline <paper.pdf> --layout-template adaptive_auto
+```mermaid
+flowchart LR
+    A[论文 PDF] --> B[论文理解<br/>正文 · 图表 · 作者机构]
+    B --> C[容量规划<br/>模板 · Block · Keypoints]
+    C --> D[内容与视觉编排<br/>文字 · 图表 · 风格]
+    D --> E[可编辑初稿<br/>PPTX + PNG]
+    E --> F{质量复核<br/>确定性门 + VLM}
+    F -->|不通过| G[有界修复<br/>改写 · 重排 · 重渲染]
+    G --> E
+    F -->|通过| H[背景美化<br/>Poster-conditioned]
+    H --> I[最终输出<br/>PPTX + PNG + 报告]
 ```
 
----
+质量复核失败后不会返回论文解析阶段，也不会无限重跑。系统只对定位到的问题执行有限次数的改写、缩放或重排，然后重新渲染和验收；外部 VLM / 图像服务不可用时会记录降级状态并走确定性兜底。
 
-## 命令行参数
+### 为什么先规划模板容量
+
+传统“先写内容、再硬塞模板”的流程容易造成某些 block 过空、某些 block 溢出。PosterLoom 在正式写作前建立 slot contract：
+
+```text
+模板与画布
+  -> 吸收可用间隙并确定 block bbox
+  -> 扣除标题、padding 和视觉资产空间
+  -> 估算 target/min/max chars
+  -> 将论文 keypoints 分组到合适的 block
+  -> 按容量生成正文与 caption
+```
+
+渲染后再使用实际占用率做校验。当前配置的目标利用率约为 `96.5%`，同时以无重叠、无溢出和图表可读为更高优先级。
+
+## 效果展示
+
+同一篇论文可以在保持事实内容不变的情况下，改变方向、模板拓扑、字体、配色、密度和背景。下面四张海报均来自同一篇论文。
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/readme/hags-editorial-portrait.png" width="100%" alt="Editorial portrait poster" /><br />
+      <sub><strong>Editorial Portrait</strong> · 叙事导向</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/readme/hags-analytical-portrait.png" width="100%" alt="Analytical portrait poster" /><br />
+      <sub><strong>Analytical Portrait</strong> · 证据密集</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/readme/hags-wide-landscape.png" width="100%" alt="Wide landscape poster" /><br />
+      <sub><strong>Wide Landscape</strong> · 横向扫描</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/readme/hags-modular-landscape.png" width="100%" alt="Modular landscape poster" /><br />
+      <sub><strong>Modular Landscape</strong> · 模块化布局</sub>
+    </td>
+  </tr>
+</table>
+
+更多大图与交互展示见 [PosterLoom 项目主页](https://jackey0903.github.io/PosterLoom/)。
+
+## 模板与自适应布局
+
+标准模板库包含 **16 个横版模板**与 **8 个竖版模板**。模板只提供经过验证的空间拓扑，运行时仍会根据标题、logo、图表数量和内容容量做 soft geometry 微调。
+
+<p align="center">
+  <img src="docs/readme/template-library.png" width="100%" alt="Representative PosterLoom templates" />
+</p>
+
+| 模式 | 用法 | 适合场景 |
+|---|---|---|
+| `auto` | 自动选择标准模板；当前默认落到 `cluster_43_landscape` | 推荐默认模式，结果稳定且可复现 |
+| `cluster_*_landscape` | 显式指定某个横版标准模板 | 需要固定版式或制作多样化变体 |
+| `cluster_*_portrait` | 显式指定某个竖版标准模板 | 展板、竖屏或纵向展示 |
+| `adaptive_auto` | 不依赖 `cluster_*`，从内置自适应几何中选择 | 模板与论文内容不匹配时 |
+
+查看本地全部可用模板：
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline --list-layout-templates
+```
+
+## 用户可控项
+
+这些选项会真实进入 pipeline 状态并影响后续规划或渲染，不是仅用于展示的标签。
+
+| 控制维度 | 可选值 | 影响范围 |
+|---|---|---|
+| **Template** | `auto`、`adaptive_auto`、任意已注册模板 ID | block 拓扑、阅读顺序和容量 |
+| **Poster Style** | `navy_serif`、`teal_modern`、`burgundy_classic` | 标题字体、章节条、强调色和面板样式 |
+| **Visual Density** | `lean`、`balanced`、`rich` | 图、表和结果资产的保留强度 |
+| **Background Style** | `auto`、`minimal_solid`、`tech_grid`、`academic_paper`、`cartographic`、`flat_cartoon`、`blueprint`、`geometric_soft` | 最终背景的视觉语言 |
+| **Background Palette** | `auto`、`light_blue`、`light_gray`、`warm_ivory`、`mint`、`lavender`、`rose`、`amber` | 背景主色与低对比辅助纹理 |
+| **Header Route** | `auto`、`classic_left`、`centered`、`right_title`、`split_logos` | 标题、作者与 logo 的组合方式 |
+| **Title Wrap** | `auto`、`single_line`、`two_line` | 标题换行与字号策略 |
+| **Section Numbering** | `off`、`small`、`inline` | 章节标题编号样式 |
+
+示例：同一篇论文生成另一种受控变体。
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline /path/to/paper.pdf \
+  --layout-template cluster_104_landscape \
+  --poster-style teal_modern \
+  --visual-density rich \
+  --header-route split_logos \
+  --header-title-wrap two_line \
+  --background-style tech_grid \
+  --background-palette light_blue
+```
+
+## 内容与质量约束
+
+- **Paper-grounded**：正文、数字、结论和图表均应来自论文；容量不足时不允许编造结果。
+- **Editable first**：优先使用原生 PPTX 文本、形状、图片和表格元素。
+- **Readability first**：图表过小时优先放大、换 slot 或转成事实摘要，而不是单纯缩小字号。
+- **Layout discipline**：阻止重叠、越界、异常大留白、标题与 logo 冲突以及不完整句子。
+- **Bounded repair**：只对明确缺陷执行有限修复，避免 VLM 驱动的无限重排。
+- **Explicit degradation**：可选外部服务失败时保留可用产物，并在报告中记录 fallback 原因。
+
+主要调试报告：
+
+| 文件 | 内容 |
+|---|---|
+| `poster_keypoint_selection.json` | 从论文选择了哪些 poster-worthy keypoints |
+| `story_board.json` | keypoints 如何被组织成海报 sections |
+| `styled_layout.json` | 元素位置、尺寸、字体与视觉资产引用 |
+| `block_occupancy_report.json` | 每个 block 的实际利用率与留白状态 |
+| `final_quality_gate.json` | 最终验收结果、阻塞问题和降级状态 |
+| `timing_cost_log.json` | 各阶段耗时、API 调用及输入 / 输出 token |
+
+## 配置参考
+
+<details>
+<summary><strong>文本模型、VLM、图像模型与 MinerU 环境变量</strong></summary>
+
+### 文本模型
+
+```bash
+OPENAI_API_KEY=your_key
+OPENAI_BASE_URL=https://your-text-endpoint/v1
+OPENAI_API_BASE=https://your-text-endpoint/v1
+PAPER2POSTER_TEXT_MODEL=gpt-5.4
+```
+
+### VLM 质检
+
+```bash
+VLM_API_KEY=your_vlm_key
+VLM_BASE_URL=https://your-vlm-endpoint/v1
+VLM_MODEL=gpt-5.4
+```
+
+### Teaser 与背景图生成
+
+```bash
+IMAGE_API_KEY=your_image_key
+IMAGE_BASE_URL=https://your-image-endpoint/v1
+IMAGE_MODEL=gpt-image-2
+
+# 可选：按顺序轮询多个端点 / 模型
+IMAGE_BASE_URLS="https://ep1/v1 https://ep2/v1 https://ep3/v1"
+IMAGE_MODELS="gpt-image-2 gemini-3.1-flash-image-preview"
+IMAGE_RETRY_ATTEMPTS=5
+IMAGE_RETRY_DELAY_SECONDS=6
+IMAGE_REQUEST_TIMEOUT_SECONDS=120
+```
+
+### MinerU
+
+```bash
+MINERU_API_KEY=your_mineru_key
+MINERU_MODEL_VERSION=vlm
+MINERU_LANGUAGE=en
+MINERU_ENABLE_TABLE=true
+MINERU_ENABLE_FORMULA=true
+MINERU_IS_OCR=false
+```
+
+</details>
+
+<details>
+<summary><strong>常用 CLI 参数</strong></summary>
 
 | 参数 | 说明 |
 |---|---|
-| `paper.pdf`（位置参数）/ `--paper_path` | 输入论文 PDF |
-| `--layout-template` | `auto`（默认 → `cluster_43_landscape`）/ 任意 `cluster_*` 标准模板 / `adaptive_auto` |
-| `--poster-style` | `navy_serif`（默认）/ `teal_modern` / `burgundy_classic` |
-| `--visual-density` | `lean` / `balanced`（默认）/ `rich`（图表多、表格可读时用） |
-| `--enable-generated-background` `--background-style` `--background-palette` | 生成淡色学术背景；style/palette 支持 `auto` 及多种预设 |
-| `--enable-generated-teaser` | 为 introduction/motivation block 生成顶会风格概念图 |
-| `--header-route` `--header-subtitle` `--header-title-wrap` `--header-seed` | header 版式、副标题、标题换行策略、可复现随机种子 |
-| `--section-title-numbering` | `off`（默认）/ `small` / `inline` |
-| `--logo` / `--conference` | 会议 logo：本地路径，或按会议名从本地库解析（见「Logo 素材」） |
-| `--aff-logo` / `--enable-affiliation-logos` / `--disable-affiliation-logos` | 机构 logo：默认自动搜索下载；也可手动传本地图或显式关闭自动检索 |
-| `--affiliation-logo-mode` | 放几个机构 logo：`single`（默认，1 个）或 `multi`（1–3 个，按实际解析到的数量） |
-| `--text_model` `--vision_model` `--vlm-model` | 覆盖模型 |
-| `--enable-vlm-layout-review` `--enable-visual-legibility-review` `--enable-block-vlm-review` `--enable-adaptive-column-width` | 质检 / 自适应开关（选用 `cluster_*` 标准模板时自动开启前三项） |
-| `--list-layout-templates` | 列出模板后退出 |
+| `paper.pdf` / `--paper_path` | 输入论文 PDF |
+| `--layout-template` | `auto`、`adaptive_auto` 或已注册模板 ID |
+| `--poster_width` / `--poster_height` | 覆盖海报画布尺寸（英寸） |
+| `--text_model` / `--vision_model` / `--vlm-model` | 覆盖文本、视觉理解和版面复核模型 |
+| `--logo` / `--conference` | 手动会议 logo，或按会议名从本地素材库解析 |
+| `--aff-logo` | 手动指定机构 logo |
+| `--enable-affiliation-logos` / `--disable-affiliation-logos` | 开关机构 logo 自动解析 |
+| `--affiliation-logo-mode` | `single` 或 `multi` |
+| `--enable-generated-teaser` | 生成论文相关的概念 teaser |
+| `--enable-generated-background` | 根据初稿生成低对比学术背景 |
+| `--enable-vlm-layout-review` | 开启全局截图布局复核 |
+| `--enable-visual-legibility-review` | 检查图片 / 表格内部小字 |
+| `--enable-block-vlm-review` | 开启逐 block VLM 复核与利用率修复 |
+| `--enable-adaptive-column-width` | 必要时执行一次自适应列宽调整 |
+| `--url` | 在海报中添加目标 URL 的二维码 |
 
----
+完整参数以本地帮助为准：
 
-## 模板库
-
-标准模板来自：
-
-```text
-模版-横向/   # 横版 cluster_*_template.json + 预览图
-模版-竖向/   # 竖版 cluster_*_template.json + 预览图
+```bash
+PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline --help
 ```
 
-运行时给模板 ID 加方向后缀避免同名冲突，例如 `cluster_27_landscape` / `cluster_27_portrait`。当前白名单（`config/poster_config.yaml` 的 `standard_template_policy`）：
-
-- **横版（16）**：`cluster_2/6/14/16/27/36/39/43/46/62/69/70/85/86/96/104 _landscape`
-- **竖版（8）**：`cluster_3/8/13/15/22/25/27/29 _portrait`
-
-建议：默认 `auto`（→ `cluster_43_landscape`）；图表密集论文可显式用 `cluster_104_landscape`；竖版目前作为实验能力保留，不建议作为默认展示。
-
----
-
-## Logo 素材
-
-**会议 logo（`src/utils/conference_logos.py`）——本地素材库，不联网下载**：
-`--conference "AAAI"` 会把会议名归一化后到 `assets/conference_logos/` 里匹配本地 PNG（当前内置 `aaai` / `iclr` / `neurips`）。要用其他会议，把 logo 放进该目录，或直接用 `--logo <path>` 指定任意本地图片（`--logo` 优先级高于 `--conference`）。
-
-**机构（学校）logo（`src/agents/affiliation_logo_agent.py`）——默认自动搜索下载**：
-默认启用，默认放 **1 个**学校 logo（`--affiliation-logo-mode single`）；传 `--affiliation-logo-mode multi` 则放 1–3 个（按实际解析到的数量，上限见 config `max_logos`）；`--disable-affiliation-logos` 关闭。解析流程：先用 **OpenAlex 按标题/DOI 搜**得到规范机构名（修正 parser 抽取的乱名，对 arXiv 也有效）→ 依次尝试 **本地目录 → 官方站点 URL → Wikimedia Commons → Wikidata → Clearbit autocomplete 拿真实域名 → favicon 兜底取图**（Clearbit 官方 logo API 已停服，故用 favicon 兜底）。相关映射配置在 `config/poster_config.yaml` 的 `affiliation_logos` 段。也可以用 `--aff-logo <path>` 手动传一张本地机构 logo。
-
----
-
-## 输出结构
-
-```text
-output/<paper_directory_name>/
-├── <paper>.pptx / <paper>.png          # 最终可编辑海报 + 预览
-├── <paper>_draft.pptx / _draft.png     # 质检前的草稿
-├── timing_cost_log.json                # 耗时 / API 调用 / token 成本
-├── assets/                             # 抽取的 figure/table、生成背景、resolved 资产
-└── content/                            # 各阶段 JSON 报告（可调试）
-    ├── poster_keypoint_selection.json  # 论文被切成哪些 keypoints
-    ├── story_board.json                # keypoints 如何合并成 sections
-    ├── styled_layout.json              # 最终元素位置和字体
-    ├── block_occupancy_report.json     # 各 block 利用率（留白检查）
-    └── final_quality_gate.json         # 最终是否通过 + 失败原因 + 降级状态
-```
-
----
+</details>
 
 ## 测试
+
+核心 pipeline 契约与回归测试：
 
 ```bash
 PYTHONPATH=. .venv/bin/python -m pytest tests/test_pipeline_contracts.py -q
 ```
 
-当前本地结果：**222 passed**。这是一套契约 / 回归测试（Pipeline Harness），保护核心 pipeline 不退化，不是评测 benchmark。
+这些测试覆盖模板注册、容量规划、keypoint 分组、视觉资产引用、质量门、MinerU 映射和关键 fallback 行为。测试结果用于防止 pipeline 回归，不等同于论文 benchmark 评测。
 
----
-
-## 故障排查
-
-- **`400 "operation not allowed in this deployment"` / VLM `response.failed`**：多半是给推理模型（`gpt-5.x`）传了非默认 `temperature`。pipeline 已对推理模型自动省略 temperature；若换端点仍报此错，确认该端点 / 中转站是否禁用了对应操作。
-- **图像生成全部失败（`分组 auto 下模型 X 的可用渠道不存在`）**：你的图像中转站没有 `IMAGE_MODEL` / fallback 模型的可用渠道。换一个该中转站真实拥有的图像模型（设 `IMAGE_MODEL` 或 `IMAGE_MODELS`），或多配几个 `IMAGE_BASE_URLS`。图像失败不影响出图，只是没有背景 / teaser（走降级）。
-- **中转站偶发 5xx / 拒绝**：多渠道中转站可能间歇性失败；VLM 请求已内置重试，文本 / 图像也有重试与多 URL 轮询。留白消除的主力是**确定性逻辑**，即使 VLM 偶尔降级，海报仍能填满、通过质量门。
-- **竖版留白 / 挤压**：竖版 block 少、比例不稳定，建议优先用横版。
-
----
-
-## 目录结构
+## 项目结构
 
 ```text
 paper2poster/
-├── assets/                  # 会议 logo 等静态资源
-├── config/                  # 配置和 prompts（poster_config.yaml + prompts/）
-├── data/                    # demo 论文和本地测试输入
-├── docs/adr/                # 架构决策记录（ADR 0001–0008）
-├── CONTEXT.md               # 领域术语表（设计事实来源）
-├── output/                  # 生成结果，可删除重跑
+├── assets/                  # 会议 / 机构 logo 等静态资源
+├── config/                  # pipeline 配置与 prompts
+├── docs/
+│   ├── adr/                 # 架构决策记录
+│   └── readme/              # README 展示素材
 ├── src/
-│   ├── agents/              # pipeline 各阶段 agent
-│   ├── layout/              # 模板选择和布局辅助
-│   ├── state/               # PosterState 状态定义
-│   ├── template_extraction/ # 模板 registry 和抽取
-│   ├── tools/               # image / layout / pptx 封装
-│   ├── utils/               # 文本清洗、logo、风格选项
-│   └── workflow/            # pipeline 入口
-├── 模版-横向/ 模版-竖向/     # 标准模板库
+│   ├── agents/              # 内容、布局、质量和生成资产 agents
+│   ├── layout/              # 模板选择与布局辅助
+│   ├── state/               # PosterState 数据契约
+│   ├── template_extraction/ # 模板注册与几何提取
+│   ├── tools/               # 模型、MinerU、PPTX 与图像工具
+│   ├── utils/               # 样式、文本清理与 logo 解析
+│   └── workflow/            # 主流程与 CLI 入口
 ├── tests/                   # 契约 / 回归测试
-├── requirements.txt
-└── README.md
+├── 模版-横向/               # 16 个横版标准模板
+├── 模版-竖向/               # 8 个竖版标准模板
+├── CONTEXT.md               # 领域术语与设计事实
+├── pyproject.toml
+└── requirements.txt
 ```
 
-## 重点模块
+关键入口：
 
-- [`src/workflow/pipeline.py`](src/workflow/pipeline.py)：主流程、CLI、`create_workflow_graph`、最终质量门。
-- [`src/agents/parser.py`](src/agents/parser.py)：PDF 解析、图表抽取、视觉分类。
-- [`src/agents/poster_keypoint_selector.py`](src/agents/poster_keypoint_selector.py)：论文 keypoint 提取。
-- [`src/agents/template_capacity_planner.py`](src/agents/template_capacity_planner.py)：模板 block 容量估计。
-- [`src/agents/curator.py`](src/agents/curator.py)：poster 内容规划 / story board。
-- [`src/layout/template_selector.py`](src/layout/template_selector.py)：`auto` 模板选择。
-- [`src/agents/template_block_planner.py`](src/agents/template_block_planner.py)：section → slot 映射。
-- [`src/agents/micro_layout_refiner.py`](src/agents/micro_layout_refiner.py)：确定性微排版、补文、留白控制。
-- [`src/agents/block_occupancy_analyzer.py`](src/agents/block_occupancy_analyzer.py)：block 利用率计算。
-- [`src/agents/vlm_layout_reviewer.py`](src/agents/vlm_layout_reviewer.py)：VLM 截图质检（含重试）。
+- [`src/workflow/pipeline.py`](src/workflow/pipeline.py)：工作流图、CLI、质量路由和最终输出。
+- [`src/agents/parser.py`](src/agents/parser.py)：PDF 内容与视觉资产解析。
+- [`src/agents/template_capacity_planner.py`](src/agents/template_capacity_planner.py)：模板 block 容量契约。
+- [`src/agents/poster_keypoint_selector.py`](src/agents/poster_keypoint_selector.py)：poster-worthy keypoint 提炼。
+- [`src/agents/curator.py`](src/agents/curator.py)：内容分组和 story board。
+- [`src/agents/micro_layout_refiner.py`](src/agents/micro_layout_refiner.py)：确定性微排版和空间修复。
+- [`src/agents/vlm_layout_reviewer.py`](src/agents/vlm_layout_reviewer.py)：全局视觉复核。
 - [`src/agents/background_image_agent.py`](src/agents/background_image_agent.py)：poster-conditioned 背景生成。
-- [`src/agents/renderer.py`](src/agents/renderer.py)：PPTX / PNG 渲染。
+- [`src/agents/renderer.py`](src/agents/renderer.py)：可编辑 PPTX 与 PNG 渲染。
 
----
+## 常见问题
 
-## 已知问题
+<details>
+<summary><strong>PNG 没有生成</strong></summary>
 
-1. 竖版模板效果较差（block 少、比例不适合 dense paper）。
-2. `auto` 默认稳定输出 `cluster_43_landscape`；模板多样性需用户显式指定模板。
-3. VLM final gate 有帮助，但不能完全替代人工目视检查。
-4. 图表可读性仍是难点（目前主要靠裁剪、缩放、必要时转文字总结，尚未重绘图表）。
-5. 运行时间较长（含 PDF 解析、LLM、VLM、背景图、微排版）。
-6. 生成结果是可编辑 PPTX，最终展示前可能仍需人工微调。
+PPTX 是主产物；PNG 需要 LibreOffice 或 macOS QuickLook 完成渲染。优先确认 `soffice` / `libreoffice` 已安装并可执行。
 
----
+</details>
+
+<details>
+<summary><strong>图像服务失败，为什么仍然有输出</strong></summary>
+
+Teaser 和背景属于可选 Generative Asset。服务不可用、余额不足或返回不可用图片时，pipeline 会记录 Degraded Quality State，并使用确定性背景或跳过可选资产，不阻断 PPTX 主流程。
+
+</details>
+
+<details>
+<summary><strong>为什么推理模型返回 temperature 错误</strong></summary>
+
+部分 `gpt-5.x`、`o1`、`o3`、`o4` 端点只接受默认 temperature。pipeline 会对已识别的推理模型省略非默认 temperature；自定义中转站仍报错时，需要确认该端点对模型和请求字段的实际支持范围。
+
+</details>
+
+<details>
+<summary><strong>为什么图表仍然可能偏小</strong></summary>
+
+源论文图表的长宽比、分辨率和内部字号可能不适合海报。系统会优先放大、裁剪、调整 slot 或转为论文事实摘要，但不会重绘实验数据；重要展示前仍建议打开 PPTX 做一次人工终检。
+
+</details>
+
+## 设计文档
+
+项目通过 ADR 固化关键边界，包括受控多样性、用户指定模板不被静默替换、生成资产降级策略、确定性质量门和 benchmark 与核心仓库的职责划分。详见 [`docs/adr/`](docs/adr/) 与 [`CONTEXT.md`](CONTEXT.md)。
 
 ## 致谢
 
-本项目基于 [Y-Research-SBU/PosterGen](https://github.com/Y-Research-SBU/PosterGen) 演进而来。
+本项目从 [PosterGen](https://github.com/Y-Research-SBU/PosterGen) 演进而来，并使用或集成了 [LangGraph](https://github.com/langchain-ai/langgraph)、[MinerU](https://github.com/opendatalab/MinerU)、[python-pptx](https://github.com/scanny/python-pptx) 与 [LibreOffice](https://www.libreoffice.org/) 等开源工具。
+
+## License
+
+本项目采用 [MIT License](LICENSE)。
+
+---
+
+<div align="center">
+  <strong>One paper, many valid posters.</strong>
+</div>
