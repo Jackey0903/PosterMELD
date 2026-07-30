@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="title" content="PosterMELD: Multi-Agent Paper-to-Poster Generation for Controllable Design Diversity with Editable Print-Ready Outputs">
+  <meta name="description" content="PosterMELD is a multi-agent paper-to-poster system for controllable design diversity with editable, print-ready PPTX outputs and deterministic plus VLM quality control.">
+  <meta name="keywords" content="academic poster generation, scientific document understanding, editable PowerPoint, multimodal agents, template-conditioned generation, visual language models">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#102b4e">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="PosterMELD Project Page">
+  <meta property="og:title" content="PosterMELD: Multi-Agent Paper-to-Poster Generation">
+  <meta property="og:description" content="One paper, many valid posters: multi-agent composition, editable layouts, and controlled design diversity.">
+  <meta property="og:url" content="https://jackey0903.github.io/PosterMELD/">
+  <meta property="og:image" content="https://jackey0903.github.io/PosterMELD/static/images/social_preview.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="PosterMELD project page title and scientific poster preview">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="PosterMELD: Multi-Agent Paper-to-Poster Generation">
+  <meta name="twitter:description" content="Design-diverse, valid scientific posters with editable, print-ready outputs.">
+  <meta name="twitter:image" content="https://jackey0903.github.io/PosterMELD/static/images/social_preview.png">
+
+  <title>PosterMELD | Multi-Agent Paper-to-Poster Generation</title>
+  <link rel="icon" type="image/svg+xml" href="readme/postermeld-logo.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="static/css/bulma.min.css">
+  <link rel="stylesheet" href="static/css/index.css">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "ScholarlyArticle",
+    "headline": "PosterMELD: Multi-Agent Paper-to-Poster Generation for Controllable Design Diversity with Editable Print-Ready Outputs",
+    "description": "A multi-agent pipeline for diverse, print-ready, editable academic poster generation.",
+    "url": "https://jackey0903.github.io/PosterMELD/",
+    "image": "https://jackey0903.github.io/PosterMELD/static/images/social_preview.png",
+    "keywords": ["academic poster generation", "multimodal agents", "editable PPTX", "visual language models"],
+    "isAccessibleForFree": true
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <nav class="site-nav" aria-label="Primary navigation">
+    <div class="nav-inner">
+      <a class="wordmark" href="#top" aria-label="PosterMELD home">
+        <img class="wordmark-logo" src="readme/postermeld-logo.svg" alt="" width="42" height="42">
+        <span>PosterMELD</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-label="Open navigation" aria-expanded="false">
+        <i class="fas fa-bars" aria-hidden="true"></i>
+      </button>
+      <div class="nav-links">
+        <a href="#overview">Overview</a>
+        <a href="#method">Method</a>
+        <a href="#gallery">Gallery</a>
+        <a href="#benchmark">Benchmark</a>
+        <a href="https://github.com/Jackey0903/PosterMELD" target="_blank" rel="noopener">Code</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main-content">
+    <header class="project-hero" id="top">
+      <div class="hero-wash" aria-hidden="true"></div>
+      <div class="hero-content reveal">
+        <div class="hero-title-lockup">
+          <img class="hero-logo" src="readme/postermeld-logo.svg" alt="PosterMELD paper mascot" width="214" height="223">
+          <div class="hero-title-copy">
+            <p class="eyebrow">Multi-agent paper-to-poster generation</p>
+            <h1>
+              <span class="hero-project-name">PosterMELD<span aria-hidden="true">:</span></span>
+              <span class="hero-paper-title">Multi-Agent Paper-to-Poster Generation for Controllable Design Diversity with Editable Print-Ready Outputs</span>
+            </h1>
+          </div>
+        </div>
+        <div class="hero-acronym" aria-label="PosterMELD acronym expansion">
+          <span><strong>M</strong> Multi-Agent</span>
+          <span><strong>E</strong> Editable</span>
+          <span><strong>L</strong> Layouts</span>
+          <span><strong>D</strong> Design diversity</span>
+        </div>
+        <p class="hero-lede">Fix the structure first, then write to fit. PosterMELD turns one paper into multiple valid poster designs while preserving evidence, editability, and print-readiness.</p>
+        <div class="hero-actions" aria-label="Project links">
+          <a class="action-button action-primary" href="https://github.com/Jackey0903/PosterMELD" target="_blank" rel="noopener">
+            <i class="fab fa-github" aria-hidden="true"></i><span>Code</span>
+          </a>
+          <a class="action-button" href="https://github.com/Jackey0903/PosterMELD#quick-start" target="_blank" rel="noopener">
+            <i class="fas fa-terminal" aria-hidden="true"></i><span>Quick start</span>
+          </a>
+          <a class="action-button" href="#benchmark">
+            <i class="fas fa-chart-bar" aria-hidden="true"></i><span>Benchmark</span>
+          </a>
+        </div>
+      </div>
+      <div class="hero-stats" aria-label="Project summary statistics">
+        <div><strong>81.3%</strong><span>print-ready rate</span></div>
+        <div><strong>3.4×</strong><span>P2P's print-ready rate</span></div>
+        <div><strong>621</strong><span>benchmark papers</span></div>
+        <div><strong>$0.38</strong><span>mean cost per request</span></div>
+      </div>
+    </header>
+
+    <section class="section-band teaser-showcase" aria-labelledby="teaser-title">
+      <div class="page-shell teaser-layout">
+        <div class="teaser-copy reveal">
+          <p class="section-index">Paper teaser</p>
+          <h2 id="teaser-title">Editable. Compact. Readable. Budgeted.</h2>
+          <p>PosterMELD combines structure-first composition with bounded quality repair, retaining the practical requirements that other generation routes sacrifice.</p>
+        </div>
+        <figure class="teaser-card reveal">
+          <button class="image-zoom" type="button" data-image="readme/teaser.png" aria-label="Open the PosterMELD paper teaser">
+            <img src="readme/teaser.png" alt="Comparison of P2P, PosterGen, a coding-agent workflow, and PosterMELD" width="2400" height="1363">
+            <span><i class="fas fa-expand" aria-hidden="true"></i> Expand figure</span>
+          </button>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section-band intro-band" id="overview">
+      <div class="page-shell narrow-shell">
+        <div class="section-heading reveal">
+          <p class="section-index">01 · Overview</p>
+          <h2>A poster is not a shrunken paper.</h2>
+        </div>
+        <div class="abstract-grid reveal">
+          <p class="lead-paragraph">Scientific poster construction compresses a long multimodal paper into one readable, editable canvas. Existing systems can hide request-level failures by scoring only completed outputs, while direct image generation does not preserve element-level editability.</p>
+          <p>PosterMELD inverts the usual workflow. Capacity-aware slots guide writing before rendering; specialized agents select evidence, compose visuals, and export native PowerPoint elements. Deterministic gates and VLM review route only failed aspects to a bounded repair loop.</p>
+        </div>
+        <div class="contribution-strip reveal">
+          <article>
+            <span class="contribution-number">A</span>
+            <h3>Print-ready by construction</h3>
+            <p>Capacity-aware writing and native PPTX rendering prevent overflow, overlap, and unreadably small text.</p>
+          </article>
+          <article>
+            <span class="contribution-number">B</span>
+            <h3>Controlled one-to-many output</h3>
+            <p>Template, style, density, background, and seed controls produce meaningful alternatives instead of accidental variation.</p>
+          </article>
+          <article>
+            <span class="contribution-number">C</span>
+            <h3>Validity-centered evaluation</h3>
+            <p>A 621-paper benchmark reports request-level Print-Ready Rate alongside conditional CHE, content fidelity, editability, and cost.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-band method-band" id="method">
+      <div class="page-shell">
+        <div class="section-heading reveal">
+          <p class="section-index">02 · Method</p>
+          <h2>Structure first. Reflection after rendering.</h2>
+          <p class="section-deck">Paper understanding, template-conditioned writing, reusable skills, native rendering, and bounded repair operate as one auditable pipeline.</p>
+        </div>
+        <figure class="figure-stage reveal">
+          <button class="image-zoom" type="button" data-image="readme/framework.png" aria-label="Open the PosterMELD framework figure">
+            <img src="readme/framework.png" alt="PosterMELD framework from paper inputs and controls through agent-skill composition, bounded VLM-guided repair, and diverse editable outputs" width="2600" height="1041">
+            <span><i class="fas fa-expand" aria-hidden="true"></i> Expand figure</span>
+          </button>
+          <figcaption>PosterMELD combines four specialized agents, reusable skills, capacity-aware slot contracts, deterministic gates, and VLM review. Failed drafts receive bounded rewrite, reflow, resize, or rerender actions; accepted drafts become editable PPTX files with consistent PNG renders.</figcaption>
+        </figure>
+
+        <div class="method-steps reveal">
+          <article><span>1</span><div><h3>Parse and ground</h3><p>MinerU extracts text, figures, tables, and document structure while provenance remains attached to every asset.</p></div></article>
+          <article><span>2</span><div><h3>Declare capacity</h3><p>Template slot contracts expose geometry, reading order, prominence, character budgets, and compatible visual types.</p></div></article>
+          <article><span>3</span><div><h3>Compose to fit</h3><p>Content, template, layout, and visual agents select keypoints and place evidence against known spatial constraints.</p></div></article>
+          <article><span>4</span><div><h3>Review and repair</h3><p>Deterministic gates and VLM critics inspect grounding, overflow, readability, visual quality, and occupancy before acceptance.</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-band gallery-band" id="gallery">
+      <div class="page-shell">
+        <div class="section-heading reveal">
+          <p class="section-index">03 · Controlled diversity</p>
+          <h2>One pipeline, distinct visual identities.</h2>
+          <p class="section-deck">The final paper compares five domains. PosterMELD changes layout topology, typography, palette, density, and text-figure allocation while keeping every output natively editable.</p>
+        </div>
+
+        <div class="case-heading reveal">
+          <p class="section-index">PosterMELD outputs from the paper</p>
+          <h3>Medical imaging, binary analysis, virtual dressing, fairness, and population genomics.</h3>
+        </div>
+        <div class="poster-grid reveal">
+          <figure>
+            <button class="image-zoom" type="button" data-image="static/images/project/case-coronary.png" aria-label="Open coronary angiography poster">
+              <img src="static/images/project/case-coronary.png" alt="PosterMELD poster for coronary angiography translation correction" loading="lazy" width="1400" height="704">
+            </button>
+            <figcaption>Medical imaging · clinical blue</figcaption>
+          </figure>
+          <figure>
+            <button class="image-zoom" type="button" data-image="static/images/project/case-bdlf.png" aria-label="Open BDLF-Qwen3 poster">
+              <img src="static/images/project/case-bdlf.png" alt="PosterMELD poster for BDLF-Qwen3 binary function similarity" loading="lazy" width="1400" height="694">
+            </button>
+            <figcaption>Binary analysis · burgundy</figcaption>
+          </figure>
+          <figure>
+            <button class="image-zoom" type="button" data-image="static/images/project/case-anydressing.png" aria-label="Open AnyDressing poster">
+              <img src="static/images/project/case-anydressing.png" alt="PosterMELD poster for AnyDressing virtual garment generation" loading="lazy" width="1400" height="692">
+            </button>
+            <figcaption>Virtual dressing · teal</figcaption>
+          </figure>
+          <figure>
+            <button class="image-zoom" type="button" data-image="static/images/project/case-aiface.png" aria-label="Open AI-Face poster">
+              <img src="static/images/project/case-aiface.png" alt="PosterMELD poster for the AI-Face fairness benchmark" loading="lazy" width="1400" height="692">
+            </button>
+            <figcaption>Fairness benchmark · gold + navy</figcaption>
+          </figure>
+          <figure class="poster-featured">
+            <button class="image-zoom" type="button" data-image="static/images/project/case-crowdsource.png" aria-label="Open population genomics poster">
+              <img src="static/images/project/case-crowdsource.png" alt="PosterMELD poster for a population-scale copy-number variation database" loading="lazy" width="1400" height="700">
+            </button>
+            <figcaption>Population genomics · navy + green</figcaption>
+          </figure>
+        </div>
+
+        <figure class="comparison-stage reveal">
+          <button class="image-zoom" type="button" data-image="readme/case-study.png" aria-label="Open full qualitative comparison">
+            <img src="readme/case-study.png" alt="Qualitative comparison of P2P, PosterGen, GPT-Image-2, and PosterMELD on five papers" loading="lazy" width="3000" height="1711">
+            <span><i class="fas fa-expand" aria-hidden="true"></i> Expand comparison</span>
+          </button>
+          <figcaption>Final qualitative figure from the paper. Each column uses the same input paper; each row shows one generation method.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section-band template-band" id="templates">
+      <div class="page-shell template-layout">
+        <div class="template-copy reveal">
+          <p class="section-index">04 · Template library</p>
+          <h2>Templates declare capacity, not content.</h2>
+          <dl class="template-facts">
+            <div><dt>16</dt><dd>landscape topologies</dd></div>
+            <div><dt>8</dt><dd>portrait topologies</dd></div>
+            <div><dt>3 × 3</dt><dd>style and density profiles</dd></div>
+          </dl>
+          <div class="control-row" aria-label="Available control dimensions">
+            <span>Template</span><span>Style</span><span>Density</span><span>Background</span><span>Seed</span>
+          </div>
+        </div>
+        <figure class="template-figure reveal">
+          <button class="image-zoom" type="button" data-image="readme/template-construction.png" aria-label="Open template library construction">
+            <img src="readme/template-construction.png" alt="PosterMELD template library construction from real posters" loading="lazy" width="2400" height="1296">
+          </button>
+          <figcaption>Real posters are decomposed into semantic blocks, normalized as spatial features, and clustered into reusable template structures.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section-band benchmark-band" id="benchmark">
+      <div class="page-shell">
+        <div class="section-heading reveal">
+          <p class="section-index">05 · Benchmark and evaluation</p>
+          <h2>Validity is an outcome, not an assumption.</h2>
+          <p class="section-deck">The benchmark spans 14 publication-source groups and ten research domains. PosterMELD evaluates whether each request produces a usable poster before reporting conditional visual and content scores.</p>
+        </div>
+        <div class="benchmark-layout reveal">
+          <figure>
+            <button class="image-zoom" type="button" data-image="readme/benchmark-composition.png" aria-label="Open benchmark composition figure">
+              <img src="readme/benchmark-composition.png" alt="Conference and journal composition of the 621-paper PosterMELD benchmark" loading="lazy" width="738" height="372">
+            </button>
+          </figure>
+          <div class="metric-list">
+            <article><span class="metric-icon"><i class="fas fa-check" aria-hidden="true"></i></span><div><h3>Print-Ready Rate</h3><p>Request-level validity across geometry, readability, asset integrity, and obvious factual errors.</p></div></article>
+            <article><span class="metric-icon"><i class="fas fa-align-left" aria-hidden="true"></i></span><div><h3>Content fidelity</h3><p>Paper-grounded keypoints, evidence coverage, and figure-text consistency.</p></div></article>
+            <article><span class="metric-icon"><i class="fas fa-eye" aria-hidden="true"></i></span><div><h3>Conditional CHE</h3><p>Craftsmanship, Harmony, and Expressiveness are scored only for print-ready outputs.</p></div></article>
+            <article><span class="metric-icon"><i class="fas fa-coins" aria-hidden="true"></i></span><div><h3>Request cost</h3><p>Mean generation cost includes failed requests instead of hiding them from the denominator.</p></div></article>
+          </div>
+        </div>
+        <div class="dataset-breakdown reveal" aria-label="Benchmark partitions">
+          <span><strong>235</strong> NeurIPS</span>
+          <span><strong>101</strong> AAAI</span>
+          <span><strong>100</strong> CVPR</span>
+          <span><strong>92</strong> Journals</span>
+          <span><strong>93</strong> Other conferences</span>
+        </div>
+
+        <div class="results-block reveal">
+          <div class="results-heading">
+            <p class="section-index">End-to-end comparison</p>
+            <h3>High validity without giving up editability.</h3>
+            <p>All metrics use the shared 621-paper request set. Missing generations remain in the denominator.</p>
+          </div>
+          <div class="results-table-wrap">
+            <table class="results-table">
+              <caption>End-to-end paper-to-poster results over 621 requests</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Method</th>
+                  <th scope="col">PRR ↑</th>
+                  <th scope="col">CHE ↑</th>
+                  <th scope="col">Universal ↑</th>
+                  <th scope="col">Editable</th>
+                  <th scope="col">Cost ↓</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><th scope="row">GPT-Image-2</th><td>85.2%</td><td>2.698</td><td><strong>4.948</strong></td><td>No</td><td><strong>$0.18</strong></td></tr>
+                <tr><th scope="row">Codex+Skill</th><td>82.8%</td><td>2.716</td><td>4.876</td><td>Yes</td><td>$10.78</td></tr>
+                <tr><th scope="row">P2P</th><td>24.2%</td><td>3.071</td><td>4.033</td><td>No</td><td>$0.35</td></tr>
+                <tr><th scope="row">PosterGen</th><td>15.8%</td><td>3.163</td><td>3.901</td><td>Yes</td><td>$0.28</td></tr>
+                <tr class="ours"><th scope="row">PosterMELD</th><td><strong>81.3%</strong></td><td><strong>3.247</strong></td><td><strong>4.456</strong></td><td><strong>Yes</strong></td><td><strong>$0.38</strong></td></tr>
+                <tr class="reference"><th scope="row">Human reference</th><td>98.7%</td><td>3.287</td><td>4.995</td><td>Yes</td><td>—</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="results-note">PRR is request-level print readiness. CHE is conditional on print-ready outputs. Universal assigns zero to missing generations. Cost is the mean U.S. dollars per request, including failures.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="open-source-band" aria-labelledby="open-source-title">
+      <div class="page-shell open-source-inner reveal">
+        <div>
+          <p class="section-index">Open source</p>
+          <h2 id="open-source-title">Generate an editable poster from your paper.</h2>
+          <p>Start with a standard template, then control style, density, background, and review depth from the command line.</p>
+        </div>
+        <div class="open-source-actions">
+          <a class="action-button action-primary" href="https://github.com/Jackey0903/PosterMELD" target="_blank" rel="noopener"><i class="fab fa-github" aria-hidden="true"></i><span>Explore the code</span></a>
+          <a class="action-button" href="https://github.com/Jackey0903/PosterMELD#quick-start" target="_blank" rel="noopener"><i class="fas fa-terminal" aria-hidden="true"></i><span>Read quick start</span></a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="page-shell footer-inner">
+      <div><strong>PosterMELD</strong><span>One paper, many valid posters.</span></div>
+      <p><a href="https://github.com/Jackey0903/PosterMELD" target="_blank" rel="noopener">Code</a> · Built from the <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank" rel="noopener">Academic Project Page Template</a>.</p>
+    </div>
+  </footer>
+
+  <dialog class="image-dialog" aria-label="Expanded project figure">
+    <button class="dialog-close" type="button" aria-label="Close image"><i class="fas fa-times" aria-hidden="true"></i></button>
+    <img alt="Expanded project figure">
+  </dialog>
+
+  <button class="back-to-top" type="button" aria-label="Back to top" title="Back to top">
+    <i class="fas fa-arrow-up" aria-hidden="true"></i>
+  </button>
+
+  <script defer src="static/js/fontawesome.all.min.js"></script>
+  <script defer src="static/js/index.js"></script>
+</body>
+</html>
