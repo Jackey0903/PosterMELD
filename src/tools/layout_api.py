@@ -17,7 +17,7 @@ SEMANTIC_LANES = ["left", "middle", "right"]
 
 class LayoutTemplates:
     """
-    Template generator for Paper2Poster layouts.
+    Template generator for PosterMELD layouts.
 
     Each template returns three semantic lanes (`left`, `middle`, `right`) so the
     curator and balancer can continue reasoning in the same vocabulary while the

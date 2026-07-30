@@ -9,6 +9,11 @@ from pathlib import Path
 from PIL import Image
 from typing import Any, Callable, List, Optional, Tuple
 
+
+class ImageQuotaError(RuntimeError):
+    """Raised when an image provider reports exhausted credit or hard quota."""
+
+
 class ImageTools:
     """
     图像操作工具类，封装基于 nanobanana/qwen-image 或者 gemini-2.5-flash-image 的视觉能力，
@@ -36,7 +41,7 @@ class ImageTools:
         self.model = self.models[0] if self.models else "gemini-2.5-flash-image"
         self.retry_attempts = max(1, int(retry_attempts if retry_attempts is not None else os.getenv("IMAGE_RETRY_ATTEMPTS", "5")))
         self.retry_delay = max(0.0, float(retry_delay if retry_delay is not None else os.getenv("IMAGE_RETRY_DELAY_SECONDS", "6")))
-        self.request_timeout = max(1.0, float(os.getenv("IMAGE_REQUEST_TIMEOUT_SECONDS", "45")))
+        self.request_timeout = max(1.0, float(os.getenv("IMAGE_REQUEST_TIMEOUT_SECONDS", "120")))
 
     def _resolve_models(self, model: Optional[str], fallback_models: Optional[List[str]]) -> List[str]:
         if os.getenv("IMAGE_MODELS"):
@@ -106,6 +111,13 @@ class ImageTools:
                         return operation(base_url)
                     except Exception as exc:
                         errors.append(f"model={model} {base_url} attempt {attempt}/{self.retry_attempts}: {exc}")
+                        if self._is_hard_quota_error(exc):
+                            message = (
+                                f"{label} 检测到生图余额或硬额度错误，立即停止重试，"
+                                f"model={model}, base_url={base_url}: {exc}"
+                            )
+                            print(message)
+                            raise ImageQuotaError(message) from exc
                         if self._is_non_retryable_model_error(exc):
                             print(f"{label} 模型/渠道不可用，切换下一个 URL 或模型，model={model}, base_url={base_url}: {exc}")
                             break
@@ -116,6 +128,34 @@ class ImageTools:
                             print(f"{label} 在 model={model}, base_url={base_url} 已失败 {self.retry_attempts} 次，切换下一个 URL")
         tail = "; ".join(errors[-5:])
         raise RuntimeError(f"{label} failed for all configured base URLs. Last errors: {tail}")
+
+    def _is_hard_quota_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        markers = [
+            "insufficient_quota",
+            "insufficient quota",
+            "quota exceeded",
+            "quota exhausted",
+            "billing hard limit",
+            "insufficient balance",
+            "insufficient account balance",
+            "balance is insufficient",
+            "account balance is insufficient",
+            "balance exhausted",
+            "credits exhausted",
+            "credit balance",
+            "exceeded your current quota",
+            "exceeded current quota",
+            "payment required",
+            "402 client error",
+            "http 402",
+            "余额不足",
+            "额度不足",
+            "账户欠费",
+            "余额已用完",
+            "需要充值",
+        ]
+        return any(marker in text for marker in markers)
 
     def _is_non_retryable_model_error(self, exc: Exception) -> bool:
         text = str(exc).lower()
@@ -159,12 +199,16 @@ class ImageTools:
                     "images/generations",
                     lambda base_url: self._generate_with_images_endpoint(prompt, width, height, output_path, headers, base_url),
                 )
+            except ImageQuotaError:
+                raise
             except Exception as image_endpoint_error:
                 print(f"标准图片接口失败，回退到 chat/completions: {image_endpoint_error}")
                 return self._request_with_failover(
                     "chat/completions image generation",
                     lambda base_url: self._generate_with_chat_endpoint(prompt, output_path, headers, base_url),
                 )
+        except ImageQuotaError:
+            raise
         except Exception as e:
             print(f"生成图像失败，可能因为网络或者服务接口变更错误: {e}")
             raise RuntimeError(f"image generation failed: {e}") from e
@@ -253,12 +297,16 @@ class ImageTools:
                     "images/edits",
                     lambda base_url: self._edit_with_images_endpoint(image_path, prompt, output_path, base_url),
                 )
+            except ImageQuotaError:
+                raise
             except Exception as image_endpoint_error:
                 print(f"标准图片编辑接口失败，回退到 chat/completions: {image_endpoint_error}")
                 return self._request_with_failover(
                     "chat/completions image editing",
                     lambda base_url: self._edit_with_chat_endpoint(image_path, prompt, output_path, base_url),
                 )
+        except ImageQuotaError:
+            raise
         except Exception as e:
             print(f"编辑图像服务请求失败，直接返回原图: {e}")
             return image_path

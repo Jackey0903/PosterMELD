@@ -1,4 +1,4 @@
-# Paper2Poster Pipeline 概览
+# PosterMELD Pipeline 概览
 
 这份文档只讲四件事：
 

@@ -4,7 +4,7 @@ from pathlib import Path
 import zipfile
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE
 
@@ -51,6 +51,7 @@ from src.utils.text_cleanup import normalize_text_for_poster, normalize_title_fo
 from utils.langgraph_utils import LangGraphAgent
 from src.workflow.pipeline import (
     _build_final_gate_refinement_occupancy,
+    _final_artifact_failures,
     _run_final_quality_gate,
     _section_geometry_issues,
     resolve_poster_dimensions,
@@ -125,6 +126,48 @@ def test_parser_extracts_mineru_assets_from_content_list(tmp_path):
     assert tables["1"]["caption"] == "Table 1: Main results."
     assert tables["1"]["aspect"] == 2.5
     assert Path(tables["1"]["path"]).exists()
+
+
+def test_parser_renders_mineru_asset_from_source_pdf_bbox_at_high_resolution(tmp_path):
+    import fitz
+
+    pdf_path = tmp_path / "paper.pdf"
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    page.draw_rect(fitz.Rect(60, 80, 300, 240), color=(0, 0, 0), width=1)
+    page.insert_text((80, 130), "Readable vector figure label", fontsize=18)
+    document.save(pdf_path)
+    document.close()
+
+    extract_dir = tmp_path / "content" / "mineru_raw"
+    images_dir = extract_dir / "images"
+    images_dir.mkdir(parents=True)
+    Image.new("RGB", (80, 40), "white").save(images_dir / "low-res.jpg")
+    items = [{
+        "type": "image",
+        "img_path": "images/low-res.jpg",
+        "image_caption": ["Figure 1: Vector source."],
+        "page_idx": 0,
+        "bbox": [100, 100, 500, 300],
+    }]
+    extraction = MinerUExtraction(
+        raw_text="# Paper",
+        extract_dir=extract_dir,
+        zip_path=extract_dir / "mineru_result.zip",
+        content_list_path=None,
+        content_items=items,
+        pdf_path=pdf_path,
+        report={"backend": "mineru"},
+    )
+    parser = Parser.__new__(Parser)
+    parser.name = "parser"
+
+    figures, _ = parser._extract_mineru_assets(extraction, tmp_path / "assets")
+
+    assert figures["1"]["extraction_method"] == "pdf_bbox_render"
+    assert figures["1"]["width"] >= 1500
+    assert figures["1"]["width"] > 80
+    assert figures["1"]["height"] > 40
 
 
 def test_mineru_client_uploads_polls_and_unpacks_zip(tmp_path, monkeypatch):
@@ -1522,12 +1565,7 @@ def test_header_planner_generates_centered_subtitle_for_short_title(tmp_path):
     assert plan["validation"]["passed"]
 
 
-def test_header_planner_wraps_long_landscape_title_to_keep_font_large(tmp_path):
-    """A long landscape title must wrap to two lines at a large font instead of shrinking
-    to a tiny single line (which previously left the title smaller than the authors).
-
-    Header logos narrow the title box (as on a real poster), so a single line would have
-    to shrink a lot; the planner should wrap to two lines and keep the font large."""
+def test_header_planner_keeps_long_landscape_title_on_one_readable_line(tmp_path):
     conf_path = tmp_path / "conference.png"
     aff_path = tmp_path / "affiliation.png"
     Image.new("RGBA", (900, 420), (20, 80, 160, 255)).save(conf_path)
@@ -1554,15 +1592,82 @@ def test_header_planner_wraps_long_landscape_title_to_keep_font_large(tmp_path):
     single_line_size = HeaderPlanner()._fit_single_line_font_size(
         title["text"], plan["title_box"]["w"], 100, {"orientation": "landscape"}
     )
+    assert title["wrap_policy"] == "single_line"
+    assert title["single_line"] is True
+    assert "\n" not in title["display_text"]
+    assert title["font_size"] == single_line_size
+    assert title["font_size"] >= 42
+    logo_left = min(
+        element["x"]
+        for element in plan["logo_elements"]
+        if element["type"] != "logo_divider"
+    )
+    title_right = plan["title_box"]["x"] + plan["title_box"]["w"]
+    assert 0.20 <= logo_left - title_right <= 0.35
+    assert plan["validation"]["passed"]
+
+
+def test_header_planner_expands_realistic_long_title_toward_logo_zone(tmp_path):
+    conf_path = tmp_path / "conference.png"
+    aff_path = tmp_path / "affiliation.png"
+    Image.new("RGBA", (1976, 645), (20, 80, 160, 255)).save(conf_path)
+    Image.new("RGBA", (1200, 430), (10, 40, 110, 255)).save(aff_path)
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        logo_path=str(conf_path),
+        aff_logo_path=str(aff_path),
+        header_route="classic_left",
+        header_subtitle_policy="off",
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": "3DTopia-XL: Scaling High-quality 3D Asset Generation via Primitive Diffusion",
+            "authors": "Z. Chen, J. Tang, Y. Dong, Z. Cao, F. Hong, Y. Lan, T. Wang",
+        }
+    }
+    plan = HeaderPlanner()(state)["header_plan"]
+
+    assert plan["title"]["single_line"] is True
+    assert plan["title"]["font_size"] >= 64
+    assert plan["title"]["font_size"] > plan["authors"]["font_size"]
+    logo_left = min(
+        element["x"]
+        for element in plan["logo_elements"]
+        if element["type"] != "logo_divider"
+    )
+    title_right = plan["title_box"]["x"] + plan["title_box"]["w"]
+    assert 0.20 <= logo_left - title_right <= 0.35
+    assert plan["validation"]["passed"]
+
+
+def test_header_planner_wraps_only_when_single_line_would_be_too_small(tmp_path):
+    state = create_state(
+        str(tmp_path / "paper.pdf"),
+        layout_template="cluster_43_landscape",
+        width=54,
+        height=27,
+        header_route="classic_left",
+        header_subtitle_policy="off",
+    )
+    state["narrative_content"] = {
+        "meta": {
+            "poster_title": (
+                "A Unified Generalizable and Controllable Framework for High-Fidelity "
+                "Multimodal Scientific Reasoning Generation Evaluation and Deployment "
+                "Across Open-World Interactive Environments with Reliable Human Feedback"
+            ),
+            "authors": "A. One, B. Two, C. Three",
+        }
+    }
+
+    title = HeaderPlanner()(state)["header_plan"]["title"]
+
     assert title["wrap_policy"] == "two_line"
     assert title["single_line"] is False
     assert "\n" in title["display_text"]
-    # font stays large — far bigger than the shrunk single-line fit for this narrow box
-    assert title["font_size"] >= 58
-    assert title["font_size"] > single_line_size
-    # the wrapped title dominates: it is clearly larger than the author line
-    assert title["font_size"] > plan["authors"]["font_size"]
-    assert plan["validation"]["passed"]
 
 
 def test_header_planner_auto_defaults_to_stable_classic_left_without_seed(tmp_path):
@@ -2959,6 +3064,14 @@ def test_create_state_uses_draft_stage_when_post_render_pass_is_enabled():
     assert create_state("/tmp/paper.pdf", enable_block_vlm_review=True)["render_stage"] == "draft"
 
 
+def test_create_state_supports_isolated_output_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("PAPER2POSTER_OUTPUT_ROOT", str(tmp_path / "isolated"))
+
+    state = create_state("/tmp/example_paper/paper.pdf")
+
+    assert state["output_dir"] == str(tmp_path / "isolated" / "example_paper")
+
+
 def test_generated_teaser_agent_is_noop_when_disabled(tmp_path, monkeypatch):
     def fail_generate_image(self, prompt, width, height, output_path):
         raise AssertionError("generated teaser API should not be called when disabled")
@@ -3057,6 +3170,141 @@ def test_generated_teaser_agent_injects_motivation_visual(tmp_path, monkeypatch)
     assert saved_story_board["spatial_content_plan"]["sections"][0]["visual_assets"][0]["visual_id"] == visual_id
 
 
+def test_generated_teaser_rejects_readable_text_with_ocr_guard(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_generate_image(self, prompt, width, height, output_path):
+        calls.append(prompt)
+        image = Image.new("RGB", (width, height), color=(238, 246, 252))
+        ImageDraw.Draw(image).line((0, 0, width, height), fill=(40, 90, 160), width=4)
+        image.save(output_path)
+        return output_path
+
+    monkeypatch.setattr("src.agents.generated_teaser_agent.ImageTools.generate_image", fake_generate_image)
+    monkeypatch.setattr(
+        "src.agents.generated_teaser_agent.detect_readable_text",
+        lambda *args, **kwargs: {
+            "available": True,
+            "rejected": True,
+            "tokens": [{"text": "Architecture", "confidence": 88.0}],
+            "reason": "readable_text_detected",
+        },
+    )
+    state = create_state(str(tmp_path / "paper.pdf"), width=54, height=27, enable_generated_teaser=True)
+    state["output_dir"] = str(tmp_path / "output")
+    state["resolved_layout_template"] = "cluster_104_landscape"
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Motivation",
+                    "content_role": "foundation",
+                    "preferred_slot_id": "slot_1",
+                    "column_assignment": "slot_1",
+                    "text_content": ["The paper addresses a concrete scientific bottleneck."],
+                    "visual_assets": [],
+                }
+            ]
+        }
+    }
+    state["visual_assets"] = {}
+
+    result = GeneratedTeaserAgent()(state)
+    report = result["generated_teaser_report"]
+
+    assert len(calls) == 3
+    assert report["applied"] is False
+    assert report["needs_regeneration"] is True
+    assert report["used_procedural_fallback"] is False
+    assert report["fallback_reason"] == "readable_text_artifacts"
+    assert report["safety"]["readable_text_rejected"] is True
+    assert result["story_board"]["spatial_content_plan"]["sections"][0]["visual_assets"] == []
+    assert not Path(report["teaser_path"] or "missing").exists()
+
+
+def test_generated_teaser_regenerates_after_content_rejection_without_fallback(tmp_path, monkeypatch):
+    calls = []
+    ocr_calls = []
+
+    def fake_generate_image(self, prompt, width, height, output_path):
+        calls.append(prompt)
+        image = Image.new("RGB", (width, height), color=(238, 246, 252))
+        ImageDraw.Draw(image).line((0, 0, width, height), fill=(40, 90, 160), width=4)
+        image.save(output_path)
+        return output_path
+
+    def fake_detect_readable_text(*args, **kwargs):
+        ocr_calls.append(args[0])
+        rejected = len(ocr_calls) == 1
+        return {
+            "available": True,
+            "rejected": rejected,
+            "tokens": [{"text": "Architecture", "confidence": 88.0}] if rejected else [],
+            "reason": "readable_text_detected" if rejected else "no_readable_text",
+        }
+
+    monkeypatch.setattr("src.agents.generated_teaser_agent.ImageTools.generate_image", fake_generate_image)
+    monkeypatch.setattr("src.agents.generated_teaser_agent.detect_readable_text", fake_detect_readable_text)
+    state = create_state(str(tmp_path / "paper.pdf"), width=54, height=27, enable_generated_teaser=True)
+    state["output_dir"] = str(tmp_path / "output")
+    state["resolved_layout_template"] = "cluster_104_landscape"
+    state["story_board"] = {
+        "spatial_content_plan": {
+            "sections": [
+                {
+                    "section_id": "motivation",
+                    "section_title": "Motivation",
+                    "content_role": "foundation",
+                    "preferred_slot_id": "slot_1",
+                    "column_assignment": "slot_1",
+                    "text_content": ["The paper addresses a concrete scientific bottleneck."],
+                    "visual_assets": [],
+                }
+            ]
+        }
+    }
+    state["visual_assets"] = {}
+
+    result = GeneratedTeaserAgent()(state)
+    report = result["generated_teaser_report"]
+
+    assert len(calls) == 2
+    assert "REGENERATION ATTEMPT 2" in calls[1]
+    assert report["applied"] is True
+    assert report["asset_source"] == "image_api"
+    assert report["used_procedural_fallback"] is False
+    assert report["needs_regeneration"] is False
+    assert report["generation_attempt_count"] == 2
+    assert Path(report["teaser_path"]).exists()
+
+
+def test_final_artifact_gate_records_teaser_needing_regeneration(tmp_path):
+    pptx_path = tmp_path / "poster.pptx"
+    png_path = tmp_path / "poster.png"
+    pptx_path.write_bytes(b"pptx")
+    Image.new("RGB", (20, 10), "white").save(png_path)
+    state = create_state(str(tmp_path / "paper.pdf"), enable_generated_teaser=True)
+    state["pptx_output_path"] = str(pptx_path)
+    state["poster_preview_path"] = str(png_path)
+    state["generated_teaser_report"] = {
+        "applied": False,
+        "needs_regeneration": True,
+        "fallback_reason": "readable_text_artifacts",
+    }
+
+    failures = _final_artifact_failures(state)
+
+    assert failures == [
+        {
+            "category": "generated_asset",
+            "asset": "teaser",
+            "reason": "readable_text_artifacts",
+            "needs_regeneration": True,
+        }
+    ]
+
+
 def test_generated_teaser_uses_portrait_height_policy_for_tall_templates():
     state = create_state(
         "/tmp/paper.pdf",
@@ -3088,6 +3336,27 @@ def test_generated_teaser_uses_portrait_height_policy_for_tall_templates():
     assert geometry["target_height_inches"] < 8.6
     assert layout_fraction == pytest.approx(load_config()["generated_teaser"]["portrait_layout_max_height_fraction"])
     assert len(summary) == 1
+
+
+def test_generated_teaser_summary_uses_complete_sentences_within_total_budget():
+    first = (
+        "Face video restoration can exploit strong audio-visual correlation, especially lip-motion synchronization, "
+        "but prior audio-aided methods mainly target compression artifacts."
+    )
+    second = (
+        "The paper introduces GAVN, a general audio-assisted face video restoration network for compression artifact "
+        "removal, deblurring, and super-resolution."
+    )
+    section = {"text_content": [first, second]}
+
+    summary = GeneratedTeaserAgent()._compress_target_section_text(
+        section,
+        {"orientation": "landscape"},
+    )
+
+    assert summary == [first]
+    assert "audio-aided." not in summary[0]
+    assert "compression artifact." not in summary[0]
 
 
 def test_generated_teaser_agent_skips_sections_with_existing_visuals_by_default(tmp_path, monkeypatch):
@@ -3248,6 +3517,8 @@ def test_background_image_agent_prompt_is_background_only():
     assert "not plain white" in prompt
     assert "Selected background palette: light_blue" in prompt
     assert "#0057B8" in prompt
+    assert "Main Results" not in prompt
+    assert "Paper title context" not in prompt
 
 
 def test_background_image_agent_switches_palette_prompt():
@@ -3338,8 +3609,11 @@ def test_background_image_agent_enforces_visibility_floor_for_pale_background():
     assert after["average_distance_from_white"] >= 10.0
 
 
-def test_background_image_agent_placeholder_fallback_keeps_pipeline_success(tmp_path, monkeypatch):
+def test_background_image_agent_placeholder_is_marked_for_regeneration_without_fallback(tmp_path, monkeypatch):
+    calls = []
+
     def fake_generate_image(self, prompt, width, height, output_path):
+        calls.append(prompt)
         Image.new("RGB", (width, height), color=(200, 200, 200)).save(output_path)
         return output_path
 
@@ -3354,12 +3628,16 @@ def test_background_image_agent_placeholder_fallback_keeps_pipeline_success(tmp_
     result = agent(state)
 
     assert result["errors"] == []
-    assert Path(result["background_image_path"]).exists()
+    assert len(calls) == 3
+    assert result["background_image_path"] is None
     assert result["background_image_report"]["palette"] == "light_blue"
     assert result["background_image_report"]["resolved_palette"] == "light_blue"
     assert result["background_image_report"]["requested_style"] == "auto"
     assert result["background_image_report"]["resolved_style"]
-    assert result["background_image_report"]["used_procedural_fallback"] is True
+    assert result["background_image_report"]["used_procedural_fallback"] is False
+    assert result["background_image_report"]["applied"] is False
+    assert result["background_image_report"]["needs_regeneration"] is True
+    assert result["background_image_report"]["asset_source"] == "none"
 
 
 def test_background_image_agent_uses_poster_preview_as_reference(tmp_path, monkeypatch):
@@ -3386,7 +3664,7 @@ def test_background_image_agent_uses_poster_preview_as_reference(tmp_path, monke
 
     assert result["errors"] == []
     assert Path(result["background_image_path"]).exists()
-    assert result["background_image_report"]["generation_mode"] == "poster_conditioned_image_api_with_procedural_fallback"
+    assert result["background_image_report"]["generation_mode"] == "poster_conditioned_image_api"
     assert result["background_image_report"]["reference_poster_path"] == str(preview_path)
 
 
@@ -3420,7 +3698,7 @@ def test_background_image_agent_defaults_to_text_to_image_without_poster_referen
 
     assert result["errors"] == []
     assert Path(result["background_image_path"]).exists()
-    assert result["background_image_report"]["generation_mode"] == "image_api_with_procedural_fallback"
+    assert result["background_image_report"]["generation_mode"] == "image_api"
     assert result["background_image_report"]["used_procedural_fallback"] is False
 
 
@@ -3470,13 +3748,88 @@ def test_background_image_agent_rejects_background_that_copies_layout_text(tmp_p
     report = result["background_image_report"]
 
     assert result["errors"] == []
-    assert report["used_procedural_fallback"] is True
-    assert report["generation_mode"] == "poster_conditioned_image_api_contaminated_procedural_fallback"
+    assert report["used_procedural_fallback"] is False
+    assert report["needs_regeneration"] is True
+    assert report["applied"] is False
+    assert report["generation_mode"] == "poster_conditioned_image_api_rejected_no_fallback"
     assert report["postprocess"]["fallback_reason"] == "layout_copy_artifacts"
     assert report["postprocess"]["copy_artifact_report"]["rejected"] is True
     assert report["safety"]["layout_copy_artifacts_rejected"] is True
     assert result["degraded_quality_states"][-1]["category"] == "generated_background"
     assert Path(report["raw_path"]).exists()
+    assert report["background_image_path"] == ""
+
+
+def test_background_image_agent_rejects_ocr_text_artifacts(tmp_path, monkeypatch):
+    def fake_generate_image(self, prompt, width, height, output_path):
+        image = Image.new("RGB", (width, height), color=(238, 246, 252))
+        ImageDraw.Draw(image).line((0, 0, width, height), fill=(80, 120, 180), width=3)
+        image.save(output_path)
+        return output_path
+
+    monkeypatch.setattr("src.agents.background_image_agent.ImageTools.generate_image", fake_generate_image)
+    monkeypatch.setattr(
+        "src.agents.background_image_agent.detect_readable_text",
+        lambda *args, **kwargs: {
+            "available": True,
+            "rejected": True,
+            "tokens": [{"text": "Motivation", "confidence": 91.0}],
+            "reason": "readable_text_detected",
+        },
+    )
+    state = create_state(str(tmp_path / "paper.pdf"), enable_generated_background=True)
+    state["output_dir"] = str(tmp_path / "output")
+    agent = BackgroundImageAgent()
+    agent.background_config["width_px"] = 320
+    agent.background_config["height_px"] = 160
+
+    report = agent(state)["background_image_report"]
+
+    assert report["used_procedural_fallback"] is False
+    assert report["needs_regeneration"] is True
+    assert report["applied"] is False
+    assert report["postprocess"]["fallback_reason"] == "readable_text_artifacts"
+    assert report["safety"]["readable_text_rejected"] is True
+
+
+def test_background_image_agent_regenerates_after_content_rejection(tmp_path, monkeypatch):
+    calls = []
+    ocr_calls = []
+
+    def fake_generate_image(self, prompt, width, height, output_path):
+        calls.append(prompt)
+        image = Image.new("RGB", (width, height), color=(238, 246, 252))
+        ImageDraw.Draw(image).line((0, 0, width, height), fill=(80, 120, 180), width=3)
+        image.save(output_path)
+        return output_path
+
+    def fake_detect_readable_text(*args, **kwargs):
+        ocr_calls.append(args[0])
+        rejected = len(ocr_calls) == 1
+        return {
+            "available": True,
+            "rejected": rejected,
+            "tokens": [{"text": "Motivation", "confidence": 91.0}] if rejected else [],
+            "reason": "readable_text_detected" if rejected else "no_readable_text",
+        }
+
+    monkeypatch.setattr("src.agents.background_image_agent.ImageTools.generate_image", fake_generate_image)
+    monkeypatch.setattr("src.agents.background_image_agent.detect_readable_text", fake_detect_readable_text)
+    state = create_state(str(tmp_path / "paper.pdf"), enable_generated_background=True)
+    state["output_dir"] = str(tmp_path / "output")
+    agent = BackgroundImageAgent()
+    agent.background_config["width_px"] = 320
+    agent.background_config["height_px"] = 160
+
+    result = agent(state)
+    report = result["background_image_report"]
+
+    assert len(calls) == 2
+    assert "REGENERATION ATTEMPT 2" in calls[1]
+    assert report["asset_source"] == "image_api"
+    assert report["applied"] is True
+    assert report["needs_regeneration"] is False
+    assert report["generation_attempt_count"] == 2
     assert Path(report["background_image_path"]).exists()
 
 
@@ -3503,7 +3856,7 @@ def test_color_agent_records_degraded_state_when_visual_color_extraction_fails(t
     assert result["degraded_quality_states"][-1]["fallback"] == "default_theme"
 
 
-def test_background_image_agent_api_failure_falls_back_without_error(tmp_path, monkeypatch):
+def test_background_image_agent_api_failure_is_recorded_without_fallback(tmp_path, monkeypatch):
     def fail_edit_image(self, image_path, prompt, output_path):
         raise TimeoutError("stuck image API")
 
@@ -3524,9 +3877,10 @@ def test_background_image_agent_api_failure_falls_back_without_error(tmp_path, m
     result = agent(state)
 
     assert result["errors"] == []
-    assert Path(result["background_image_path"]).exists()
-    assert result["background_image_report"]["used_procedural_fallback"] is True
-    assert result["background_image_report"]["generation_mode"] == "poster_conditioned_image_api_failed_procedural_fallback"
+    assert result["background_image_path"] is None
+    assert result["background_image_report"]["used_procedural_fallback"] is False
+    assert result["background_image_report"]["needs_regeneration"] is True
+    assert result["background_image_report"]["generation_mode"] == "poster_conditioned_image_api_rejected_no_fallback"
     assert result["background_image_report"]["raw_path"] == ""
 
 
@@ -3616,6 +3970,69 @@ def test_image_tools_failover_retries_each_base_url(tmp_path, monkeypatch):
         "https://first.example/v1/images/generations",
         "https://second.example/v1/images/generations",
     ]
+
+
+def test_image_tools_retries_transient_errors_five_times_with_six_second_intervals(monkeypatch):
+    tool = ImageTools(
+        api_key="test-key",
+        base_url="https://example.test/v1",
+        model="test-image-model",
+        fallback_models=[],
+        retry_attempts=5,
+        retry_delay=6,
+    )
+    calls = []
+    sleeps = []
+
+    monkeypatch.setattr("src.tools.image_api.time.sleep", sleeps.append)
+
+    def operation(base_url):
+        calls.append(base_url)
+        if len(calls) < 5:
+            raise TimeoutError("temporary image generation timeout")
+        return "ok"
+
+    assert tool._request_with_failover("image retry test", operation) == "ok"
+    assert calls == ["https://example.test/v1"] * 5
+    assert sleeps == [6, 6, 6, 6]
+
+
+def test_image_tools_does_not_retry_hard_balance_errors(monkeypatch):
+    tool = ImageTools(
+        api_key="test-key",
+        base_url="https://first.example/v1, https://second.example/v1",
+        model="test-image-model",
+        fallback_models=[],
+        retry_attempts=5,
+        retry_delay=6,
+    )
+    calls = []
+    sleeps = []
+
+    monkeypatch.setattr("src.tools.image_api.time.sleep", sleeps.append)
+
+    def operation(base_url):
+        calls.append(base_url)
+        raise RuntimeError("Your account balance is insufficient; please recharge before continuing")
+
+    with pytest.raises(RuntimeError, match="account balance is insufficient"):
+        tool._request_with_failover("image quota test", operation)
+
+    assert calls == ["https://first.example/v1"]
+    assert sleeps == []
+
+
+def test_image_tools_default_timeout_allows_slow_generation(monkeypatch):
+    monkeypatch.delenv("IMAGE_REQUEST_TIMEOUT_SECONDS", raising=False)
+
+    tool = ImageTools(
+        api_key="test-key",
+        base_url="https://example.test/v1",
+        model="test-image-model",
+        fallback_models=[],
+    )
+
+    assert tool.request_timeout == 120
 
 
 def test_image_tools_gpt_image_uses_supported_aspect_size():
@@ -4381,7 +4798,12 @@ def test_visual_asset_agent_table_crop_only_preserves_full_table_edges(tmp_path)
     assert right_pixel[2] > 150 and right_pixel[0] < 80 and right_pixel[1] < 80
 
 
-def test_visual_asset_agent_enabled_generates_for_missing_source_slot(tmp_path):
+def test_visual_asset_agent_enabled_generates_for_missing_source_slot(tmp_path, monkeypatch):
+    def fake_generate_image(self, prompt, width, height, output_path):
+        Image.new("RGB", (width, height), "white").save(output_path)
+        return output_path
+
+    monkeypatch.setattr(ImageTools, "generate_image", fake_generate_image)
     state = create_state(str(tmp_path / "paper.pdf"), enable_visual_refinement=True)
     state["output_dir"] = str(tmp_path / "output")
     state["visual_assets"] = {}
@@ -4453,6 +4875,67 @@ def test_vlm_layout_reviewer_uses_responses_endpoint(monkeypatch):
     assert "overall_score" in text
 
 
+def test_vlm_layout_reviewer_records_response_usage():
+    class FakeResponse:
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {
+                "output_text": '{"accept": true}',
+                "usage": {"input_tokens": 321, "output_tokens": 45},
+            }
+
+    reviewer = VLMLayoutReviewer()
+    assert reviewer._extract_response_text(FakeResponse()) == '{"accept": true}'
+
+    state = create_state("/tmp/paper.pdf")
+    reviewer._record_usage(state, "vlm_layout_reviewer")
+
+    calls = state["timing_metrics"].api_calls
+    assert len(calls) == 1
+    assert calls[0].agent == "vlm_layout_reviewer"
+    assert calls[0].input_tokens == 321
+    assert calls[0].output_tokens == 45
+    assert state["tokens"].input_vision == 321
+    assert state["tokens"].output_vision == 45
+
+
+def test_vlm_layout_reviewer_falls_back_from_responses_to_chat(monkeypatch):
+    transports = []
+
+    class FakeResponse:
+        headers = {"content-type": "application/json"}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"accept": true}'}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+            }
+
+    def fake_post(self, base_url, headers, model, prompt, image_data, *, transport=None):
+        transports.append(transport)
+        if transport == "responses":
+            raise ValueError("response.failed")
+        return FakeResponse()
+
+    reviewer = VLMLayoutReviewer()
+    monkeypatch.setattr(VLMLayoutReviewer, "_post_vlm_request", fake_post)
+
+    content = reviewer._request_vlm_text(
+        "https://example.com/v1",
+        {"Authorization": "Bearer test"},
+        "gpt-5.4",
+        "review",
+        "data:image/png;base64,abc",
+    )
+
+    assert content == '{"accept": true}'
+    assert transports == ["responses", "chat"]
+
+
 def test_vlm_layout_reviewer_falls_back_on_request_failure(tmp_path, monkeypatch):
     state = create_state(str(tmp_path / "paper.pdf"), enable_vlm_layout_review=True)
     state["output_dir"] = str(tmp_path / "output")
@@ -4465,7 +4948,7 @@ def test_vlm_layout_reviewer_falls_back_on_request_failure(tmp_path, monkeypatch
     monkeypatch.setenv("VLM_API_KEY", "test")
     monkeypatch.setenv("VLM_MODEL", "gpt-5.4")
 
-    def fail_post(self, base_url, headers, model, prompt, image_data):
+    def fail_post(self, base_url, headers, model, prompt, image_data, **kwargs):
         raise ConnectionResetError("connection reset")
 
     monkeypatch.setattr(VLMLayoutReviewer, "_post_vlm_request", fail_post)
@@ -4474,7 +4957,7 @@ def test_vlm_layout_reviewer_falls_back_on_request_failure(tmp_path, monkeypatch
 
     assert result["errors"] == []
     assert result["vlm_layout_review"]["source"] == "fallback"
-    assert result["vlm_layout_review"]["accept"] is True
+    assert result["vlm_layout_review"]["accept"] is False
     assert "VLM layout request failed" in result["vlm_layout_review"]["warnings"][0]
 
 
@@ -4491,7 +4974,7 @@ def test_visual_legibility_reviewer_records_degraded_state_on_vlm_fallback(tmp_p
     monkeypatch.setenv("VLM_API_KEY", "test")
     monkeypatch.setenv("VLM_MODEL", "gpt-5.4")
 
-    def fail_post(self, base_url, headers, model, prompt, image_data):
+    def fail_post(self, base_url, headers, model, prompt, image_data, **kwargs):
         raise ConnectionResetError("connection reset")
 
     monkeypatch.setattr(VLMLayoutReviewer, "_post_vlm_request", fail_post)
@@ -4934,6 +5417,37 @@ def test_visual_legibility_heuristic_requests_middle_lane_for_wide_visual():
 
     assert review["needs_relayout"] is True
     assert review["layout_recommendation"]["target_lane"] == "middle"
+
+
+def test_visual_legibility_heuristic_flags_low_resolution_table(tmp_path):
+    source = tmp_path / "tiny_table.png"
+    Image.new("RGB", (360, 120), "white").save(source)
+    state = create_state(str(tmp_path / "paper.pdf"), enable_visual_legibility_review=True)
+    state["template_layout_mode"] = "template_prior"
+    state["layout_template_metadata"] = {"lanes": []}
+    state["visual_assets"] = {
+        "table_1": {
+            "asset_id": "table_1",
+            "asset_type": "table",
+            "source_path": str(source),
+            "caption": "Primary quantitative comparison",
+        }
+    }
+    state["styled_layout"] = [
+        {
+            "type": "visual",
+            "id": "results_table",
+            "slot_id": "results_table",
+            "visual_id": "table_1",
+            "width": 12.0,
+            "height": 4.0,
+        }
+    ]
+
+    review = VisualLegibilityReviewer()._heuristic_review(state)
+
+    assert review["needs_relayout"] is True
+    assert any(issue["severity"] == "high" for issue in review["issues"])
 
 
 def test_adaptive_column_relayout_sets_template_and_saves_decision(tmp_path):
@@ -7150,6 +7664,36 @@ def test_final_quality_gate_dedupes_degraded_states_and_removes_stale_repair_rep
     assert not stale_report.exists()
 
 
+def test_final_quality_gate_rejects_degraded_required_vlm_review(tmp_path, monkeypatch):
+    state = _block_refinement_state(tmp_path, utilization=0.98)
+    state["output_dir"] = str(tmp_path / "output")
+    state["template_layout_mode"] = "template_prior"
+    state["final_poster_accepted"] = True
+    state["enable_vlm_layout_review"] = True
+    state["vlm_layout_review"] = {
+        "source": "fallback",
+        "review_available": False,
+        "degraded": True,
+        "accept": False,
+        "warnings": ["response.failed"],
+    }
+    content_dir = Path(state["output_dir"]) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    (content_dir / "micro_layout_report.json").write_text(
+        json.dumps({"validation": {"issues": []}}),
+        encoding="utf-8",
+    )
+
+    result = _run_final_quality_gate(state)
+
+    assert result["final_quality_gate"]["accepted"] is False
+    assert any(
+        failure.get("category") == "quality_review_unavailable"
+        and failure.get("component") == "vlm_layout_reviewer"
+        for failure in result["final_quality_gate"]["failures"]
+    )
+
+
 def test_final_quality_gate_records_affiliation_logo_degraded_state(tmp_path, monkeypatch):
     class FakeAnalyzer:
         def analyze(self, _state):
@@ -7773,6 +8317,104 @@ def test_block_content_refiner_allows_near_one_line_bottom_whitespace():
     assert safe_extra_chars == 86
 
 
+def test_block_content_refiner_keeps_capacity_bullet_count_during_expansion():
+    refiner = BlockContentRefiner()
+    current = ["Primary evaluation fact.", "Secondary robustness fact."]
+    rewritten = [
+        "Primary evaluation fact with clearer protocol context.",
+        "Secondary robustness fact with a stronger takeaway.",
+        "Additional implementation detail that should be merged rather than added as a third paragraph.",
+    ]
+
+    result = refiner._apply_rewrite(
+        current,
+        rewritten,
+        {"target_extra_chars": 90, "max_final_bullets": 2},
+    )
+
+    assert len(result) == 2
+    assert sum(len(item) for item in result) <= sum(len(item) for item in current) + 104
+
+
+def test_block_content_refiner_caps_expansion_with_whole_sentences():
+    refiner = BlockContentRefiner()
+    current = [
+        "Temporal features capture neighboring-frame motion for efficient coarse restoration.",
+        "Identity features combine the current frame with audio and landmark cues.",
+    ]
+    rewritten = [
+        "Temporal features capture neighboring-frame motion for efficient coarse restoration across multiple frame offsets.",
+        "Identity features combine the current frame with audio and landmark cues to recover facial detail.",
+        "The reconstruction module fuses both feature streams into a high-quality restored frame.",
+    ]
+
+    result = refiner._apply_rewrite(
+        current,
+        rewritten,
+        {
+            "target_extra_chars": 80,
+            "max_final_bullets": 3,
+            "max_final_chars": 250,
+        },
+    )
+
+    assert sum(len(item) for item in result) <= 250
+    assert all(item in rewritten for item in result)
+    assert all(item.endswith(".") for item in result)
+    assert refiner._clean_bullets(["1, both identity and audio cues improve facial restoration."]) == [
+        "Both identity and audio cues improve facial restoration."
+    ]
+
+
+def test_block_content_refiner_allows_short_callout_for_final_whitespace_repair():
+    state = _block_refinement_state(Path("/tmp"), utilization=0.91)
+    section = state["story_board"]["spatial_content_plan"]["sections"][0]
+    section["text_content"] = ["A complete visual explanation that already occupies several lines."]
+    section["target_bullets"] = 1
+    section["capacity_budget"] = {"target_bullets": 1}
+    state["template_fast_mode"] = True
+    state["block_occupancy_report"] = {
+        "settings": {"acceptable_min": 0.96, "hard_max": 0.995},
+        "blocks": [{
+            "slot_id": "slot_1",
+            "section_id": "method",
+            "utilization": 0.91,
+            "visual_count": 1,
+            "action": "expand",
+            "target_extra_chars": 80,
+            "bottom_whitespace": 1.0,
+            "available_height": 10.0,
+            "used_height": 9.0,
+            "visible_content_height": 9.0,
+            "line_height": 0.8,
+            "chars_per_line": 50,
+            "final_gate_repair": True,
+        }],
+    }
+    state["block_vlm_review"] = {"blocks": []}
+
+    actions = BlockContentRefiner()._decide_actions(state)
+
+    assert actions[0]["action"] == "expand"
+    assert actions[0]["max_final_bullets"] == 2
+
+
+def test_curator_allows_one_caption_for_single_bullet_visual_block():
+    curator = StoryBoardCurator()
+
+    minimum = curator._minimum_text_items_for_section(
+        {
+            "text_content": ["Concise visual interpretation."],
+            "capacity_budget": {
+                "target_bullets": 1,
+                "visual_policy": "figure_caption",
+            },
+        }
+    )
+
+    assert minimum == 1
+
+
 def test_block_content_refiner_resets_header_review_before_relayout():
     state = create_state("/tmp/paper.pdf", layout_template="cluster_13_portrait", width=36, height=50.88)
     state["header_block_review"] = {"accepted": True}
@@ -7833,30 +8475,22 @@ def test_block_content_refiner_reduces_crowded_block_without_changing_refs(tmp_p
     assert after_section["visual_assets"] == before_section["visual_assets"]
 
 
-def test_truncation_removes_dangling_connector_suffixes():
+def test_capacity_shortening_never_turns_a_single_sentence_into_a_fragment():
     planner = TemplateBlockPlanner()
     refiner = BlockContentRefiner()
 
+    planner_sentence = "GAVN is built from three modules: inter-frame temporal modeling, intra-frame identity modeling, and a reconstruction module that fuses both cues."
+    refiner_sentence = "The largest gains appear in lip-sync metrics and mouth-region restoration, showing that audio guidance improves reconstruction."
+    assert planner._truncate_on_word_boundary(planner_sentence, 97) == planner_sentence
+    assert refiner._truncate_on_word_boundary(refiner_sentence, 94) == refiner_sentence
     assert planner._truncate_on_word_boundary(
-        "Perturbations include Random, Equal, Flip, and Mixed strategies; a stable method should preserve rankings and identify anomalous annotators.",
-        108,
-    ).endswith("rankings.")
+        "The first sentence is complete. The second sentence contains supporting implementation details.",
+        38,
+    ) == "The first sentence is complete."
     assert planner._truncate_on_word_boundary(
-        "The paper formulates this as Active Geospatial Search (AGS): sequentially query parcels under a budget to maximize the number of at-risk properties identified while accounting for query and travel costs.",
-        168,
-    ).endswith("identified.")
-    assert refiner._truncate_on_word_boundary(
-        "A representative arena is Chatbot Arena, where two models answer the same prompt and annotators compare outputs.",
-        86,
-    ).endswith("prompt.")
-    assert refiner._truncate_on_word_boundary(
-        "The method identifies anomalous annotators and improves fit and generalization through annotator-aware modeling.",
-        81,
-    ).endswith("generalization.")
-    assert refiner._truncate_on_word_boundary(
-        "Evaluation uses municipal parcel features and NAIP satellite imagery; performance is measured by average target discovery.",
-        76,
-    ).endswith("imagery.")
+        "The first complete sentence is longer than the limit. A short second sentence follows.",
+        24,
+    ) == "The first complete sentence is longer than the limit."
     assert normalize_text_for_poster("Each visit consumes scarce outreach budget and may also.").endswith("budget.")
     assert normalize_text_for_poster("HAGS scales city-wide search by first selecting a.").endswith("search.")
     assert normalize_text_for_poster("The policy then selects the next property within the chosen region using local.").endswith("region.")
@@ -7874,6 +8508,9 @@ def test_truncation_removes_dangling_connector_suffixes():
     assert normalize_text_for_poster("The search policy is trained with R.").endswith("trained.")
     assert normalize_text_for_poster("Data uses tabular features and imagery; targets are.").endswith("imagery.")
     assert normalize_text_for_poster("Formalizes eviction outreach as a sequential.").endswith("outreach.")
+    assert normalize_text_for_poster(
+        "The framework has two stages: (1) Primitive Patch Compression, which uses a 3D."
+    ).endswith("Primitive Patch Compression.")
     assert normalize_text_for_poster("HAGS scales this process by splitting.").endswith("process.")
     assert normalize_text_for_poster("HAGS achieves the best target discovery across all budgets, typically.").endswith("budgets.")
     assert normalize_text_for_poster("choose a parcel inside that region..").endswith("region.")
@@ -7948,7 +8585,7 @@ def test_truncation_removes_dangling_connector_suffixes():
     assert "cha." not in teaser_summary
 
 
-def test_block_content_refiner_fallback_truncates_short_extra_budget():
+def test_block_content_refiner_fallback_uses_a_minimum_complete_sentence_budget():
     refiner = BlockContentRefiner()
 
     weak = refiner._fallback_new_bullets(
@@ -7956,7 +8593,7 @@ def test_block_content_refiner_fallback_truncates_short_extra_budget():
         [],
         {"target_extra_chars": 46},
     )
-    assert weak == []
+    assert weak == ["Hierarchy is the main reason the method succeeds at urban scale."]
 
     bullets = refiner._fallback_new_bullets(
         "Hierarchy is the main reason the method succeeds at urban scale. The paper introduces Active Geospatial Search to select parcels under limited outreach budgets while updating predictions after each observed label.",
@@ -7964,10 +8601,9 @@ def test_block_content_refiner_fallback_truncates_short_extra_budget():
         {"target_extra_chars": 46},
     )
 
-    assert bullets
-    assert all("the method." not in item for item in bullets)
-    assert sum(len(item) for item in bullets) <= int(46 * 1.05)
-    assert bullets[0].endswith(".")
+    assert bullets == ["Hierarchy is the main reason the method succeeds at urban scale."]
+    assert all(item.endswith(".") for item in bullets)
+    assert sum(len(item) for item in bullets) <= 80
 
 
 def test_template_block_planner_filters_reference_text_and_truncation_fragments():
@@ -7992,17 +8628,70 @@ def test_template_block_planner_filters_reference_text_and_truncation_fragments(
 
     assert source_sentences
     assert all("Evicted" not in sentence for sentence in source_sentences)
-    assert planner._truncate_on_word_boundary(
-        "The planner tries to maximize discovery across neighborhoods using policy gradients.",
-        37,
-    ).endswith("maximize.")
-    assert planner._truncate_on_word_boundary(
-        "Risk targets for outreach are selected from high-priority geospatial regions.",
-        38,
-    ).endswith("outreach.")
+    complete_sentence = "The planner tries to maximize discovery across neighborhoods using policy gradients."
+    assert planner._truncate_on_word_boundary(complete_sentence, 37) == complete_sentence
+    complete_sentence = "Risk targets for outreach are selected from high-priority geospatial regions."
+    assert planner._truncate_on_word_boundary(complete_sentence, 38) == complete_sentence
     assert planner._is_clean_poster_bullet("risk targets fo.") is False
     assert planner._is_clean_poster_bullet("maximize dis.") is False
     assert planner._is_clean_poster_bullet("large-area se.") is False
+
+
+def test_template_capacity_fallback_preserves_an_overlong_complete_sentence():
+    planner = TemplateBlockPlanner()
+    state = create_state("/tmp/paper.pdf")
+    sentence = (
+        "GAVN is built from three modules: inter-frame temporal modeling, intra-frame identity modeling, "
+        "and a reconstruction module that fuses both cues."
+    )
+
+    bullets, warning = planner._fit_bullets_to_budget(
+        [sentence],
+        {"min_chars": 90, "target_chars": 90, "max_chars": 97, "target_bullets": 1},
+        {"section_id": "method", "section_title": "GAVN Overview"},
+        state,
+        allow_expand=False,
+    )
+
+    assert bullets == [sentence]
+    assert warning == "complete_sentence_exceeds_capacity"
+
+
+def test_template_capacity_uses_actual_wide_visual_height_in_fast_mode():
+    planner = TemplateBlockPlanner()
+    state = create_state("/tmp/paper.pdf", width=54, height=27)
+    state["template_fast_mode"] = True
+    state["fast_block_contract"] = {
+        "by_slot": {
+            "slot_3": {
+                "target_chars": 90,
+                "min_chars": 90,
+                "max_chars": 97,
+                "target_bullets": 1,
+                "visual_policy": "figure_caption",
+            }
+        }
+    }
+    state["visual_assets"] = {"figure_3": {"asset_type": "figure", "aspect": 3.64}}
+    section = {
+        "section_id": "pipeline",
+        "region_id": "slot_3",
+        "content_role": "method",
+        "visual_assets": [{"visual_id": "figure_3"}],
+    }
+    region = {"region_id": "slot_3", "x": 36.88, "y": 5.1, "w": 16.12, "h": 12.4}
+
+    budget = planner._capacity_budget_for_section(
+        section,
+        region,
+        state,
+        planner._capacity_settings(),
+    )
+
+    assert budget["reserved_visual_height"] < 5.0
+    assert budget["target_chars"] > 250
+    assert budget["target_bullets"] >= 3
+    assert budget["source"] == "fast_template_actual_visual_contract"
 
 
 def test_template_block_planner_does_not_expand_method_blocks_with_result_summaries():

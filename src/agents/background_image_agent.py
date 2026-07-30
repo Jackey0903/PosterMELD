@@ -17,7 +17,8 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageStat
 
 from src.config.poster_config import load_config
 from src.state.poster_state import PosterState
-from src.tools.image_api import ImageTools
+from src.tools.image_api import ImageQuotaError, ImageTools
+from src.utils.image_text_detector import detect_readable_text
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success
 
 T = TypeVar("T")
@@ -57,70 +58,145 @@ class BackgroundImageAgent:
                 used_fallback = True
                 generation_mode = "procedural_only"
                 raw_path_value = ""
-                postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "procedural_only"}
-            elif reference_path and condition_on_poster:
-                try:
-                    generated_path = self._run_image_call_with_timeout(
-                        lambda: ImageTools().edit_image(str(reference_path), prompt, output_path=str(raw_path))
-                    )
-                    if Path(generated_path).exists() and Path(generated_path) != raw_path and Path(generated_path) != reference_path:
-                        shutil.copyfile(generated_path, raw_path)
-                    if raw_path.exists():
-                        postprocess_report = self._postprocess_background(raw_path, final_path, width, height, state, style_decision, palette_name)
-                        used_fallback = postprocess_report["used_procedural_fallback"]
-                        generation_mode = "poster_conditioned_image_api_with_procedural_fallback"
-                        if postprocess_report.get("fallback_reason") == "layout_copy_artifacts":
-                            generation_mode = "poster_conditioned_image_api_contaminated_procedural_fallback"
-                        raw_path_value = str(raw_path)
-                    else:
-                        self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
-                        used_fallback = True
-                        generation_mode = "poster_conditioned_image_api_failed_procedural_fallback"
-                        raw_path_value = ""
-                        postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "image_api_failed"}
-                except Exception as e:
-                    log_agent_error(self.name, f"image API failed; using procedural background: {e}")
-                    self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
-                    used_fallback = True
-                    generation_mode = "poster_conditioned_image_api_failed_procedural_fallback"
-                    raw_path_value = ""
-                    postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "image_api_failed"}
+                postprocess_report = {
+                    "accepted": True,
+                    "needs_regeneration": False,
+                    "used_procedural_fallback": True,
+                    "fallback_reason": "procedural_only",
+                }
             else:
-                try:
-                    self._run_image_call_with_timeout(
-                        lambda: ImageTools().generate_image(prompt, width=width, height=height, output_path=str(raw_path))
+                used_fallback = False
+                accepted = False
+                image_api_error = ""
+                generation_attempts: List[Dict[str, Any]] = []
+                max_attempts = max(1, int(self.background_config.get("validation_retry_attempts", 3) or 3))
+                postprocess_report = {
+                    "accepted": False,
+                    "needs_regeneration": True,
+                    "used_procedural_fallback": False,
+                    "fallback_reason": "image_unavailable",
+                }
+                selected_raw_path = raw_path
+                for attempt_number in range(1, max_attempts + 1):
+                    attempt_raw_path = (
+                        raw_path
+                        if attempt_number == 1
+                        else asset_dir / f"raw_{final_path.stem}_attempt_{attempt_number}.png"
                     )
-                    if raw_path.exists():
-                        postprocess_report = self._postprocess_background(raw_path, final_path, width, height, state, style_decision, palette_name)
-                        used_fallback = postprocess_report["used_procedural_fallback"]
-                        generation_mode = "image_api_with_procedural_fallback"
-                        if postprocess_report.get("fallback_reason") == "layout_copy_artifacts":
-                            generation_mode = "image_api_contaminated_procedural_fallback"
-                        raw_path_value = str(raw_path)
+                    attempt_raw_path.unlink(missing_ok=True)
+                    attempt_prompt = self._validation_retry_prompt(prompt, attempt_number)
+                    try:
+                        if reference_path and condition_on_poster:
+                            generated_path = self._run_image_call_with_timeout(
+                                lambda: ImageTools().edit_image(
+                                    str(reference_path),
+                                    attempt_prompt,
+                                    output_path=str(attempt_raw_path),
+                                )
+                            )
+                            if (
+                                Path(generated_path).exists()
+                                and Path(generated_path) != attempt_raw_path
+                                and Path(generated_path) != reference_path
+                            ):
+                                shutil.copyfile(generated_path, attempt_raw_path)
+                        else:
+                            self._run_image_call_with_timeout(
+                                lambda: ImageTools().generate_image(
+                                    attempt_prompt,
+                                    width=width,
+                                    height=height,
+                                    output_path=str(attempt_raw_path),
+                                )
+                            )
+                    except ImageQuotaError:
+                        raise
+                    except Exception as exc:
+                        image_api_error = str(exc)
+                        generation_attempts.append(
+                            {"attempt": attempt_number, "accepted": False, "reason": "image_api_failed", "error": image_api_error}
+                        )
+                        log_agent_error(self.name, f"image API failed; background marked for regeneration: {exc}")
+                        break
+
+                    selected_raw_path = attempt_raw_path
+                    if attempt_raw_path.exists():
+                        postprocess_report = self._postprocess_background(
+                            attempt_raw_path,
+                            final_path,
+                            width,
+                            height,
+                            state,
+                            style_decision,
+                            palette_name,
+                        )
                     else:
-                        self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
-                        used_fallback = True
-                        generation_mode = "image_api_failed_procedural_fallback"
-                        raw_path_value = ""
-                        postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "image_api_failed"}
-                except Exception as e:
-                    log_agent_error(self.name, f"image API failed; using procedural background: {e}")
+                        postprocess_report = {
+                            "accepted": False,
+                            "needs_regeneration": True,
+                            "used_procedural_fallback": False,
+                            "fallback_reason": "image_api_failed",
+                        }
+                    accepted = bool(postprocess_report.get("accepted"))
+                    generation_attempts.append(
+                        {
+                            "attempt": attempt_number,
+                            "accepted": accepted,
+                            "reason": postprocess_report.get("fallback_reason", ""),
+                        }
+                    )
+                    if accepted:
+                        break
+                    if attempt_number < max_attempts:
+                        log_agent_info(
+                            self.name,
+                            f"generated background rejected ({postprocess_report.get('fallback_reason')}); regenerating "
+                            f"attempt {attempt_number + 1}/{max_attempts}",
+                        )
+
+                raw_path = selected_raw_path
+                raw_path_value = str(raw_path) if raw_path.exists() else ""
+                base_mode = "poster_conditioned_image_api" if reference_path and condition_on_poster else "image_api"
+                if accepted:
+                    generation_mode = base_mode
+                elif self._allow_procedural_fallback():
                     self._save_procedural_fallback(final_path, width, height, state, style_decision, palette_name)
                     used_fallback = True
-                    generation_mode = "image_api_failed_procedural_fallback"
-                    raw_path_value = ""
-                    postprocess_report = {"used_procedural_fallback": True, "fallback_reason": "image_api_failed"}
+                    generation_mode = f"{base_mode}_procedural_fallback"
+                    postprocess_report = {
+                        **postprocess_report,
+                        "accepted": True,
+                        "needs_regeneration": True,
+                        "used_procedural_fallback": True,
+                    }
+                else:
+                    final_path.unlink(missing_ok=True)
+                    generation_mode = f"{base_mode}_rejected_no_fallback"
+                    postprocess_report = {
+                        **postprocess_report,
+                        "accepted": False,
+                        "needs_regeneration": True,
+                        "used_procedural_fallback": False,
+                    }
+                postprocess_report["generation_attempt_count"] = len(generation_attempts)
+                postprocess_report["generation_attempts"] = generation_attempts
+                postprocess_report["image_api_error"] = image_api_error
 
             report = {
                 "enabled": True,
                 "source": self.name,
-                "asset_source": "procedural" if used_fallback else "image_api",
-                "degraded": bool(used_fallback and not procedural_only),
+                "asset_source": "procedural" if used_fallback else ("image_api" if final_path.exists() else "none"),
+                "degraded": bool((used_fallback and not procedural_only) or postprocess_report.get("needs_regeneration")),
+                "applied": final_path.exists(),
+                "needs_regeneration": bool(postprocess_report.get("needs_regeneration", False)),
+                "generation_attempt_count": int(postprocess_report.get("generation_attempt_count", 0) or 0),
+                "generation_attempts": postprocess_report.get("generation_attempts", []),
+                "image_api_error": str(postprocess_report.get("image_api_error") or ""),
                 "generation_mode": generation_mode,
                 "prompt": prompt,
                 "raw_path": raw_path_value,
                 "reference_poster_path": str(reference_path) if reference_path else "",
-                "background_image_path": str(final_path),
+                "background_image_path": str(final_path) if final_path.exists() else "",
                 "width_px": width,
                 "height_px": height,
                 "requested_style": style_decision["requested_style"],
@@ -136,6 +212,7 @@ class BackgroundImageAgent:
                     "no_text": True,
                     "low_contrast_postprocess": True,
                     "layout_copy_artifacts_rejected": postprocess_report.get("fallback_reason") == "layout_copy_artifacts",
+                    "readable_text_rejected": postprocess_report.get("fallback_reason") == "readable_text_artifacts",
                 },
             }
             if report["degraded"]:
@@ -144,14 +221,20 @@ class BackgroundImageAgent:
                         "component": self.name,
                         "category": "generated_background",
                         "reason": generation_mode,
-                        "fallback": "procedural",
+                        "fallback": "procedural" if used_fallback else "disabled",
+                        "needs_regeneration": report["needs_regeneration"],
                     }
                 )
-            state["background_image_path"] = str(final_path)
+            state["background_image_path"] = str(final_path) if final_path.exists() else None
             state["background_image_report"] = report
             state["current_agent"] = self.name
             self._save_report(state, report)
-            log_agent_success(self.name, f"generated background: {final_path}")
+            if final_path.exists():
+                log_agent_success(self.name, f"generated background: {final_path}")
+            else:
+                log_agent_error(self.name, f"background unavailable without fallback: {postprocess_report.get('fallback_reason')}")
+        except ImageQuotaError:
+            raise
         except Exception as e:
             log_agent_error(self.name, f"failed: {e}")
             state["errors"].append(f"{self.name}: {e}")
@@ -186,6 +269,22 @@ class BackgroundImageAgent:
         except (TypeError, ValueError):
             return 75.0
 
+    def _validation_retry_prompt(self, prompt: str, attempt_number: int) -> str:
+        if attempt_number <= 1:
+            return prompt
+        return (
+            f"{prompt} "
+            f"REGENERATION ATTEMPT {attempt_number}: the previous background was rejected because it contained "
+            "readable text, copied layout artifacts, or placeholder-like content. Produce a genuinely new background "
+            "with no typography, panels, charts, logos, or poster content."
+        )
+
+    def _allow_procedural_fallback(self) -> bool:
+        value = os.getenv("PAPER2POSTER_ALLOW_GENERATIVE_FALLBACK")
+        if value is not None:
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(self.background_config.get("allow_procedural_fallback", False))
+
     def _build_prompt(
         self,
         state: PosterState,
@@ -195,8 +294,6 @@ class BackgroundImageAgent:
     ) -> str:
         style_decision = style_decision or self._background_style_decision(state)
         palette_name = palette_name or self._palette_name(state, style_decision)
-        title = self._poster_title(state)
-        sections = self._section_summaries(state)
         colors = state.get("color_scheme") or {}
         theme = colors.get("theme", self.config["colors"].get("fallback_theme", "#1E3A8A"))
         mono = colors.get("mono_light", "#E6EAEF")
@@ -227,13 +324,11 @@ class BackgroundImageAgent:
             "Keep text-heavy content regions calm, flat, and almost textureless. "
             "Do not create block frames, title bars, panel fills, headers, footers, or rectangular containers that compete with the real layout. "
             "Concentrate visible decoration in page margins, gutters, corners, and unused whitespace; keep central content apertures clean. "
-            "Use paper-specific abstract hints inferred from the title and section context, but keep them non-readable and decorative. "
+            "Use subtle abstract scientific geometry appropriate to the paper domain, but do not reproduce any phrase from this instruction. "
             "Do not create AI faces, brains, robots, glowing orbs, or decorative blobs. "
             f"Base finish: {base_style}. Resolved background style: {style_decision['resolved_style']} ({style_spec.get('label', 'custom')}). "
             f"Style visual language: {style_prompt}. Selected background palette: {palette_name}. "
-            f"Primary accent color reference: {theme}; pale neutral reference: {mono}. "
-            f"Paper title context: {title}. "
-            f"Section context: {', '.join(sections[:6])}."
+            f"Primary accent color reference: {theme}; pale neutral reference: {mono}."
         )
 
     def _condition_on_poster(self) -> bool:
@@ -395,19 +490,38 @@ class BackgroundImageAgent:
             img = img.convert("RGB")
             fallback_reason = ""
             copy_artifact_report = self._background_copy_artifact_report(img, state)
+            ocr_report = detect_readable_text(
+                raw_path,
+                timeout_seconds=float(self.background_config.get("ocr_timeout_seconds", 15)),
+                min_confidence=float(self.background_config.get("ocr_min_confidence", 45)),
+            )
             used_fallback = self._is_placeholder_image(img)
             if used_fallback:
                 fallback_reason = "placeholder"
             elif copy_artifact_report["rejected"]:
                 used_fallback = True
                 fallback_reason = "layout_copy_artifacts"
+            elif ocr_report.get("rejected"):
+                used_fallback = True
+                fallback_reason = "readable_text_artifacts"
             if used_fallback:
-                img = self._procedural_academic_background(width, height, state, style_decision, palette_name)
+                final_path.unlink(missing_ok=True)
+                return {
+                    "accepted": False,
+                    "needs_regeneration": True,
+                    "used_procedural_fallback": False,
+                    "fallback_reason": fallback_reason,
+                    "copy_artifact_report": copy_artifact_report,
+                    "ocr_report": ocr_report,
+                }
             self._save_light_background(img, final_path, width, height, state, style_decision)
             return {
-                "used_procedural_fallback": used_fallback,
+                "accepted": True,
+                "needs_regeneration": False,
+                "used_procedural_fallback": False,
                 "fallback_reason": fallback_reason,
                 "copy_artifact_report": copy_artifact_report,
+                "ocr_report": ocr_report,
             }
 
     def _save_procedural_fallback(

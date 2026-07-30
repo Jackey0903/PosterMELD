@@ -1,5 +1,5 @@
 """
-Deterministic template selector for Paper2Poster.
+Deterministic template selector for PosterMELD.
 
 `auto` mode only considers the curated standard template set. `adaptive_auto`
 keeps the older no-template automatic choice among the three built-in layouts.

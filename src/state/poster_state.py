@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, Optional, List, TypedDict
 from dataclasses import dataclass, field
+import os
 import time
 
 
@@ -261,7 +262,8 @@ def create_state(
     from pathlib import Path
 
     poster_name = Path(pdf_path).parent.name or "test_poster"
-    output_dir = f"output/{poster_name}"
+    output_root = Path(os.getenv("PAPER2POSTER_OUTPUT_ROOT", "output")).expanduser()
+    output_dir = str(output_root / poster_name)
 
     needs_post_render_pass = any(
         [

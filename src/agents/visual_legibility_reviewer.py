@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from PIL import Image
+
 from src.agents.vlm_layout_reviewer import VLMLayoutReviewer
 from src.config.poster_config import load_config
 from src.state.poster_state import PosterState
@@ -99,6 +101,7 @@ class VisualLegibilityReviewer:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         try:
             content = self.vlm_client._request_vlm_text(base_url, headers, model, prompt, image_data)
+            self.vlm_client._record_usage(state, self.name)
             review = self.vlm_client._parse_json(content)
             return self._normalize_review(review, source="vlm")
         except Exception as exc:
@@ -208,7 +211,11 @@ Visual slots:
             lane_id = element.get("lane_id") or self._infer_lane(element, lane_map)
             aspect = self._safe_aspect(element)
             width = float(element.get("width", 0.0) or 0.0)
+            height = float(element.get("height", 0.0) or 0.0)
             caption = self._caption_for_visual(state, element).lower()
+            asset = self._asset_for_visual(state, element)
+            asset_type = str(asset.get("asset_type") or "").lower()
+            is_table = asset_type == "table" or "table" in caption
             is_pipeline_like = any(key in caption for key in ["pipeline", "framework", "architecture", "hierarchical", "method", "overview"])
             if lane_id == "middle" and aspect >= min_wide_aspect and (width <= max_width_for_wide_visual or is_pipeline_like):
                 issues.append({
@@ -219,13 +226,25 @@ Visual slots:
                     "measured_width": width,
                     "measured_aspect": aspect,
                 })
-            if is_template_prior and "table" in caption and width < 12.0:
+            if is_template_prior and is_table and width < 12.0:
                 issues.append({
                     "severity": "medium",
                     "target": element.get("slot_id") or element.get("id") or element.get("visual_id"),
                     "lane_id": None,
                     "description": "Dense table visual is occupying a compact region and should be summarized or resized.",
                     "measured_width": width,
+                })
+            source_ppi = self._source_pixel_density(asset, width, height)
+            hard_min_ppi = float(self.review_config.get("hard_min_table_source_ppi", 48.0))
+            min_ppi = float(self.review_config.get("min_table_source_ppi", 72.0))
+            if is_table and source_ppi is not None and source_ppi < min_ppi:
+                issues.append({
+                    "severity": "high" if source_ppi < hard_min_ppi else "medium",
+                    "target": element.get("slot_id") or element.get("id") or element.get("visual_id"),
+                    "lane_id": None if is_template_prior else lane_id,
+                    "description": "Table source resolution is too low for its rendered size; enlarging it would only magnify blur.",
+                    "measured_width": width,
+                    "source_pixels_per_inch": round(source_ppi, 1),
                 })
 
         if not issues:
@@ -267,6 +286,7 @@ Visual slots:
         recommendation.setdefault("reason", "")
         return {
             "source": review.get("source") or source,
+            "review_available": bool(review.get("review_available", source == "vlm")),
             "degraded": bool(review.get("degraded", False)),
             "fallback": review.get("fallback"),
             "needs_relayout": bool(review.get("needs_relayout", False)),
@@ -278,6 +298,7 @@ Visual slots:
     def _fallback_review(self, warning: str) -> Dict[str, Any]:
         log_agent_warning(self.name, warning)
         review = self._normalize_review({}, source="fallback")
+        review["review_available"] = False
         review["degraded"] = True
         review["fallback"] = "deterministic_visual_heuristic"
         review["warnings"].append(warning)
@@ -306,6 +327,32 @@ Visual slots:
         if visual_id in visual_assets:
             return str(visual_assets[visual_id].get("caption") or "")
         return ""
+
+    def _asset_for_visual(self, state: PosterState, element: Dict[str, Any]) -> Dict[str, Any]:
+        visual_id = element.get("visual_id")
+        source = dict((state.get("visual_assets") or {}).get(visual_id, {}) or {})
+        resolved = (state.get("resolved_visual_assets") or {}).get(element.get("slot_id") or element.get("id"), {}) or {}
+        for key in ("asset_type", "source_path", "resolved_path", "caption"):
+            if not source.get(key) and resolved.get(key):
+                source[key] = resolved[key]
+        return source
+
+    def _source_pixel_density(
+        self,
+        asset: Dict[str, Any],
+        width_inches: float,
+        height_inches: float,
+    ) -> Optional[float]:
+        source_path = asset.get("source_path") or asset.get("resolved_path")
+        if not source_path or width_inches <= 0 or height_inches <= 0 or not Path(str(source_path)).exists():
+            return None
+        try:
+            with Image.open(str(source_path)) as image:
+                horizontal_ppi = image.width / width_inches
+                vertical_ppi = image.height / height_inches
+            return min(horizontal_ppi, vertical_ppi)
+        except Exception:
+            return None
 
     def _save_outputs(self, state: PosterState):
         output_dir = Path(state["output_dir"]) / "content"

@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from src.config.poster_config import load_config
 from src.state.poster_state import PosterState
-from src.utils.text_cleanup import normalize_text_for_poster, repair_truncated_sentence_end
+from src.utils.text_cleanup import fit_complete_sentence_prefix, normalize_text_for_poster
 from utils.langgraph_utils import LangGraphAgent, extract_json
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success, log_agent_warning
 
@@ -149,6 +149,11 @@ class BlockContentRefiner:
         fast_text_fill_cap = int(fast_config.get("fast_text_fill_max_extra_chars", 280))
         protected_teaser_sections = self._protected_teaser_sections(state)
         teaser_max_extra_chars = int(self.block_config.get("teaser_max_extra_chars", 90))
+        section_by_id = {
+            str(section.get("section_id") or ""): section
+            for section in (((state.get("story_board") or {}).get("spatial_content_plan") or {}).get("sections") or [])
+            if section.get("section_id")
+        }
 
         actions = []
         for block in occupancy.get("blocks", []):
@@ -300,6 +305,28 @@ class BlockContentRefiner:
                         reason = "geometry-safe extra budget is below minimum"
 
             if action != "keep":
+                section = section_by_id.get(section_id, {})
+                budget = section.get("capacity_budget") or {}
+                current_items = section.get("text_content") or []
+                target_bullets = int(section.get("target_bullets") or budget.get("target_bullets") or 0)
+                max_final_bullets = (
+                    max(len(current_items), target_bullets)
+                    if target_bullets > 0
+                    else len(current_items) + self._max_new_bullets(target_extra_chars)
+                )
+                capacity_max_chars = int(section.get("max_chars") or budget.get("max_chars") or 0)
+                max_final_chars = (
+                    max(self._bullet_chars(current_items), capacity_max_chars)
+                    if capacity_max_chars > 0
+                    else 0
+                )
+                if (
+                    action == "expand"
+                    and len(current_items) == 1
+                    and (final_gate_repair or bottom_gap_forces_rewrite)
+                    and target_extra_chars >= int(self.block_config.get("min_extra_chars", 10))
+                ):
+                    max_final_bullets = max(max_final_bullets, 2)
                 actions.append({
                     "slot_id": slot_id,
                     "section_id": section_id,
@@ -308,6 +335,8 @@ class BlockContentRefiner:
                     "utilization": utilization,
                     "vlm_status": status or None,
                     "vlm_severity": severity,
+                    "max_final_bullets": max_final_bullets,
+                    "max_final_chars": max_final_chars,
                     "reason": reason,
                 })
 
@@ -449,6 +478,8 @@ class BlockContentRefiner:
                 "current_bullets": section.get("text_content") or [],
                 "target_extra_chars": action.get("target_extra_chars", 0),
                 "max_new_bullets": self._max_new_bullets(action.get("target_extra_chars", 0)),
+                "max_final_bullets": action.get("max_final_bullets"),
+                "max_final_chars": action.get("max_final_chars"),
                 "source_context": self._source_context_for_section(state, section, action),
             })
 
@@ -524,6 +555,8 @@ Rules:
 - Rewrite and rebalance the existing bullets; do not simply append a visibly separate final note.
 - Keep all important facts from current_bullets unless they are redundant or low-value.
 - Target final length should be close to current length plus target_extra_chars, but never exceed that by more than 15%.
+- Never return more than max_final_bullets items; expand existing items instead of adding another paragraph when that limit is reached.
+- When max_final_chars is a positive number, never exceed it in total; shorten semantically or use fewer complete items.
 - Prefer compact poster text items. Each item should be self-contained, complete, and 8-22 words.
 - Do not include literal bullet symbols, nested bullets, ordered-list prefixes, empty strings, or multiline items.
 - Keep new items parallel with existing block style; use bold lead-ins only when they improve scanability.
@@ -554,7 +587,11 @@ Blocks:
 
         target_extra = int(action.get("target_extra_chars") or 0)
         current_chars = self._bullet_chars(cleaned_current)
-        max_final_chars = current_chars + max(int(target_extra * 1.15), target_extra)
+        complete_sentence_budget = int(self.block_config.get("near_line_rewrite_extra_chars", 80))
+        max_final_chars = current_chars + max(int(target_extra * 1.15), target_extra, complete_sentence_budget)
+        capacity_max_chars = int(action.get("max_final_chars") or 0)
+        if capacity_max_chars > 0:
+            max_final_chars = min(max_final_chars, max(current_chars, capacity_max_chars))
         if max_final_chars <= current_chars:
             max_final_chars = max(current_chars, self._bullet_chars(cleaned_rewrite))
 
@@ -569,6 +606,10 @@ Blocks:
 
         if not deduped:
             return cleaned_current
+
+        max_final_bullets = int(action.get("max_final_bullets") or 0)
+        if max_final_bullets > 0:
+            deduped = deduped[:max_final_bullets]
 
         while self._bullet_chars(deduped) > max_final_chars and deduped:
             idx = max(range(len(deduped)), key=lambda index: len(deduped[index]))
@@ -598,13 +639,18 @@ Blocks:
             return cleaned_current
 
         target_extra = int(action.get("target_extra_chars") or 0)
-        max_added_chars = max(target_extra, int(target_extra * 1.05))
+        max_added_chars = max(
+            target_extra,
+            int(target_extra * 1.05),
+            int(self.block_config.get("near_line_rewrite_extra_chars", 80)),
+        )
         if max_added_chars <= 0:
             max_added_chars = int(self.block_config.get("near_line_rewrite_extra_chars", 80))
 
         result = list(cleaned_current)
         seen = {self._dedupe_key(item) for item in result}
         added_chars = 0
+        final_char_limit = int(action.get("max_final_chars") or 0)
         for bullet in cleaned_extra:
             key = self._dedupe_key(bullet)
             if not key or key in seen:
@@ -617,6 +663,10 @@ Blocks:
                 if remaining < 30:
                     break
                 candidate = self._truncate_on_word_boundary(candidate, remaining)
+                if len(candidate) > remaining:
+                    continue
+            if final_char_limit > 0 and self._bullet_chars(result) + len(candidate) > final_char_limit:
+                continue
             result.append(candidate)
             seen.add(key)
             added_chars += len(candidate)
@@ -709,7 +759,15 @@ Blocks:
         action: Dict[str, Any],
     ) -> List[str]:
         target = int(action.get("target_extra_chars") or 0)
-        max_added_chars = max(target, int(target * 1.05))
+        max_added_chars = max(
+            target,
+            int(target * 1.05),
+            int(self.block_config.get("near_line_rewrite_extra_chars", 80)),
+        )
+        final_char_limit = int(action.get("max_final_chars") or 0)
+        if final_char_limit > 0:
+            current_chars = self._bullet_chars(self._clean_bullets(current))
+            max_added_chars = min(max_added_chars, max(final_char_limit - current_chars, 0))
         existing_keys = {self._dedupe_key(item) for item in self._clean_bullets(current)}
         bullets = []
         used_chars = 0
@@ -745,6 +803,8 @@ Blocks:
                         continue
                 else:
                     break
+            if used_chars + len(candidate) > max_added_chars:
+                continue
             bullets.append(candidate)
             existing_keys.add(key)
             used_chars += len(candidate)
@@ -796,6 +856,9 @@ Blocks:
             text = normalize_text_for_poster(str(item or "").strip())
             text = re.sub(r"^\s*[•●◦▪▫*\-]\s*", "", text).strip()
             text = re.sub(r"^\s*(?:\d+[\.)]|step\s+\d+[\.:]?)\s*", "", text, flags=re.IGNORECASE).strip()
+            without_index = re.sub(r"^\s*\d+\s*,\s*", "", text).strip()
+            if without_index != text and without_index:
+                text = without_index[:1].upper() + without_index[1:]
             if text:
                 cleaned.append(text)
         return cleaned
@@ -804,15 +867,7 @@ Blocks:
         return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()[:120]
 
     def _truncate_on_word_boundary(self, text: str, char_limit: int) -> str:
-        if len(text) <= char_limit:
-            return text
-        cutoff = max(1, char_limit - 1)
-        candidate = text[:cutoff].rstrip(" ,;:")
-        boundary = candidate.rfind(" ")
-        if boundary >= int(char_limit * 0.6):
-            candidate = candidate[:boundary].rstrip(" ,;:")
-        candidate = self._remove_dangling_truncation(candidate)
-        return repair_truncated_sentence_end(candidate.rstrip(".") + ".")
+        return fit_complete_sentence_prefix(text, char_limit)
 
     def _remove_dangling_truncation(self, text: str) -> str:
         text = re.sub(

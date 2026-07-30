@@ -546,10 +546,12 @@ class TemplateCapacityPlanner:
         visual_reserved = 0.0
         if "figure" in visual_policy and not portrait_side_by_side_figure:
             footprint = visual_requirements("figure_contract", {"asset_type": "figure"}, region, self.config)
-            visual_reserved = max(height * 0.58, float(footprint.get("min_height") or 0.0))
+            visual_fraction = float((self.fast_config.get("visual_policy") or {}).get("figure_max_height_fraction", 0.70))
+            visual_reserved = max(height * visual_fraction, float(footprint.get("min_height") or 0.0))
         elif "table" in visual_policy:
             footprint = visual_requirements("table_contract", {"asset_type": "table"}, region, self.config)
-            visual_reserved = max(height * 0.50, float(footprint.get("min_height") or 0.0))
+            visual_fraction = float((self.fast_config.get("visual_policy") or {}).get("table_max_height_fraction", 0.74))
+            visual_reserved = max(height * visual_fraction, float(footprint.get("min_height") or 0.0))
         line_height = max((float((typography.get("sizes") or {}).get("body_text", 44)) / 72.0) * 1.05, 0.32)
         chars_per_inch = self._chars_per_inch(region)
         chars_per_line = max(20, int(max(split_text_width, 0.5) * chars_per_inch))

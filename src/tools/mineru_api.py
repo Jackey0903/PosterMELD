@@ -26,6 +26,7 @@ class MinerUExtraction:
     zip_path: Path
     content_list_path: Optional[Path]
     content_items: List[Dict[str, Any]]
+    pdf_path: Optional[Path] = None
     report: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -138,6 +139,7 @@ class MinerUClient:
             zip_path=zip_path,
             content_list_path=content_list_path,
             content_items=content_items,
+            pdf_path=pdf_path,
             report=report,
         )
 

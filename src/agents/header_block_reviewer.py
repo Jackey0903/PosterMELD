@@ -323,6 +323,7 @@ class HeaderBlockReviewer:
             response = self.vlm_client._post_vlm_request(base_url, headers, model, self._vlm_prompt(), image_data)
             response.raise_for_status()
             content = self.vlm_client._extract_response_text(response)
+            self.vlm_client._record_usage(state, self.name)
             review = self.vlm_client._parse_json(content)
             review["status"] = "ok"
             return review

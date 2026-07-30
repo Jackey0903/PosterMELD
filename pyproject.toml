@@ -1,18 +1,17 @@
 [project]
-name = "paper2poster"
+name = "postermeld"
 version = "0.1.0"
-description = "Aesthetic-Aware Paper-to-Poster Generation via Multi-Agent LLMs with robust Multimodal tools"
-authors = [
-    {name = "Zhilin Zhang"},
-    {name = "Xiang Zhang"},
-    {name = "Jiaqi Wei"},
-    {name = "Yiwei Xu"},
-    {name = "Chenyu You"}
-]
+description = "Multi-agent paper-to-poster generation for controllable design diversity with editable print-ready outputs"
 requires-python = "==3.11.*"
 readme = "README.md"
 license = {file = "LICENSE"}
-keywords = ["poster generation", "llm", "multi-agent"]
+keywords = [
+    "academic poster generation",
+    "editable powerpoint",
+    "multimodal agents",
+    "multi-agent",
+    "visual language models",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",

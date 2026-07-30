@@ -1,7 +1,7 @@
 <div align="center">
   <img src="docs/readme/postermeld-logo.svg" width="132" alt="PosterMELD logo" />
   <h1>PosterMELD</h1>
-  <p><strong>PosterMELD: Multi-Agent Paper-to-Poster Generation for Design Diversity with Editable Print-Ready Outputs</strong></p>
+  <p><strong>PosterMELD: Multi-Agent Paper-to-Poster Generation for Controllable Design Diversity with Editable Print-Ready Outputs</strong></p>
   <p><strong>M</strong>ulti-Agent · <strong>E</strong>ditable · <strong>L</strong>ayouts · <strong>D</strong>esign diversity</p>
   <p>从论文 PDF 生成具有设计多样性、可编辑且可直接打印的学术海报</p>
 
@@ -26,6 +26,8 @@
 PosterMELD 是一个面向学术海报生成的多智能体系统。它从论文中解析正文、图表、作者与机构信息，先根据模板空间规划内容容量，再完成要点提炼、图文编排、可编辑 PPTX 渲染和局部 / 全局质量复核。系统同时保留标准模板模式与无模板自适应模式，并通过显式的样式、密度、背景和标题参数生成可复现的 Poster Variant。
 
 > 核心目标不是生成一张扁平化图片，而是交付一份可以继续修改、打印和导出的 `.pptx`，以及与其一致的 `.png` 预览图。
+
+在 621 篇论文的端到端评测中，PosterMELD 达到 **81.3% Print-Ready Rate (PRR)**，分别为 P2P 的 **3.4 倍**和 PosterGen 的 **5.2 倍**；在保留原生可编辑性的同时，平均每次请求成本为 **$0.38**。
 
 <p align="center">
   <img src="docs/readme/framework.png" width="100%" alt="PosterMELD framework" />
@@ -125,7 +127,7 @@ output/<paper_name>/
 5. **Quality-guided refinement**：确定性规则与 VLM 共同检查重叠、溢出、留白和可读性；不通过时只执行有限修复。
 6. **Print-ready output**：质量通过后完成背景美化，输出最终 PPTX、PNG 和运行报告。
 
-质量复核失败后不会返回论文解析阶段，也不会无限重跑。系统只对定位到的问题执行有限次数的改写、缩放或重排，然后重新渲染和验收；外部 VLM / 图像服务不可用时会记录降级状态并走确定性兜底。
+质量复核失败后不会返回论文解析阶段，也不会无限重跑。系统只对定位到的问题执行有限次数的改写、缩放或重排，然后重新渲染和验收。显式开启的 VLM、teaser 或背景服务不可用时，默认记录失败原因并阻止最终验收，避免把占位图或静默 fallback 当成成功结果。
 
 ### 为什么先规划模板容量
 
@@ -227,7 +229,7 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline /path/to/paper.pdf \
 - **Readability first**：图表过小时优先放大、换 slot 或转成事实摘要，而不是单纯缩小字号。
 - **Layout discipline**：阻止重叠、越界、异常大留白、标题与 logo 冲突以及不完整句子。
 - **Bounded repair**：只对明确缺陷执行有限修复，避免 VLM 驱动的无限重排。
-- **Explicit degradation**：可选外部服务失败时保留可用产物，并在报告中记录 fallback 原因。
+- **Explicit failure semantics**：已启用的外部审查或生成资产失败时不静默通过；只有显式允许 procedural fallback 且产物通过检查时才可继续。
 
 主要调试报告：
 
@@ -378,7 +380,7 @@ PPTX 是主产物；PNG 需要 LibreOffice 或 macOS QuickLook 完成渲染。�
 <details>
 <summary><strong>图像服务失败，为什么仍然有输出</strong></summary>
 
-Teaser 和背景属于可选 Generative Asset。服务不可用、余额不足或返回不可用图片时，pipeline 会记录 Degraded Quality State，并使用确定性背景或跳过可选资产，不阻断 PPTX 主流程。
+Teaser 和背景属于可选 Generative Asset。未启用时不影响主流程；显式启用后，如果服务不可用、余额不足或返回不可用图片，默认会保留诊断报告并使最终质量门失败，不会把占位图当成成功结果。仅当配置明确允许 procedural fallback 且生成结果通过检查时才继续验收。
 
 </details>
 

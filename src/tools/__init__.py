@@ -1,5 +1,5 @@
 """
-Paper2Poster 工具套件集合
+PosterMELD 工具套件集合
 - PPTXDirector: 核心 PPT 操控引擎
 - ImageTools: 图像大模型网关引擎
 - LayoutTemplates: 多栏动态布局引擎

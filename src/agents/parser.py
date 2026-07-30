@@ -9,6 +9,7 @@ import shutil
 from pathlib import Path
 from typing import Dict, Any, Tuple
 
+import fitz
 from marker.converters.pdf import PdfConverter
 from marker.renderers.markdown import MarkdownRenderer
 from marker.models import create_model_dict
@@ -60,6 +61,7 @@ class Parser:
             
             # extract raw text and assets
             raw_text, raw_result = self._extract_raw_text(state["pdf_path"], content_dir)
+            prompt_text = self._prompt_source_text(raw_text)
 
             figures, tables = self._extract_assets(raw_result, state["poster_name"], assets_dir)
             cached_narrative = self._load_cached_content(content_dir, "narrative_content.json")
@@ -82,7 +84,7 @@ class Parser:
             doi = self._extract_doi(raw_text)
 
             try:
-                narrative_content, inp_tok, out_tok = self._generate_narrative_content(raw_text, state["text_model"], state)
+                narrative_content, inp_tok, out_tok = self._generate_narrative_content(prompt_text, state["text_model"], state)
             except Exception as exc:
                 if self._validate_narrative_content(cached_narrative):
                     log_agent_warning(self.name, f"using cached narrative content after model failure: {exc}")
@@ -108,7 +110,7 @@ class Parser:
             }
 
             try:
-                structured_sections = self._extract_structured_sections(raw_text, state["text_model"], state)
+                structured_sections = self._extract_structured_sections(prompt_text, state["text_model"], state)
             except Exception as exc:
                 if self._validate_structured_sections(cached_structured_sections):
                     log_agent_warning(self.name, f"using cached structured sections after model failure: {exc}")
@@ -124,7 +126,7 @@ class Parser:
             visual_assets = self._build_visual_registry(figures, tables)
             self._save_content(visual_assets, "visual_assets.json", content_dir)
             
-            state["raw_text"] = raw_text
+            state["raw_text"] = prompt_text
             state["structured_sections"] = structured_sections
             state["narrative_content"] = narrative_content
             state["affiliations"] = affiliations
@@ -313,6 +315,27 @@ class Parser:
                 return raw_text.split(marker, 1)[0]
         return raw_text[:6000]
 
+    def _prompt_source_text(self, raw_text: str) -> str:
+        """Bound model-facing paper text while preserving the full raw.md artifact."""
+        try:
+            max_chars = int(os.getenv("PAPER2POSTER_PARSER_MAX_CHARS", "0") or 0)
+        except ValueError:
+            max_chars = 0
+        if max_chars <= 0 or len(raw_text) <= max_chars:
+            return raw_text
+
+        head_chars = max(int(max_chars * 0.72), 1)
+        tail_chars = max(max_chars - head_chars, 1)
+        log_agent_warning(
+            self.name,
+            f"limiting model-facing paper text from {len(raw_text)} to {max_chars} chars",
+        )
+        return (
+            raw_text[:head_chars].rstrip()
+            + "\n\n[Middle sections omitted only for model context safety; full text remains in raw.md.]\n\n"
+            + raw_text[-tail_chars:].lstrip()
+        )
+
     def _normalize_affiliation_name(self, name: str) -> str:
         name = re.sub(r"^(Department|Division|School|College) of [^,]+,\s*", "", name.strip(), flags=re.IGNORECASE)
         name = re.sub(r"^(USA|United States|U\.S\.A\.|UK|Canada|China)\s+", "", name, flags=re.IGNORECASE)
@@ -419,37 +442,49 @@ class Parser:
         caption_map: Dict[str, Dict[str, Any]] = {}
         image_count = 0
         table_count = 0
+        pdf_document = None
+        if extraction.pdf_path and Path(extraction.pdf_path).exists():
+            try:
+                pdf_document = fitz.open(str(extraction.pdf_path))
+            except Exception as exc:
+                log_agent_warning(self.name, f"could not open source PDF for high-resolution asset rendering: {exc}")
 
-        for item in extraction.content_items:
-            item_type = str(item.get("type") or "").strip().lower()
-            if item_type in {"image", "chart", "figure"}:
-                image_count += 1
-                asset = self._copy_mineru_asset(
-                    extraction,
-                    item,
-                    assets_dir / f"figure-{image_count}.png",
-                    fallback_caption=f"Figure {image_count}",
-                    caption_keys=("image_caption", "caption", "img_caption"),
-                )
-                if asset:
-                    figures[str(image_count)] = asset
-                    caption_map[f"figure-{image_count}.png"] = self._mineru_caption_entry(item, asset["caption"])
-                else:
-                    image_count -= 1
-            elif item_type == "table":
-                table_count += 1
-                asset = self._copy_mineru_asset(
-                    extraction,
-                    item,
-                    assets_dir / f"table-{table_count}.png",
-                    fallback_caption=f"Table {table_count}",
-                    caption_keys=("table_caption", "caption"),
-                )
-                if asset:
-                    tables[str(table_count)] = asset
-                    caption_map[f"table-{table_count}.png"] = self._mineru_caption_entry(item, asset["caption"])
-                else:
-                    table_count -= 1
+        try:
+            for item in extraction.content_items:
+                item_type = str(item.get("type") or "").strip().lower()
+                if item_type in {"image", "chart", "figure"}:
+                    image_count += 1
+                    asset = self._copy_mineru_asset(
+                        extraction,
+                        item,
+                        assets_dir / f"figure-{image_count}.png",
+                        fallback_caption=f"Figure {image_count}",
+                        caption_keys=("image_caption", "caption", "img_caption"),
+                        pdf_document=pdf_document,
+                    )
+                    if asset:
+                        figures[str(image_count)] = asset
+                        caption_map[f"figure-{image_count}.png"] = self._mineru_caption_entry(item, asset["caption"])
+                    else:
+                        image_count -= 1
+                elif item_type == "table":
+                    table_count += 1
+                    asset = self._copy_mineru_asset(
+                        extraction,
+                        item,
+                        assets_dir / f"table-{table_count}.png",
+                        fallback_caption=f"Table {table_count}",
+                        caption_keys=("table_caption", "caption"),
+                        pdf_document=pdf_document,
+                    )
+                    if asset:
+                        tables[str(table_count)] = asset
+                        caption_map[f"table-{table_count}.png"] = self._mineru_caption_entry(item, asset["caption"])
+                    else:
+                        table_count -= 1
+        finally:
+            if pdf_document is not None:
+                pdf_document.close()
 
         with open(assets_dir / "figures.json", 'w', encoding='utf-8') as f:
             json.dump(figures, f, indent=2)
@@ -461,6 +496,11 @@ class Parser:
         extraction.report.update({
             "figure_count": len(figures),
             "table_count": len(tables),
+            "pdf_bbox_render_count": sum(
+                1
+                for asset in [*figures.values(), *tables.values()]
+                if asset.get("extraction_method") == "pdf_bbox_render"
+            ),
         })
         self._write_mineru_report(extraction.extract_dir.parent, extraction.report)
 
@@ -474,13 +514,28 @@ class Parser:
         *,
         fallback_caption: str,
         caption_keys: Tuple[str, ...],
+        pdf_document=None,
     ) -> Dict[str, Any] | None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        rendered_size = self._render_mineru_bbox_asset(pdf_document, item, target_path)
+        if rendered_size is not None:
+            width, height = rendered_size
+            return {
+                "caption": self._mineru_caption(item, caption_keys, fallback_caption),
+                "path": str(target_path),
+                "width": width,
+                "height": height,
+                "aspect": width / height if height > 0 else 1,
+                "page_idx": item.get("page_idx"),
+                "bbox": item.get("bbox"),
+                "extraction_method": "pdf_bbox_render",
+            }
+
         source = self._resolve_mineru_asset_path(extraction, item)
         if source is None or not source.exists():
             log_agent_warning(self.name, f"MinerU asset missing img_path: {item.get('img_path') or item.get('image_path')}")
             return None
 
-        target_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with Image.open(source) as image:
                 image.convert("RGB").save(target_path, "PNG")
@@ -496,7 +551,53 @@ class Parser:
             "width": width,
             "height": height,
             "aspect": width / height if height > 0 else 1,
+            "page_idx": item.get("page_idx"),
+            "bbox": item.get("bbox"),
+            "extraction_method": "mineru_image_copy",
         }
+
+    def _render_mineru_bbox_asset(
+        self,
+        pdf_document,
+        item: Dict[str, Any],
+        target_path: Path,
+    ) -> Tuple[int, int] | None:
+        if pdf_document is None:
+            return None
+        bbox = item.get("bbox")
+        page_idx = item.get("page_idx")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            return None
+        try:
+            page_idx = int(page_idx)
+            values = [float(value) for value in bbox]
+            if page_idx < 0 or page_idx >= len(pdf_document):
+                return None
+            if values[2] <= values[0] or values[3] <= values[1]:
+                return None
+
+            page = pdf_document[page_idx]
+            page_rect = page.rect
+            # MinerU content-list bboxes use a normalized 0..1000 page space.
+            clip = fitz.Rect(
+                page_rect.x0 + values[0] / 1000.0 * page_rect.width,
+                page_rect.y0 + values[1] / 1000.0 * page_rect.height,
+                page_rect.x0 + values[2] / 1000.0 * page_rect.width,
+                page_rect.y0 + values[3] / 1000.0 * page_rect.height,
+            ) & page_rect
+            if clip.width <= 1 or clip.height <= 1:
+                return None
+
+            target_long_edge = 2200.0
+            minimum_scale = 300.0 / 72.0
+            scale = max(minimum_scale, target_long_edge / max(clip.width, clip.height))
+            scale = min(scale, 18.0)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
+            pixmap.save(str(target_path))
+            return int(pixmap.width), int(pixmap.height)
+        except Exception as exc:
+            log_agent_warning(self.name, f"source-PDF asset rendering failed; using MinerU image copy: {exc}")
+            return None
 
     def _resolve_mineru_asset_path(self, extraction: MinerUExtraction, item: Dict[str, Any]) -> Path | None:
         raw_path = item.get("img_path") or item.get("image_path") or item.get("path")

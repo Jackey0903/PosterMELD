@@ -426,6 +426,11 @@ class HeaderPlanner:
             affiliation_logo_scale=affiliation_logo_scale,
             conference_logo_scale=conference_logo_scale,
         )
+        title_box = self._expand_landscape_title_to_logo_bounds(
+            template_layout,
+            title_box,
+            logo_elements,
+        )
         compact_stack = self._uses_compact_portrait_header_stack(template_layout, physical_route)
         if compact_stack:
             text_band = self._portrait_split_text_band(title_box, logo_elements)
@@ -589,8 +594,28 @@ class HeaderPlanner:
                 )
             )
         else:
-            avg_char_width = float(self.header_config.get("title_fit_avg_char_width_em", 0.56))
-        width_safety = float(self.header_config.get("title_fit_width_safety", 0.94))
+            avg_key = (
+                "portrait_title_fit_avg_char_width_em"
+                if template_layout.get("orientation") == "portrait"
+                else "title_fit_avg_char_width_em"
+            )
+            avg_char_width = float(
+                self.header_config.get(
+                    avg_key,
+                    self.header_config.get("title_fit_avg_char_width_em", 0.56),
+                )
+            )
+        width_safety_key = (
+            "portrait_title_fit_width_safety"
+            if template_layout.get("orientation") == "portrait"
+            else "title_fit_width_safety"
+        )
+        width_safety = float(
+            self.header_config.get(
+                width_safety_key,
+                self.header_config.get("title_fit_width_safety", 0.94),
+            )
+        )
         usable_width = max(width_inches * width_safety, 0.1)
         estimated_size = int((usable_width * 72) / max(len(clean_text) * avg_char_width, 1))
         if min_key == "title_single_line_min_font_size" and template_layout.get("orientation") == "portrait":
@@ -705,16 +730,21 @@ class HeaderPlanner:
         author_font_size: int,
         template_layout: Dict[str, Any],
     ) -> Tuple[str, int, str]:
-        """Choose single- vs two-line title layout to keep the title as large as possible.
-
-        A single line is kept only when it does not have to shrink much; otherwise the
-        title wraps to two balanced lines, which lets the font be far larger than a shrunk
-        single line (the two-line font is capped to the available header height so it never
-        overlaps the authors)."""
+        """Prefer a wide single-line title and wrap only below a readable font floor."""
         single_size = self._fit_single_line_font_size(title, width_inches, base_font_size, template_layout)
+        gate_key = (
+            "portrait_single_line_title_gate_min_font_size"
+            if template_layout.get("orientation") == "portrait"
+            else "single_line_title_gate_min_font_size"
+        )
+        single_line_gate = int(self.header_config.get(gate_key, 42))
+        clean_title = re.sub(r"\s+", " ", str(title or "")).strip()
+        if single_size >= single_line_gate:
+            return "single_line", single_size, clean_title
+
         wrapped_display = self._display_title_text(title, "two_line")
         if len([ln for ln in wrapped_display.splitlines() if ln.strip()]) < 2:
-            return "single_line", single_size, re.sub(r"\s+", " ", str(title or "")).strip()
+            return "single_line", single_size, clean_title
         two_size = self._fit_wrapped_title_font_size(
             wrapped_display,
             width_inches,
@@ -725,7 +755,57 @@ class HeaderPlanner:
         gain_threshold = int(self.header_config.get("title_auto_wrap_gain_threshold", 6))
         if two_size >= single_size + gain_threshold:
             return "two_line", two_size, wrapped_display
-        return "single_line", single_size, re.sub(r"\s+", " ", str(title or "")).strip()
+        return "single_line", single_size, clean_title
+
+    def _expand_landscape_title_to_logo_bounds(
+        self,
+        template_layout: Dict[str, Any],
+        title_box: Dict[str, float],
+        logo_elements: List[Dict[str, Any]],
+    ) -> Dict[str, float]:
+        """Reclaim unused logo-reservation space for the landscape title.
+
+        Route planning reserves a safe region before logo aspect ratios are known. Once
+        the logos have their actual boxes, the title can extend to their visible edge.
+        """
+        if template_layout.get("orientation") == "portrait":
+            return title_box
+
+        logos = [element for element in logo_elements if element.get("type") != "logo_divider"]
+        if not logos:
+            return title_box
+
+        header = template_layout.get("header") or {}
+        header_left = float(header.get("x", title_box["x"]))
+        header_right = header_left + float(header.get("w", title_box["w"]))
+        title_left = float(title_box["x"])
+        title_right = title_left + float(title_box["w"])
+        gap = max(
+            float(self.header_config.get("title_logo_gap_inches", 0.28)),
+            float(self.header_config.get("min_title_logo_gap_inches", 0.20)),
+        )
+
+        logo_boxes = [self._box_from_wh(element) for element in logos]
+        left_logos = [box for box in logo_boxes if box[2] <= title_left + 0.08]
+        right_logos = [box for box in logo_boxes if box[0] >= title_right - 0.08]
+
+        if left_logos and not right_logos:
+            new_left = max(box[2] for box in left_logos) + gap
+            if new_left < header_right:
+                return {**title_box, "x": new_left, "w": header_right - new_left}
+
+        if right_logos and not left_logos:
+            new_right = min(box[0] for box in right_logos) - gap
+            if new_right > header_left:
+                return {**title_box, "x": header_left, "w": new_right - header_left}
+
+        if left_logos and right_logos:
+            new_left = max(box[2] for box in left_logos) + gap
+            new_right = min(box[0] for box in right_logos) - gap
+            if new_right > new_left:
+                return {**title_box, "x": new_left, "w": new_right - new_left}
+
+        return title_box
 
     def _display_title_text(self, title: str, wrap_policy: str) -> str:
         clean_title = re.sub(r"\s+", " ", str(title or "")).strip()
@@ -1072,10 +1152,10 @@ class HeaderPlanner:
                 return 0.30
             return 0.24
         if has_conf and aff_count:
-            return 0.36
+            return float(self.header_config.get("landscape_combined_logo_zone_fraction", 0.27))
         if aff_count >= 3:
-            return 0.32
-        return 0.26
+            return float(self.header_config.get("landscape_multi_affiliation_logo_zone_fraction", 0.30))
+        return float(self.header_config.get("landscape_single_logo_zone_fraction", 0.24))
 
     def _logo_elements(
         self,

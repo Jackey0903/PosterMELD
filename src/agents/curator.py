@@ -340,7 +340,7 @@ class StoryBoardCurator:
                 return False
             
             # check text content is list of bullet points
-            min_items = self.validation_config["min_text_content_items"]
+            min_items = self._minimum_text_items_for_section(section)
             if not isinstance(section["text_content"], list) or len(section["text_content"]) < min_items:
                 log_agent_warning(self.name, f"validation error: section {i} invalid text_content")
                 return False
@@ -465,6 +465,15 @@ class StoryBoardCurator:
                     return False
         
         return True
+
+    def _minimum_text_items_for_section(self, section: Dict[str, Any]) -> int:
+        default_min = int(self.validation_config["min_text_content_items"])
+        budget = section.get("capacity_budget") or {}
+        target_bullets = int(section.get("target_bullets") or budget.get("target_bullets") or 0)
+        visual_policy = str(budget.get("visual_policy") or "").lower()
+        if target_bullets == 1 or "figure" in visual_policy or "table" in visual_policy:
+            return 1
+        return default_min
 
     def _section_count_guidance(self, visual_context: Dict[str, Any]) -> str:
         keypoint_target = int((visual_context or {}).get("keypoint_target_count") or 0)
@@ -886,13 +895,15 @@ class StoryBoardCurator:
                 or template_defaults.get("expected_content_density")
                 or ("medium" if role in {"method", "results"} else "high")
             )
-            existing_text = [] if template_name in self._standard_template_ids() else section.get("text_content")
+            standard_template = template_name in self._standard_template_ids()
+            existing_text = section.get("text_content")
             section["text_content"] = self._grouped_keypoint_text_content(
                 existing_text,
                 texts,
                 role=role,
                 source_sections=source_sections,
                 title=str(title or ""),
+                prefer_existing=standard_template,
             )
             section["visual_assets"] = self._valid_visual_assets(section.get("visual_assets"), visual_context)
             if template_defaults.get("preferred_slot_id"):
@@ -1058,15 +1069,16 @@ class StoryBoardCurator:
         role: str = "",
         source_sections: Optional[List[str]] = None,
         title: str = "",
+        prefer_existing: bool = False,
     ) -> List[str]:
-        bullets = []
+        keypoint_bullets = []
         for text in keypoint_texts:
             clean = normalize_text_for_poster(str(text or "").strip())
             if clean:
-                bullets.append(clean)
+                keypoint_bullets.append(clean)
+        existing_bullets = []
         if isinstance(existing, list):
             for clean in self._clean_poster_text_items(existing, max_items=4):
-                key = self._dedupe_key(clean)
                 if not self._existing_group_text_relevant(
                     clean,
                     keypoint_texts,
@@ -1075,9 +1087,15 @@ class StoryBoardCurator:
                     title=title,
                 ):
                     continue
-                if key and all(key not in self._dedupe_key(existing_item) for existing_item in bullets):
-                    bullets.append(clean)
-        return self._clean_poster_text_items(bullets, max_items=4) or ["Key paper finding."]
+                existing_bullets.append(clean)
+
+        bullets = existing_bullets + keypoint_bullets if prefer_existing and existing_bullets else keypoint_bullets + existing_bullets
+        deduped = []
+        for clean in bullets:
+            key = self._dedupe_key(clean)
+            if key and all(key not in self._dedupe_key(item) and self._dedupe_key(item) not in key for item in deduped):
+                deduped.append(clean)
+        return self._clean_poster_text_items(deduped, max_items=4) or ["Key paper finding."]
 
     def _existing_group_text_relevant(
         self,

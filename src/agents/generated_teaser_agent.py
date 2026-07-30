@@ -14,9 +14,10 @@ from PIL import Image, ImageDraw, ImageFilter, ImageStat
 
 from src.config.poster_config import load_config
 from src.state.poster_state import PosterState
-from src.tools.image_api import ImageTools
+from src.tools.image_api import ImageQuotaError, ImageTools
 from src.tools.layout_api import LayoutTemplates
-from src.utils.text_cleanup import normalize_text_for_poster, repair_truncated_sentence_end
+from src.utils.image_text_detector import detect_readable_text
+from src.utils.text_cleanup import fit_complete_sentence_prefix, normalize_text_for_poster
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success, log_agent_warning
 
 
@@ -54,26 +55,133 @@ class GeneratedTeaserAgent:
             prompt = self._build_prompt(state, target, geometry)
 
             image_api_error = ""
+            generation_attempts: List[Dict[str, Any]] = []
+            postprocess_report: Dict[str, Any] = {
+                "fallback_reason": "image_unavailable",
+                "ocr_report": {"available": False, "rejected": False, "tokens": [], "reason": "image_unavailable"},
+            }
             procedural_only = bool(self.teaser_config.get("procedural_only", False)) or os.getenv(
                 "PAPER2POSTER_PROCEDURAL_TEASER"
             ) == "1"
             if procedural_only:
-                image_api_error = "procedural_teaser_requested"
+                self._procedural_teaser(width, height, state).save(final_path)
+                used_fallback = True
+                postprocess_report = {
+                    "fallback_reason": "procedural_only",
+                    "ocr_report": {"available": False, "rejected": False, "tokens": [], "reason": "procedural_only"},
+                }
             else:
-                try:
-                    generated_path = ImageTools().generate_image(
-                        prompt,
-                        width=width,
-                        height=height,
-                        output_path=str(raw_path),
+                used_fallback = False
+                accepted = False
+                max_attempts = max(1, int(self.teaser_config.get("validation_retry_attempts", 3) or 3))
+                selected_raw_path = raw_path
+                for attempt_number in range(1, max_attempts + 1):
+                    attempt_raw_path = (
+                        raw_path
+                        if attempt_number == 1
+                        else asset_dir / f"raw_{asset_id}_attempt_{attempt_number}.png"
                     )
-                    if Path(generated_path).exists() and Path(generated_path) != raw_path:
-                        shutil.copyfile(generated_path, raw_path)
-                except Exception as exc:
-                    image_api_error = str(exc)
-                    log_agent_warning(self.name, f"image API failed; using procedural teaser fallback: {exc}")
+                    attempt_raw_path.unlink(missing_ok=True)
+                    attempt_prompt = self._validation_retry_prompt(prompt, attempt_number)
+                    try:
+                        generated_path = ImageTools().generate_image(
+                            attempt_prompt,
+                            width=width,
+                            height=height,
+                            output_path=str(attempt_raw_path),
+                        )
+                        if Path(generated_path).exists() and Path(generated_path) != attempt_raw_path:
+                            shutil.copyfile(generated_path, attempt_raw_path)
+                    except ImageQuotaError:
+                        raise
+                    except Exception as exc:
+                        image_api_error = str(exc)
+                        generation_attempts.append(
+                            {"attempt": attempt_number, "accepted": False, "reason": "image_api_failed", "error": image_api_error}
+                        )
+                        log_agent_warning(self.name, f"image API failed; teaser marked for regeneration: {exc}")
+                        break
 
-            used_fallback = self._postprocess_teaser(raw_path, final_path, width, height, state)
+                    accepted, postprocess_report = self._validate_teaser(
+                        attempt_raw_path,
+                        final_path,
+                        width,
+                        height,
+                    )
+                    generation_attempts.append(
+                        {
+                            "attempt": attempt_number,
+                            "accepted": accepted,
+                            "reason": postprocess_report.get("fallback_reason", ""),
+                            "ocr_report": postprocess_report.get("ocr_report", {}),
+                        }
+                    )
+                    selected_raw_path = attempt_raw_path
+                    if accepted:
+                        break
+                    if attempt_number < max_attempts:
+                        log_agent_warning(
+                            self.name,
+                            f"generated teaser rejected ({postprocess_report.get('fallback_reason')}); regenerating "
+                            f"attempt {attempt_number + 1}/{max_attempts}",
+                        )
+
+                raw_path = selected_raw_path
+                if not accepted:
+                    rejection_reason = postprocess_report.get("fallback_reason") or "image_api_failed"
+                    if self._allow_procedural_fallback():
+                        self._procedural_teaser(width, height, state).save(final_path)
+                        used_fallback = True
+                        postprocess_report = {
+                            **postprocess_report,
+                            "fallback_reason": rejection_reason,
+                        }
+                    else:
+                        final_path.unlink(missing_ok=True)
+                        report = {
+                            "enabled": True,
+                            "source": self.name,
+                            "asset_source": "none",
+                            "degraded": True,
+                            "applied": False,
+                            "needs_regeneration": True,
+                            "asset_id": asset_id,
+                            "target_section_id": target.get("section_id"),
+                            "target_section_title": target.get("section_title"),
+                            "prompt": prompt,
+                            "raw_path": str(raw_path) if raw_path.exists() else "",
+                            "teaser_path": "",
+                            "width_px": width,
+                            "height_px": height,
+                            "geometry": geometry,
+                            "used_procedural_fallback": False,
+                            "fallback_reason": rejection_reason,
+                            "generation_attempt_count": len(generation_attempts),
+                            "generation_attempts": generation_attempts,
+                            "image_api_error": image_api_error,
+                            "safety": {
+                                "conceptual_only": True,
+                                "no_readable_text": True,
+                                "readable_text_rejected": rejection_reason == "readable_text_artifacts",
+                                "no_fake_numeric_results": True,
+                                "no_logos": True,
+                            },
+                        }
+                        state.setdefault("degraded_quality_states", []).append(
+                            {
+                                "component": self.name,
+                                "category": "generated_teaser",
+                                "reason": rejection_reason,
+                                "fallback": "disabled",
+                                "needs_regeneration": True,
+                            }
+                        )
+                        state["generated_teaser_report"] = report
+                        state["current_agent"] = self.name
+                        self._save_report(state, report)
+                        log_agent_warning(self.name, f"teaser unavailable without fallback: {rejection_reason}")
+                        return state
+
             self._inject_teaser_asset(state, target, asset_id, final_path, geometry)
             summary_text = self._compress_target_section_text(target, geometry)
 
@@ -94,10 +202,16 @@ class GeneratedTeaserAgent:
                 "geometry": geometry,
                 "summary_text": summary_text,
                 "used_procedural_fallback": used_fallback,
+                "fallback_reason": postprocess_report.get("fallback_reason", ""),
+                "postprocess": postprocess_report,
+                "needs_regeneration": False,
+                "generation_attempt_count": len(generation_attempts) or 1,
+                "generation_attempts": generation_attempts,
                 "image_api_error": image_api_error,
                 "safety": {
                     "conceptual_only": True,
                     "no_readable_text": True,
+                    "readable_text_rejected": postprocess_report.get("fallback_reason") == "readable_text_artifacts",
                     "no_fake_numeric_results": True,
                     "no_logos": True,
                 },
@@ -107,7 +221,7 @@ class GeneratedTeaserAgent:
                     {
                         "component": self.name,
                         "category": "generated_teaser",
-                        "reason": image_api_error or "placeholder_or_unusable_image",
+                        "reason": image_api_error or postprocess_report.get("fallback_reason") or "placeholder_or_unusable_image",
                         "fallback": "procedural",
                     }
                 )
@@ -115,6 +229,8 @@ class GeneratedTeaserAgent:
             state["current_agent"] = self.name
             self._save_report(state, report)
             log_agent_success(self.name, f"generated teaser asset: {final_path}")
+        except ImageQuotaError:
+            raise
         except Exception as e:
             log_agent_error(self.name, f"failed: {e}")
             state["errors"].append(f"{self.name}: {e}")
@@ -398,18 +514,30 @@ class GeneratedTeaserAgent:
         if not candidates:
             return []
 
-        per_item = max(70, int(max_chars / max_items))
         summary: List[str] = []
         used = set()
         for sentence in candidates:
-            cleaned = self._truncate_on_word_boundary(sentence, per_item)
+            cleaned = normalize_text_for_poster(self._strip_markup(sentence))
+            if cleaned and cleaned[-1] not in ".!?":
+                cleaned = f"{cleaned}."
             key = cleaned.lower()
             if not cleaned or key in used:
+                continue
+            projected_chars = sum(len(item) for item in summary) + len(cleaned)
+            if projected_chars > max_chars:
                 continue
             summary.append(cleaned)
             used.add(key)
             if len(summary) >= max_items:
                 break
+
+        if not summary:
+            # A complete source sentence is safer than a visually tidy fragment.
+            cleaned = normalize_text_for_poster(self._strip_markup(candidates[0]))
+            if cleaned:
+                if cleaned[-1] not in ".!?":
+                    cleaned = f"{cleaned}."
+                summary.append(cleaned)
 
         if summary:
             section["text_content"] = summary
@@ -441,27 +569,58 @@ class GeneratedTeaserAgent:
 
     def _truncate_on_word_boundary(self, value: str, limit: int) -> str:
         value = normalize_text_for_poster(self._strip_markup(value))
-        if len(value) <= limit:
-            return value
-        trimmed = value[: max(limit - 1, 1)].rsplit(" ", 1)[0].rstrip(" ,;:")
-        if not trimmed:
-            trimmed = value[: max(limit - 1, 1)].rstrip(" ,;:")
-        return normalize_text_for_poster(repair_truncated_sentence_end(f"{trimmed.rstrip('.')}."))
+        return fit_complete_sentence_prefix(value, limit)
 
-    def _postprocess_teaser(self, raw_path: Path, final_path: Path, width: int, height: int, state: PosterState) -> bool:
-        used_fallback = True
+    def _validation_retry_prompt(self, prompt: str, attempt_number: int) -> str:
+        if attempt_number <= 1:
+            return prompt
+        return (
+            f"{prompt} "
+            f"REGENERATION ATTEMPT {attempt_number}: the previous image was rejected because it contained "
+            "readable text, text-like marks, or placeholder-like content. Create a genuinely new composition. "
+            "Use only unlabeled visual forms and imagery; do not draw captions, labels, interface panels, axes, legends, or typography."
+        )
+
+    def _allow_procedural_fallback(self) -> bool:
+        value = os.getenv("PAPER2POSTER_ALLOW_GENERATIVE_FALLBACK")
+        if value is not None:
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(self.teaser_config.get("allow_procedural_fallback", False))
+
+    def _validate_teaser(
+        self,
+        raw_path: Path,
+        final_path: Path,
+        width: int,
+        height: int,
+    ) -> tuple[bool, Dict[str, Any]]:
+        rejection_reason = "image_unavailable"
+        ocr_report: Dict[str, Any] = {
+            "available": False,
+            "rejected": False,
+            "tokens": [],
+            "reason": "image_unavailable",
+        }
         if raw_path.exists():
             with Image.open(raw_path) as img:
                 img = img.convert("RGB")
-                used_fallback = self._is_placeholder_image(img)
-                if not used_fallback:
+                rejected = self._is_placeholder_image(img)
+                rejection_reason = "placeholder" if rejected else ""
+                if not rejected:
+                    ocr_report = detect_readable_text(
+                        raw_path,
+                        timeout_seconds=float(self.teaser_config.get("ocr_timeout_seconds", 15)),
+                        min_confidence=float(self.teaser_config.get("ocr_min_confidence", 45)),
+                    )
+                    if ocr_report.get("rejected"):
+                        rejected = True
+                        rejection_reason = "readable_text_artifacts"
+                if not rejected:
                     img = self._cover_resize(img, width, height)
                     img.save(final_path)
-                    return False
+                    return True, {"fallback_reason": "", "ocr_report": ocr_report}
 
-        img = self._procedural_teaser(width, height, state)
-        img.save(final_path)
-        return used_fallback
+        return False, {"fallback_reason": rejection_reason, "ocr_report": ocr_report}
 
     def _cover_resize(self, img: Image.Image, width: int, height: int) -> Image.Image:
         ratio = max(width / img.width, height / img.height)

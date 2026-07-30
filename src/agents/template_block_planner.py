@@ -17,7 +17,7 @@ from src.config.poster_config import load_config
 from src.state.poster_state import PosterState
 from src.tools.layout_api import LayoutTemplates
 from src.template_extraction.block_template_registry import is_block_template_id
-from src.utils.text_cleanup import normalize_text_for_poster, repair_truncated_sentence_end
+from src.utils.text_cleanup import fit_complete_sentence_prefix, normalize_text_for_poster
 from src.utils.visual_footprint import visual_requirements
 from utils.langgraph_utils import LangGraphAgent, extract_json, load_prompt
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success, log_agent_warning
@@ -167,10 +167,21 @@ class TemplatePriorPlanner:
             template_id=str(template_layout.get("template_name") or ""),
         )
         capacity_contract = self._build_block_capacity_contract(assigned_sections, template_layout, state)
-        capacity_sections = self._apply_capacity_contract(assigned_sections, capacity_contract, state)
         if state.get("template_fast_mode"):
+            semantic_sections = assigned_sections
+            fast_config = self.config.get("template_fast_mode", {})
+            if (
+                bool(fast_config.get("semantic_capacity_rewrite", True))
+                and self._needs_semantic_capacity_refinement(assigned_sections, capacity_contract)
+            ):
+                semantic_sections = (
+                    self._refine_with_llm(assigned_sections, template_layout, state, capacity_contract)
+                    or assigned_sections
+                )
+            capacity_sections = self._apply_capacity_contract(semantic_sections, capacity_contract, state)
             refined_sections = capacity_sections
         else:
+            capacity_sections = self._apply_capacity_contract(assigned_sections, capacity_contract, state)
             refined_sections = self._refine_with_llm(capacity_sections, template_layout, state, capacity_contract) or capacity_sections
         refined_sections = self._restore_generated_teaser_summaries(refined_sections, capacity_sections)
         refined_sections = self._apply_capacity_contract(refined_sections, capacity_contract, state)
@@ -635,20 +646,29 @@ class TemplatePriorPlanner:
         }
         fast_budget = self._fast_budget_for_slot(state, budget["slot_id"])
         if fast_budget:
+            fast_target_chars = int(fast_budget.get("target_chars") or budget["target_chars"])
+            use_actual_visual_capacity = bool(visual_count) and target_chars > fast_target_chars
             budget.update({
-                "source": "fast_template_first_fixed_contract",
+                "source": (
+                    "fast_template_actual_visual_contract"
+                    if use_actual_visual_capacity
+                    else "fast_template_first_fixed_contract"
+                ),
                 "slot_role": fast_budget.get("slot_role"),
                 "content_role": fast_budget.get("content_role") or budget.get("content_role"),
-                "target_chars": int(fast_budget.get("target_chars") or budget["target_chars"]),
-                "min_chars": int(fast_budget.get("min_chars") or budget["min_chars"]),
-                "max_chars": int(fast_budget.get("max_chars") or budget["max_chars"]),
-                "target_bullets": int(fast_budget.get("target_bullets") or budget["target_bullets"]),
                 "visual_policy": fast_budget.get("visual_policy") or budget.get("visual_policy"),
                 "visual_footprint": fast_budget.get("visual_footprint"),
-                "capacity_warning": fast_budget.get("capacity_warning"),
                 "hard_min_utilization": fast_budget.get("hard_min_utilization"),
                 "source_keypoint_ids": fast_budget.get("source_keypoint_ids") or [],
             })
+            if not use_actual_visual_capacity:
+                budget.update({
+                    "target_chars": fast_target_chars,
+                    "min_chars": int(fast_budget.get("min_chars") or budget["min_chars"]),
+                    "max_chars": int(fast_budget.get("max_chars") or budget["max_chars"]),
+                    "target_bullets": int(fast_budget.get("target_bullets") or budget["target_bullets"]),
+                    "capacity_warning": fast_budget.get("capacity_warning"),
+                })
         return budget
 
     def _capacity_settings(self) -> Dict[str, Any]:
@@ -812,6 +832,28 @@ class TemplatePriorPlanner:
             refined.append(item)
         return refined
 
+    def _needs_semantic_capacity_refinement(
+        self,
+        sections: List[Dict[str, Any]],
+        capacity_contract: Dict[str, Any],
+    ) -> bool:
+        by_section = capacity_contract.get("by_section") or {}
+        for section in sections:
+            if self._is_generated_teaser_section(section):
+                continue
+            budget = by_section.get(str(section.get("section_id"))) or {}
+            min_chars = int(budget.get("min_chars") or 0)
+            target_chars = int(budget.get("target_chars") or 0)
+            max_chars = int(budget.get("max_chars") or 0)
+            target_bullets = int(budget.get("target_bullets") or 0)
+            bullets = section.get("text_content") or []
+            actual_chars = self._bullet_chars(bullets)
+            if (min_chars and actual_chars < min_chars) or (max_chars and actual_chars > max_chars):
+                return True
+            if target_bullets and len(bullets) < target_bullets and actual_chars < target_chars:
+                return True
+        return False
+
     def _multi_visual_text_budget(self, budget: Dict[str, Any]) -> Dict[str, Any]:
         adjusted = dict(budget)
         scale = float(self.block_config.get("multi_visual_text_budget_scale", 0.58))
@@ -850,6 +892,8 @@ class TemplatePriorPlanner:
             warning = warning or "insufficient_source_facts_for_capacity"
         if self._bullet_chars(fitted) > max_chars:
             fitted = self._trim_bullets_to_budget(fitted, max_chars, max(target_bullets, 1))
+        if max_chars > 0 and self._bullet_chars(fitted) > max_chars:
+            warning = warning or "complete_sentence_exceeds_capacity"
         if self._bullet_chars(fitted) < max(20, int(target_chars * 0.5)) and not allow_expand:
             warning = warning or "capacity_refinement_below_target"
         return fitted, warning
@@ -894,14 +938,20 @@ class TemplatePriorPlanner:
                 break
             candidate = bullet
             if len(candidate) > remaining:
-                if remaining < 45:
-                    break
-                candidate = self._truncate_on_word_boundary(candidate, remaining)
+                candidate = fit_complete_sentence_prefix(candidate, remaining)
+                if len(candidate) > remaining:
+                    continue
             if not self._is_clean_poster_bullet(candidate):
                 continue
             result.append(candidate)
             used += len(candidate)
-        return result or ["Key takeaway."]
+        if result:
+            return result
+
+        # If no complete item fits, preserve one complete factual item and let
+        # layout/QA report the capacity mismatch instead of fabricating a fragment.
+        fallback = next((bullet for bullet in bullets if self._is_clean_poster_bullet(bullet)), "")
+        return [fallback] if fallback else ["Key takeaway."]
 
     def _expand_bullets_from_source(
         self,
@@ -921,10 +971,6 @@ class TemplatePriorPlanner:
             candidate = normalize_text_for_poster(sentence)
             if len(candidate) < 35 or not self._is_clean_poster_bullet(candidate):
                 continue
-            if len(candidate) > 180:
-                candidate = self._truncate_on_word_boundary(candidate, 180)
-            if not self._is_clean_poster_bullet(candidate):
-                continue
             key = self._dedupe_key(candidate)
             if not key or key in existing:
                 continue
@@ -932,9 +978,7 @@ class TemplatePriorPlanner:
             if remaining <= 0:
                 break
             if len(candidate) > remaining:
-                if remaining < 60:
-                    break
-                candidate = self._truncate_on_word_boundary(candidate, remaining)
+                continue
             if not self._is_clean_poster_bullet(candidate):
                 continue
             result.append(candidate)
@@ -1056,15 +1100,7 @@ class TemplatePriorPlanner:
         return trimmed or ["Key takeaway."]
 
     def _truncate_on_word_boundary(self, text: str, char_limit: int) -> str:
-        if len(text) <= char_limit:
-            return text
-        cutoff = max(1, char_limit - 1)
-        candidate = text[:cutoff].rstrip(" ,;:")
-        boundary = candidate.rfind(" ")
-        if boundary >= int(char_limit * 0.6):
-            candidate = candidate[:boundary].rstrip(" ,;:")
-        candidate = self._remove_dangling_truncation(candidate)
-        return repair_truncated_sentence_end(candidate.rstrip(".") + ".")
+        return fit_complete_sentence_prefix(text, char_limit)
 
     def _remove_dangling_truncation(self, text: str) -> str:
         text = re.sub(
@@ -1087,6 +1123,9 @@ class TemplatePriorPlanner:
         for item in bullets or []:
             text = normalize_text_for_poster(str(item or "").strip())
             text = re.sub(r"^\s*[•\-]\s*", "", text).strip()
+            without_index = re.sub(r"^\s*\d+\s*,\s*", "", text).strip()
+            if without_index != text and without_index:
+                text = without_index[:1].upper() + without_index[1:]
             if text and self._is_clean_poster_bullet(text):
                 cleaned.append(text)
         return cleaned
@@ -1234,7 +1273,8 @@ Rules:
 - Return clean, self-contained poster text items that can be rendered directly.
 - Do not include literal bullet symbols, nested bullets, ordered-list prefixes, empty strings, or multiline items.
 - Do not mention table or figure numbers such as "Table 2" or "Figure 3"; summarize the finding directly.
-- Text-only blocks should use 2-4 parallel callouts; figure/table blocks should use 1-2 short interpretation lines.
+- Match target_bullets exactly when the source contains enough facts.
+- Figure/table blocks normally use 1-2 short interpretation lines, but use target_bullets when it is 3 or more; this means the selected wide visual leaves real text capacity.
 - Each item should be 8-22 words, complete, and not end with dangling connectors.
 - Use bold lead-ins sparingly and consistently, e.g. "**Core idea:** ...", "**Result:** ...".
 

@@ -344,6 +344,31 @@ def _looks_like_bibliography(line: str) -> bool:
     return has_year and (has_venue or has_many_names)
 
 
+def fit_complete_sentence_prefix(text: str, max_chars: int) -> str:
+    """Fit only whole sentences; never turn a character slice into a sentence."""
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text or max_chars <= 0 or len(text) <= max_chars:
+        return text
+
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", text)
+        if sentence.strip()
+    ]
+    if len(sentences) <= 1:
+        return text
+
+    fitted: list[str] = []
+    used = 0
+    for sentence in sentences:
+        projected = used + len(sentence) + (1 if fitted else 0)
+        if projected > max_chars:
+            break
+        fitted.append(sentence)
+        used = projected
+    return " ".join(fitted) if fitted else sentences[0]
+
+
 def repair_truncated_sentence_end(line: str) -> str:
     """Remove obvious dangling endings introduced by capacity-based truncation."""
     if not isinstance(line, str) or not line:
@@ -432,6 +457,11 @@ def repair_truncated_sentence_end(line: str) -> str:
         line = re.sub(r"\s+despite\s+(?:limited|scarce|restricted)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+under\s+(?:tight|limited|strict)\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+with\s+(?:a|an|the)\s+[A-Za-z-]{0,16}\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r",?\s+aiming\s+to\s+close\s+the\s+gap(?:\s+between)?\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+of\s+surface-anchored\s+volumetric\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+plus\s+lightweight\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r"\s+under\s+the\s+same\s+parameter\.$", ".", line, flags=re.IGNORECASE)
+        line = re.sub(r",\s+which\s+uses\s+a\s+3D\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+and\s+a\s+share\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+to\s+large\.$", ".", line, flags=re.IGNORECASE)
         line = re.sub(r"\s+with\s+(?:either|any|the|a|an)\s+[A-Za-z-]*(?:unif|uniform|vi)\.$", ".", line, flags=re.IGNORECASE)

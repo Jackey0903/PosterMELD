@@ -206,7 +206,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Paper2Poster generated files
+# PosterMELD generated files
 .DS_Store
 run_*.sh
 marker/
@@ -215,13 +215,31 @@ ablation/
 evaluation/
 output/
 hf/
+tmp/
 
 # Benchmark inputs, local test papers, and scratch results (data, not source)
 Benchmark/
 data/aaai_test/
 scratchpad_batch5_results.json
+assets/institution_logos/
 
 # Local meeting/export artifacts
 /进度.pdf
 docs/weekly_meeting_pipeline*
 !docs/weekly_meeting_summary.md
+
+# Private paper sources, submission builds, and research notes
+AuthorKit27/
+/*.pdf
+/*.docx
+/*.txt
+/7.*.md
+/论文*.md
+/bert_score_results.md
+/gpt55_full_benchmark_prr_che_results.md
+/human_annotation_summary.md
+/p2p_uni_results.md
+/vlm_judge_consistency_results.md
+/docs/aaai2027_*.md
+/docs/evaluation_metrics_summary.md
+/docs/related_work_landscape.md

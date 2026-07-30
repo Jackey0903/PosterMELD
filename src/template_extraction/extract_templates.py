@@ -287,7 +287,7 @@ def extract_templates(input_dir: Path, output_dir: Path) -> List[Dict[str, Any]]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Extract reusable Paper2Poster templates from poster PNGs.")
+    parser = argparse.ArgumentParser(description="Extract reusable PosterMELD templates from poster PNGs.")
     parser.add_argument("--input_dir", type=Path, default=Path("template"))
     parser.add_argument("--output_dir", type=Path, default=Path("template_library"))
     args = parser.parse_args()

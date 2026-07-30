@@ -174,7 +174,7 @@ class AffiliationLogoAgent:
         """Query OpenAlex for authoritative institution names for a DOI."""
         try:
             url = f"https://api.openalex.org/works/doi:{doi}"
-            resp = requests.get(url, timeout=self.timeout, headers={"User-Agent": "Paper2Poster/1.0"})
+            resp = requests.get(url, timeout=self.timeout, headers={"User-Agent": "PosterMELD/1.0"})
             if resp.status_code != 200:
                 return []
             data = resp.json()
@@ -213,7 +213,7 @@ class AffiliationLogoAgent:
                 "https://api.openalex.org/works",
                 params={"filter": f"title.search:{title}", "per-page": 1},
                 timeout=self.timeout,
-                headers={"User-Agent": "Paper2Poster/1.0 (mailto:noreply@example.com)"},
+                headers={"User-Agent": "PosterMELD/1.0 (mailto:noreply@example.com)"},
             )
             results = resp.json().get("results", []) if resp.status_code == 200 else []
         except Exception as exc:
@@ -252,7 +252,7 @@ class AffiliationLogoAgent:
                 "https://autocomplete.clearbit.com/v1/companies/suggest",
                 params={"query": institution},
                 timeout=self.timeout,
-                headers={"User-Agent": "Paper2Poster/1.0"},
+                headers={"User-Agent": "PosterMELD/1.0"},
             )
             hits = resp.json() if resp.status_code == 200 else []
             academic = [h for h in hits if any(t in (h.get("domain") or "") for t in (".edu", ".ac."))]
@@ -366,7 +366,7 @@ class AffiliationLogoAgent:
             f"https://icons.duckduckgo.com/ip3/{domain}.ico",
         ):
             try:
-                resp = requests.get(url, timeout=self.timeout, headers={"User-Agent": "Mozilla/5.0 Paper2Poster/1.0"})
+                resp = requests.get(url, timeout=self.timeout, headers={"User-Agent": "Mozilla/5.0 PosterMELD/1.0"})
             except Exception:
                 continue
             if resp.status_code != 200 or "image" not in resp.headers.get("content-type", "") or len(resp.content) < 1500:
@@ -533,7 +533,7 @@ class AffiliationLogoAgent:
 
         url = f"{self.clearbit_base_url}/{domain}"
         try:
-            response = requests.get(url, timeout=self.timeout, headers={"User-Agent": "Paper2Poster/1.0"})
+            response = requests.get(url, timeout=self.timeout, headers={"User-Agent": "PosterMELD/1.0"})
             response.raise_for_status()
             if "image" not in response.headers.get("content-type", ""):
                 return None
@@ -579,9 +579,9 @@ class AffiliationLogoAgent:
             return str(output_path)
         try:
             try:
-                response = requests.get(url, timeout=self.timeout, headers={"User-Agent": "Mozilla/5.0 Paper2Poster/1.0"})
+                response = requests.get(url, timeout=self.timeout, headers={"User-Agent": "Mozilla/5.0 PosterMELD/1.0"})
             except requests.exceptions.SSLError:
-                response = requests.get(url, timeout=self.timeout, headers={"User-Agent": "Mozilla/5.0 Paper2Poster/1.0"}, verify=False)
+                response = requests.get(url, timeout=self.timeout, headers={"User-Agent": "Mozilla/5.0 PosterMELD/1.0"}, verify=False)
             response.raise_for_status()
             if "image" not in response.headers.get("content-type", ""):
                 return None
@@ -622,7 +622,7 @@ class AffiliationLogoAgent:
     def _download_commons_file(self, filename: str, output_path: Path) -> Optional[str]:
         try:
             file_url = self._get_commons_thumbnail_url(filename) or f"https://commons.wikimedia.org/wiki/Special:FilePath/{quote(filename)}?width=1800"
-            response = requests.get(file_url, timeout=self.timeout, headers={"User-Agent": "Paper2Poster/1.0"})
+            response = requests.get(file_url, timeout=self.timeout, headers={"User-Agent": "PosterMELD/1.0"})
             response.raise_for_status()
             if "image" not in response.headers.get("content-type", ""):
                 return None
@@ -659,7 +659,7 @@ class AffiliationLogoAgent:
             "https://commons.wikimedia.org/w/api.php",
             params=params,
             timeout=self.timeout,
-            headers={"User-Agent": "Paper2Poster/1.0"},
+            headers={"User-Agent": "PosterMELD/1.0"},
         )
         response.raise_for_status()
         pages = response.json().get("query", {}).get("pages", {})
@@ -703,7 +703,7 @@ class AffiliationLogoAgent:
             "https://www.wikidata.org/w/api.php",
             params=params,
             timeout=self.timeout,
-            headers={"User-Agent": "Paper2Poster/1.0"},
+            headers={"User-Agent": "PosterMELD/1.0"},
         )
         response.raise_for_status()
         for item in response.json().get("search", []):
@@ -725,7 +725,7 @@ class AffiliationLogoAgent:
             "https://www.wikidata.org/w/api.php",
             params=params,
             timeout=self.timeout,
-            headers={"User-Agent": "Paper2Poster/1.0"},
+            headers={"User-Agent": "PosterMELD/1.0"},
         )
         response.raise_for_status()
         claims = response.json().get("entities", {}).get(entity_id, {}).get("claims", {})

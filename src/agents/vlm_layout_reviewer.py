@@ -27,6 +27,7 @@ class VLMLayoutReviewer:
         self.name = "vlm_layout_reviewer"
         self.config = load_config()
         self.review_config = self.config.get("vlm_layout_review", {})
+        self._last_usage = {"input_tokens": 0, "output_tokens": 0}
 
     def __call__(self, state: PosterState) -> PosterState:
         if not state.get("enable_vlm_layout_review", False):
@@ -118,6 +119,8 @@ class VLMLayoutReviewer:
         )
 
     def _accept_after_max_template_repair(self, review: Dict[str, Any], state: PosterState) -> Dict[str, Any]:
+        if review.get("degraded") or review.get("review_available") is False:
+            return review
         if state.get("template_layout_mode") != "template_prior" or review.get("accept", True):
             return review
         if not bool(self.review_config.get("template_prior_accept_after_max_repair", True)):
@@ -143,6 +146,10 @@ class VLMLayoutReviewer:
     def _enforce_template_acceptance_gate(self, review: Dict[str, Any], state: PosterState) -> Dict[str, Any]:
         if state.get("template_layout_mode") != "template_prior":
             return review
+        if review.get("degraded") or review.get("review_available") is False:
+            unavailable = dict(review)
+            unavailable["accept"] = False
+            return unavailable
 
         min_score = int(self.review_config.get("template_prior_min_accept_score", 82))
         issues = review.get("issues") if isinstance(review.get("issues"), list) else []
@@ -233,15 +240,27 @@ class VLMLayoutReviewer:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         try:
             content = self._request_vlm_text(base_url, headers, model, prompt, image_data)
+            self._record_usage(state, self.name)
             review = self._parse_json(content)
             review.setdefault("source", "vlm")
+            review.setdefault("review_available", True)
+            review.setdefault("degraded", False)
             review.setdefault("patch", [])
             review.setdefault("warnings", [])
             return review
         except Exception as exc:
             return self._fallback_review(f"VLM layout request failed ({exc}); using deterministic acceptance fallback")
 
-    def _post_vlm_request(self, base_url: str, headers: Dict[str, str], model: str, prompt: str, image_data: str) -> requests.Response:
+    def _post_vlm_request(
+        self,
+        base_url: str,
+        headers: Dict[str, str],
+        model: str,
+        prompt: str,
+        image_data: str,
+        *,
+        transport: Optional[str] = None,
+    ) -> requests.Response:
         timeout = int(self.review_config.get("timeout_seconds", 120))
         endpoint = base_url.rstrip("/")
         # gpt-5 / o-series reasoning models only accept the default temperature (1);
@@ -249,9 +268,19 @@ class VLMLayoutReviewer:
         # failed streamed response, so omit temperature entirely for those models.
         is_reasoning_model = str(model).startswith(("gpt-5", "o1", "o3", "o4"))
         temperature = self.review_config.get("temperature", 0.1)
-        if not endpoint.endswith("/responses") and str(model).startswith("gpt-5"):
-            endpoint = f"{endpoint}/responses"
         if endpoint.endswith("/responses"):
+            root_endpoint = endpoint[: -len("/responses")]
+            inferred_transport = "responses"
+        elif endpoint.endswith("/chat/completions"):
+            root_endpoint = endpoint[: -len("/chat/completions")]
+            inferred_transport = "chat"
+        else:
+            root_endpoint = endpoint
+            inferred_transport = "responses" if str(model).startswith("gpt-5") else "chat"
+        selected_transport = transport or inferred_transport
+
+        if selected_transport == "responses":
+            response_endpoint = f"{root_endpoint}/responses"
             payload = {
                 "model": model,
                 "store": False,
@@ -269,7 +298,7 @@ class VLMLayoutReviewer:
             }
             if not is_reasoning_model:
                 payload["temperature"] = temperature
-            return requests.post(endpoint, headers=headers, json=payload, timeout=timeout, stream=True)
+            return requests.post(response_endpoint, headers=headers, json=payload, timeout=timeout, stream=True)
 
         payload = {
             "model": model,
@@ -286,7 +315,7 @@ class VLMLayoutReviewer:
         }
         if not is_reasoning_model:
             payload["temperature"] = temperature
-        return requests.post(f"{endpoint}/chat/completions", headers=headers, json=payload, timeout=timeout)
+        return requests.post(f"{root_endpoint}/chat/completions", headers=headers, json=payload, timeout=timeout)
 
     def _request_vlm_text(self, base_url: str, headers: Dict[str, str], model: str, prompt: str, image_data: str) -> str:
         """Post a VLM request and return its text, retrying transient failures.
@@ -295,18 +324,37 @@ class VLMLayoutReviewer:
         response or a 5xx even though the model is reachable, so retry a few
         times before letting the caller fall back to the deterministic path.
         """
+        self._last_usage = {"input_tokens": 0, "output_tokens": 0}
         attempts = max(int(self.review_config.get("request_attempts", 3)), 1)
         retry_delay = float(self.review_config.get("retry_delay_seconds", 2.0))
         last_exc: Optional[Exception] = None
+        endpoint = base_url.rstrip("/")
+        if endpoint.endswith("/chat/completions"):
+            transports = ["chat"]
+        elif endpoint.endswith("/responses"):
+            transports = ["responses", "chat"]
+        elif str(model).startswith("gpt-5"):
+            transports = ["responses", "chat"]
+        else:
+            transports = ["chat"]
+
         for attempt in range(attempts):
-            try:
-                response = self._post_vlm_request(base_url, headers, model, prompt, image_data)
-                response.raise_for_status()
-                return self._extract_response_text(response)
-            except Exception as exc:  # noqa: BLE001 - retry any transient VLM failure
-                last_exc = exc
-                if attempt < attempts - 1:
-                    time.sleep(min(retry_delay * (attempt + 1), 6.0))
+            for transport in transports:
+                try:
+                    response = self._post_vlm_request(
+                        base_url,
+                        headers,
+                        model,
+                        prompt,
+                        image_data,
+                        transport=transport,
+                    )
+                    response.raise_for_status()
+                    return self._extract_response_text(response)
+                except Exception as exc:  # noqa: BLE001 - retry any transient VLM failure
+                    last_exc = exc
+            if attempt < attempts - 1:
+                time.sleep(min(retry_delay * (attempt + 1), 6.0))
         raise last_exc if last_exc else RuntimeError("VLM request failed with no exception")
 
     def _extract_response_text(self, response: requests.Response) -> str:
@@ -315,6 +363,7 @@ class VLMLayoutReviewer:
             return self._extract_stream_text(response)
 
         data = response.json()
+        self._capture_usage(data.get("usage"))
         if data.get("output_text"):
             return data["output_text"]
 
@@ -343,6 +392,8 @@ class VLMLayoutReviewer:
                 break
             event = json.loads(raw)
             event_type = event.get("type")
+            if event_type in {"response.completed", "response.done"}:
+                self._capture_usage((event.get("response") or {}).get("usage") or event.get("usage"))
             if event_type == "response.output_text.delta":
                 chunks.append(event.get("delta", ""))
             elif event_type == "response.output_text.done":
@@ -353,6 +404,26 @@ class VLMLayoutReviewer:
         if not text:
             raise ValueError("VLM stream completed without text output")
         return text
+
+    def _capture_usage(self, usage: Optional[Dict[str, Any]]) -> None:
+        if not usage:
+            return
+        input_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
+        output_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
+        self._last_usage = {
+            "input_tokens": int(input_tokens or 0),
+            "output_tokens": int(output_tokens or 0),
+        }
+
+    def _record_usage(self, state: PosterState, agent_name: str) -> None:
+        usage = dict(self._last_usage)
+        input_tokens = int(usage.get("input_tokens", 0))
+        output_tokens = int(usage.get("output_tokens", 0))
+        if input_tokens <= 0 and output_tokens <= 0:
+            return
+        state["timing_metrics"].add_api_call(agent_name, "vision", input_tokens, output_tokens)
+        state["tokens"].add_vision(input_tokens, output_tokens)
+        self._last_usage = {"input_tokens": 0, "output_tokens": 0}
 
     def _build_prompt(self, state: PosterState) -> str:
         layout_summary = self._layout_summary(state.get("styled_layout") or [])
@@ -631,7 +702,7 @@ Resolved visual assets:
             "degraded": True,
             "fallback": "deterministic_acceptance",
             "overall_score": None,
-            "accept": True,
+            "accept": False,
             "issues": [],
             "patch": [],
             "visual_asset_recommendations": [],

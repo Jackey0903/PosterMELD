@@ -1,6 +1,6 @@
-# Paper2Poster
+# PosterMELD
 
-Paper2Poster turns research papers into polished academic posters. The context exists to keep content fidelity, visual quality, layout diversity, and renderable poster outputs distinct in design discussions.
+PosterMELD turns research papers into polished academic posters. The context exists to keep content fidelity, visual quality, layout diversity, and renderable poster outputs distinct in design discussions.
 
 ## Language
 

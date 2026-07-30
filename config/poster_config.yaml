@@ -51,13 +51,16 @@ header_planner:
   short_title_max_words: 11
   subtitle_max_chars: 86
   portrait_subtitle_max_chars: 62
-  title_logo_gap_inches: 1.2   # clearance between the title column and the header logos so a
-                               # width-filling title never crowds the logos (long titles wrap instead)
+  title_logo_gap_inches: 0.28  # compact visual gap; the planner expands the title box to the
+                               # actual logo bounds instead of keeping an oversized reserved zone
   min_title_logo_gap_inches: 0.20
-  min_title_width_fraction: 0.42
+  min_title_width_fraction: 0.56
   max_logo_header_fraction: 0.78
   hard_max_logo_header_fraction: 0.88
   max_logo_zone_width_fraction: 0.38
+  landscape_combined_logo_zone_fraction: 0.27
+  landscape_multi_affiliation_logo_zone_fraction: 0.30
+  landscape_single_logo_zone_fraction: 0.24
   logo_resize_check_enabled: true
   preferred_affiliation_logo_scale: 1.50
   preferred_conference_logo_scale: 1.0
@@ -71,10 +74,12 @@ header_planner:
   title_subtitle_gap_inches: 0.10
   title_wrap_policy: "auto"
   force_single_line_title: true
-  title_fit_avg_char_width_em: 0.56
+  title_fit_avg_char_width_em: 0.52
+  portrait_title_fit_avg_char_width_em: 0.56
   wrapped_title_fit_avg_char_width_em: 0.48
   portrait_wrapped_title_fit_avg_char_width_em: 0.40
-  title_fit_width_safety: 0.94
+  title_fit_width_safety: 0.98
+  portrait_title_fit_width_safety: 0.94
   title_single_line_min_font_size: 34
   portrait_title_single_line_min_font_size: 32
   portrait_wrapped_title_min_font_size: 44
@@ -82,7 +87,7 @@ header_planner:
   single_line_title_gate_min_font_size: 42
   portrait_single_line_title_gate_min_font_size: 40
   landscape_title_font_size: 100
-  landscape_author_font_size: 72
+  landscape_author_font_size: 58
   large_landscape_title_font_size: 108
   large_landscape_author_font_size: 50
   portrait_title_font_size: 72
@@ -359,7 +364,7 @@ poster_visual_style:
     author_font_family: "Arial"
     author_font_color: "#111111"
     shadow:
-      enabled: false
+      enabled: true
       color: "#AEB5CC"
       offset_x_inches: 0.035
       offset_y_inches: 0.035
@@ -370,7 +375,7 @@ poster_visual_style:
     author_font_family: "Arial"
     author_font_color: "#211517"
     shadow:
-      enabled: false
+      enabled: true
       color: "#D8B7BE"
       offset_x_inches: 0.035
       offset_y_inches: 0.035
@@ -380,7 +385,7 @@ poster_visual_style:
     font_weight: "bold"
     font_color: "#FFFFFF"
     shadow:
-      enabled: false
+      enabled: true
       color: "#9FB7BC"
       offset_x_inches: 0.025
       offset_y_inches: 0.025
@@ -398,7 +403,7 @@ poster_visual_style:
     small_number_width_inches: 0.46
     small_number_gap_inches: 0.12
     shadow:
-      enabled: false
+      enabled: true
       color: "#B4BDD8"
       offset_x_inches: 0.02
       offset_y_inches: 0.02
@@ -468,6 +473,8 @@ selective_block_backgrounds:
 generated_background:
   enabled: false
   procedural_only: false
+  allow_procedural_fallback: false
+  validation_retry_attempts: 3
   width_px: 1440
   height_px: 2035
   style: "auto"
@@ -480,7 +487,9 @@ generated_background:
     min_average_distance_from_white: 15.0
     min_channel_stddev: 8.0
     max_boost_factor: 5.0
-  api_timeout_seconds: 75
+  api_timeout_seconds: 0
+  ocr_timeout_seconds: 15
+  ocr_min_confidence: 45
   prompt_style: "premium top-tier AI conference poster background, polished and readable"
   output_filename: "generated_background.png"
   styles:
@@ -697,6 +706,7 @@ adaptive_auto_dense_layout:
 
 template_fast_mode:
   enabled: true
+  semantic_capacity_rewrite: true
   templates:
     - "cluster_2_landscape"
     - "cluster_6_landscape"
@@ -730,8 +740,8 @@ template_fast_mode:
   visual_policy:
     figure_count: 2
     table_count: 2
-    figure_max_height_fraction: 0.55
-    table_max_height_fraction: 0.62
+    figure_max_height_fraction: 0.70
+    table_max_height_fraction: 0.74
     default_max_height_fraction: 0.42
     figure_slots:
       - "slot_2"
@@ -877,6 +887,10 @@ generated_teaser:
   min_aspect: 1.05
   portrait_min_aspect: 1.55
   allow_existing_visual: false
+  allow_procedural_fallback: false
+  validation_retry_attempts: 3
+  ocr_timeout_seconds: 15
+  ocr_min_confidence: 45
   prompt_style: "top-tier AI conference panoramic teaser banner, clean conceptual schematic, polished NeurIPS/ICLR-style visual"
 
 visual_footprint:
@@ -987,6 +1001,8 @@ visual_legibility_review:
   timeout_seconds: 120
   min_wide_visual_aspect: 2.2
   max_width_for_wide_visual: 18.0
+  min_table_source_ppi: 72.0
+  hard_min_table_source_ppi: 48.0
 
 adaptive_column_width:
   enabled: false

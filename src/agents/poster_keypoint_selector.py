@@ -5,6 +5,7 @@ Poster keypoint selection for keypoint-first template planning.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List
@@ -80,6 +81,7 @@ class PosterKeypointSelector:
                     state["errors"].append(f"{self.name}: {raw_exc}")
                     return state
 
+        keypoints, reading_order = self._apply_runtime_keypoint_limit(keypoints, reading_order, report)
         state["paper_poster_keypoints"] = keypoints
         state["poster_reading_order"] = reading_order
         report["keypoint_count"] = len(keypoints)
@@ -90,6 +92,45 @@ class PosterKeypointSelector:
 
         log_agent_success(self.name, f"selected {len(keypoints)} poster keypoints")
         return state
+
+    def _apply_runtime_keypoint_limit(
+        self,
+        keypoints: List[Dict[str, Any]],
+        reading_order: List[int],
+        report: Dict[str, Any],
+    ) -> tuple[List[Dict[str, Any]], List[int]]:
+        try:
+            limit = int(os.getenv("PAPER2POSTER_KEYPOINT_LIMIT", "0") or 0)
+        except ValueError:
+            limit = 0
+        if limit <= 0 or len(keypoints) <= limit:
+            return keypoints, reading_order
+
+        by_id = {int(item["id"]): item for item in keypoints}
+        ordered = [by_id[keypoint_id] for keypoint_id in reading_order if keypoint_id in by_id]
+        ordered.extend(item for item in keypoints if item not in ordered)
+        base_size, larger_groups = divmod(len(ordered), limit)
+        condensed: List[Dict[str, Any]] = []
+        cursor = 0
+        for index in range(limit):
+            group_size = base_size + (1 if index < larger_groups else 0)
+            group = ordered[cursor : cursor + group_size]
+            cursor += group_size
+            sections = list(dict.fromkeys(str(item.get("section") or "Paper") for item in group))
+            condensed.append(
+                {
+                    "id": index + 1,
+                    "key_point": " ".join(str(item.get("key_point") or "").strip() for item in group).strip(),
+                    "section": " / ".join(sections[:2]) or "Paper",
+                    "source_keypoint_ids": [int(item["id"]) for item in group],
+                }
+            )
+
+        report["target_keypoints"] = limit
+        report.setdefault("warnings", []).append(
+            f"Runtime recovery condensed {len(keypoints)} keypoints into {limit} sections without dropping facts"
+        )
+        return condensed, [item["id"] for item in condensed]
 
     def _build_prompt(self, raw_text: str, fast_block_contract: Dict[str, Any] | None = None) -> str:
         fast_guidance = ""
@@ -117,7 +158,7 @@ Fast template-first capacity context:
         return f"""
 {self.prompt}
 
-Additional runtime constraint for this Paper2Poster pipeline:
+Additional runtime constraint for this PosterMELD pipeline:
 - Prefer exactly 10 key points as a content pool for poster planning.
 - If the paper is sparse, use 8-10 key points.
 - If you return 11-12 key points, the pipeline will keep only the first 10 in reading_order.

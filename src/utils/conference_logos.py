@@ -93,6 +93,11 @@ def _strip_year(name: str) -> str:
     return re.sub(r"\b(19|20)\d{2}\b", "", name).strip()
 
 
+def _year(name: str) -> Optional[str]:
+    match = re.search(r"\b((?:19|20)\d{2})\b", name)
+    return match.group(1) if match else None
+
+
 def _slug(name: str) -> Optional[str]:
     """Map a free-form conference name to a canonical slug, or None."""
     normalized = _strip_year(name).lower()
@@ -115,6 +120,11 @@ def resolve_conference_logo(conference_name: str) -> Optional[str]:
     slug = _slug(conference_name)
     if slug is None:
         return None
+    year = _year(conference_name)
+    if year:
+        year_candidate = _LOGO_DIR / f"{slug}_{year}.png"
+        if year_candidate.exists():
+            return str(year_candidate)
     candidate = _LOGO_DIR / f"{slug}.png"
     return str(candidate) if candidate.exists() else None
 

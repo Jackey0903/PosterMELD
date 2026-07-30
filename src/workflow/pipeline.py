@@ -291,6 +291,14 @@ def _final_artifact_failures(state: PosterState) -> list[Dict[str, Any]]:
     if state.get("enable_generated_teaser", False):
         report = state.get("generated_teaser_report") or {}
         if report.get("applied", True) is False:
+            failures.append(
+                {
+                    "category": "generated_asset",
+                    "asset": "teaser",
+                    "reason": report.get("fallback_reason") or report.get("reason") or "needs_regeneration",
+                    "needs_regeneration": bool(report.get("needs_regeneration", True)),
+                }
+            )
             return failures
         teaser_path = report.get("teaser_path")
         if not teaser_path or not Path(str(teaser_path)).exists():
@@ -619,6 +627,42 @@ def _run_final_quality_gate(state: PosterState) -> PosterState:
             gate["failures"].append({"category": "body_font_scale", "blocks": oversized_body_fonts})
 
     vlm_review = state.get("vlm_layout_review") or {}
+    required_reviews = (
+        ("vlm_layout_reviewer", "enable_vlm_layout_review", vlm_review),
+        ("visual_legibility_reviewer", "enable_visual_legibility_review", state.get("visual_legibility_review") or {}),
+        ("block_vlm_reviewer", "enable_block_vlm_review", state.get("block_vlm_review") or {}),
+    )
+    for component, enabled_key, review in required_reviews:
+        if not state.get(enabled_key) or not review:
+            continue
+        if review.get("degraded") or review.get("review_available") is False:
+            gate["failures"].append(
+                {
+                    "category": "quality_review_unavailable",
+                    "component": component,
+                    "warnings": review.get("warnings") or [],
+                }
+            )
+
+    visual_review = state.get("visual_legibility_review") or {}
+    high_visual_issues = [
+        issue
+        for issue in (visual_review.get("issues") or [])
+        if str(issue.get("severity", "")).lower() == "high"
+    ]
+    if high_visual_issues:
+        gate["failures"].append({"category": "visual_legibility", "issues": high_visual_issues})
+
+    block_review = state.get("block_vlm_review") or {}
+    high_block_visual_issues = [
+        block
+        for block in (block_review.get("blocks") or [])
+        if str(block.get("severity", "")).lower() == "high"
+        and str(block.get("status", "")).lower() in {"overflow", "visual_too_small"}
+    ]
+    if high_block_visual_issues:
+        gate["failures"].append({"category": "block_visual_legibility", "blocks": high_block_visual_issues})
+
     high_issues = [
         issue
         for issue in (vlm_review.get("issues") or [])
@@ -1032,6 +1076,7 @@ def create_workflow_graph():
 def save_timing_log(state: PosterState):
     """Save timing and cost metrics to log file"""
     output_dir = Path(state["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / "timing_cost_log.json"
 
     metrics = state["timing_metrics"]
@@ -1284,7 +1329,12 @@ def main():
     except ValueError:
         default_header_seed = None
 
-    parser = argparse.ArgumentParser(description="Paper2Poster: Multi-agent Aesthetic-aware Paper-to-poster generation")
+    parser = argparse.ArgumentParser(
+        description=(
+            "PosterMELD: multi-agent paper-to-poster generation for controllable "
+            "design diversity with editable print-ready outputs"
+        )
+    )
     parser.add_argument("paper_path_positional", nargs="?", help="Path to the PDF paper")
     parser.add_argument("--paper_path", type=str, required=False, help="Path to the PDF paper")
     parser.add_argument("--text_model", type=str, default=default_text_model,
@@ -1527,7 +1577,7 @@ def main():
         print("❌ PDF not found")
         return 1
     
-    print(f"🚀 Paper2Poster Pipeline")
+    print("🚀 PosterMELD Pipeline")
     print(f"📄 PDF: {pdf_path}")
     print(f"🤖 Models: {args.text_model}/{args.vision_model}")
     print(f"📏 Size: {final_width}\" × {final_height:.2f}\"")
@@ -1566,6 +1616,7 @@ def main():
         print(f"🎨 Background Style: {args.background_style}")
         print(f"🎨 Background Palette: {args.background_palette}")
     
+    state = None
     try:
         state = create_state(
             pdf_path, args.text_model, args.vision_model,
@@ -1621,9 +1672,11 @@ def main():
 
         if final_state.get("errors"):
             log_agent_error("pipeline", f"Pipeline errors: {final_state['errors']}")
+            save_timing_log(final_state)
             return 1
         if not final_state.get("final_poster_accepted", False):
             log_agent_error("pipeline", f"Poster rejected before final acceptance. Draft status: {final_state.get('draft_status')}")
+            save_timing_log(final_state)
             return 1
         required_outputs = ["story_board", "design_layout", "color_scheme", "styled_layout", "resolved_visual_assets"]
 
@@ -1636,6 +1689,7 @@ def main():
         missing = [out for out in required_outputs if is_missing_required_output(out)]
         if missing:
             log_agent_error("pipeline", f"Missing outputs: {missing}")
+            save_timing_log(final_state)
             return 1
         
         log_agent_success("pipeline", "Pipeline completed successfully")
@@ -1658,6 +1712,12 @@ def main():
         
     except Exception as e:
         log_agent_error("pipeline", f"Unexpected error: {e}")
+        if state is not None:
+            state["timing_metrics"].pipeline_end = time.time()
+            try:
+                save_timing_log(state)
+            except Exception as timing_error:
+                log_agent_error("pipeline", f"Failed to save partial timing log: {timing_error}")
         import traceback
         traceback.print_exc()
         return 1

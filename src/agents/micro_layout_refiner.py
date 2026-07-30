@@ -16,7 +16,7 @@ from src.config.poster_config import load_config
 from src.layout.text_height_measurement import measure_text_height
 from src.state.poster_state import PosterState
 from src.tools.layout_api import LayoutTemplates
-from src.utils.text_cleanup import repair_truncated_sentence_end
+from src.utils.text_cleanup import fit_complete_sentence_prefix, repair_truncated_sentence_end
 from src.utils.visual_footprint import enforce_visual_footprint, visual_footprint_config
 from utils.src.logging_utils import log_agent_error, log_agent_info, log_agent_success, log_agent_warning
 
@@ -2015,10 +2015,7 @@ class MicroLayoutRefiner:
 
     def _truncate_takeaway(self, text: str, max_chars: int) -> str:
         text = re.sub(r"\s+", " ", str(text or "")).strip()
-        if len(text) <= max_chars:
-            return text
-        candidate = text[: max_chars + 1].rsplit(" ", 1)[0].strip(" ,;:")
-        return repair_truncated_sentence_end(candidate.rstrip(".") + ".")
+        return fit_complete_sentence_prefix(text, max_chars)
 
     def _layout_portrait_split_visual_text(
         self,

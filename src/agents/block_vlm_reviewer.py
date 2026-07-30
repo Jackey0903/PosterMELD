@@ -87,9 +87,12 @@ class BlockVLMReviewer(VLMLayoutReviewer):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         try:
             content = self._request_vlm_text(base_url, headers, model, prompt, image_data)
+            self._record_usage(state, self.name)
             parsed = self._parse_json(content)
             review = self._normalize_review(parsed, occupancy)
             review["source"] = "vlm"
+            review["review_available"] = True
+            review["degraded"] = False
             review.setdefault("warnings", [])
         except Exception as exc:
             review = self._fallback_from_occupancy(
@@ -247,6 +250,7 @@ Block metadata:
         if not occupancy:
             return {
                 "source": "fallback",
+                "review_available": False,
                 "degraded": True,
                 "fallback": "occupancy_only_block_review",
                 "blocks": [],
@@ -268,6 +272,7 @@ Block metadata:
             })
         return {
             "source": "fallback",
+            "review_available": False,
             "degraded": True,
             "fallback": "occupancy_only_block_review",
             "blocks": blocks,
