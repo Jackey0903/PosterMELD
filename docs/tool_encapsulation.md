@@ -11,7 +11,7 @@
 
 ## 1. 整体 Pipeline
 
-当前主链定义在 [pipeline.py](../src/workflow/pipeline.py)：
+当前主链定义在 [pipeline.py](../poster_generation/src/workflow/pipeline.py)：
 
 ```text
 PDF
@@ -64,11 +64,11 @@ PDF
 
 文件：
 
-- [image_api.py](../src/tools/image_api.py)
+- [image_api.py](../poster_generation/src/tools/image_api.py)
 
 当前用途：
 
-- 由 [visual_asset_agent.py](../src/agents/visual_asset_agent.py) 调用
+- 由 [visual_asset_agent.py](../poster_generation/src/agents/visual_asset_agent.py) 调用
 - 当前默认主要使用 `crop_and_resize`
 - `generate_image` / `edit_image` 已封装，但默认主链还没有把“主动生图 / 改图”作为必经步骤打开
 
@@ -80,13 +80,13 @@ PDF
 
 文件：
 
-- [layout_api.py](../src/tools/layout_api.py)
+- [layout_api.py](../poster_generation/src/tools/layout_api.py)
 
 当前用途：
 
-- 被 [layout_agent.py](../src/agents/layout_agent.py)
-- [curator.py](../src/agents/curator.py)
-- [micro_layout_refiner.py](../src/agents/micro_layout_refiner.py)
+- 被 [layout_agent.py](../poster_generation/src/agents/layout_agent.py)
+- [curator.py](../poster_generation/src/agents/curator.py)
+- [micro_layout_refiner.py](../poster_generation/src/agents/micro_layout_refiner.py)
 
 共同使用
 
@@ -98,11 +98,11 @@ PDF
 
 文件：
 
-- [pptx_api.py](../src/tools/pptx_api.py)
+- [pptx_api.py](../poster_generation/src/tools/pptx_api.py)
 
 当前用途：
 
-- 由 [renderer.py](../src/agents/renderer.py) 调用
+- 由 [renderer.py](../poster_generation/src/agents/renderer.py) 调用
 - 负责文本框、形状、连接线、图片和最终 `.pptx` 保存
 
 一句话理解：
@@ -134,7 +134,7 @@ PDF
 - `cluster_2`：上方双块 + 中下大块，适合突出一个核心方法图和一个主要结果表
 - `cluster_3`：右侧长块 + 底部大块，适合一侧放背景/动机，底部突出核心方法或结果
 
-CLI 入口在 [pipeline.py](../src/workflow/pipeline.py)：
+CLI 入口在 [pipeline.py](../poster_generation/src/workflow/pipeline.py)：
 
 ```bash
 --layout-template {auto,three_column_postergen,two_plus_one_mixed,one_plus_two_mixed,cluster_0,cluster_1,cluster_2,cluster_3}
@@ -144,7 +144,7 @@ CLI 入口在 [pipeline.py](../src/workflow/pipeline.py)：
 
 核心模块：
 
-- [micro_layout_refiner.py](../src/agents/micro_layout_refiner.py)
+- [micro_layout_refiner.py](../poster_generation/src/agents/micro_layout_refiner.py)
 
 这层不是 LLM，而是确定性后处理。可以把它理解成一个 lane 级的几何收敛器：
 

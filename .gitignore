@@ -208,7 +208,8 @@ __marimo__/
 
 # PosterMELD generated files
 .DS_Store
-run_*.sh
+.playwright-cli/
+/run_*.sh
 marker/
 samples/
 ablation/
@@ -216,12 +217,14 @@ evaluation/
 output/
 hf/
 tmp/
+/benchmark_eval.zip
+/experiment_results.md
 
 # Benchmark inputs, local test papers, and scratch results (data, not source)
 Benchmark/
-data/aaai_test/
+poster_generation/data/aaai_test/
 scratchpad_batch5_results.json
-assets/institution_logos/
+poster_generation/assets/institution_logos/
 
 # Local meeting/export artifacts
 /进度.pdf

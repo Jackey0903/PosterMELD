@@ -14,11 +14,9 @@
 
   <p>
     <a href="https://jackey0903.github.io/PosterMELD/"><strong>Project Page</strong></a>
+    · <a href="poster_generation/"><strong>Poster Generation</strong></a>
+    · <a href="benchmark_eval/"><strong>Benchmark Evaluation</strong></a>
     · <a href="#quick-start"><strong>Quick Start</strong></a>
-    · <a href="#method"><strong>Method</strong></a>
-    · <a href="#benchmark"><strong>Benchmark</strong></a>
-    · <a href="#configuration"><strong>Configuration</strong></a>
-    · <a href="#documentation"><strong>Documentation</strong></a>
   </p>
 
   <p>
@@ -31,71 +29,32 @@
 </div>
 
 <p align="center">
-  <img src="docs/readme/teaser.png" width="100%" alt="PosterMELD compared with P2P, PosterGen, and a coding-agent workflow" />
+  <img src="docs/readme/teaser.png" width="100%" alt="PosterMELD qualitative comparison" />
 </p>
 
-<p align="center">
-  <sub>
-    One paper, several generation routes. PosterMELD produces compact, readable, editable posters
-    under an explicit request budget.
-  </sub>
-</p>
+PosterMELD converts scientific papers into **native, editable PowerPoint posters** and matching PNG renders. It plans template capacity before writing, grounds every section in the source paper, composes figures and tables as editable assets, and applies bounded deterministic and VLM quality checks.
 
-## Overview
+## Repository Modules
 
-PosterMELD turns a scientific paper into a **native, editable PowerPoint poster** and a matching PNG render. It fixes the poster structure before writing: template slots expose their geometry and capacity, then specialized agents select grounded keypoints, write to area budgets, place figures and tables, and render the result. Deterministic gates and a vision-language model (VLM) reviewer send only failed aspects through bounded repair.
+The repository is organized as two independently runnable modules:
 
-The system is designed around four practical requirements:
-
-| | Capability | What it means |
+| Module | Purpose | Entry point |
 |---|---|---|
-| **M** | **Multi-Agent** | Content, template, layout, visual, and review agents operate on one traceable poster state. |
-| **E** | **Editable** | Text, figures, tables, shapes, and section structure remain native PowerPoint elements. |
-| **L** | **Layouts** | Capacity-aware slot contracts guide writing before rendering, reducing overflow and unused space. |
-| **D** | **Design diversity** | Template, style, density, background, header, and seed controls produce reproducible variants. |
+| [`poster_generation/`](poster_generation/) | End-to-end PDF-to-PPTX/PNG generation pipeline, including prompts, templates, assets, configuration, scripts, and regression tests | `python -m src.workflow.pipeline` or `postermeld` |
+| [`benchmark_eval/`](benchmark_eval/) | Standalone PRR/CHE, Universal Score, and Keypoint BERTScore evaluation code | `python -m prr_che.evaluate`, `python -m universal_score.evaluate`, and `python -m keypoint_bertscore.*` |
 
-### Headline results
+The project website and paper figures are kept in [`docs/`](docs/) so GitHub Pages remains independent of both runtime modules.
 
-Evaluated end-to-end on **621 papers**, PosterMELD achieves:
+## Highlights
 
-- **81.3% Print-Ready Rate (PRR)** - 3.4x P2P and 5.2x PosterGen.
-- **3.247 conditional CHE** - the highest aesthetic score among generated methods with multiple print-ready outputs.
-- **Native editability** - each accepted request returns an editable PPTX and its consistent PNG render.
-- **$0.38 per request** - approximately 3.5% of the cost of the Codex+Skill workflow evaluated in the paper.
+- **Multi-agent composition:** specialized agents coordinate paper understanding, capacity-aware writing, layout, visual placement, and review through one traceable state.
+- **Editable outputs:** text, figures, tables, section bars, and logos remain native PowerPoint elements.
+- **Design diversity:** 16 landscape and 8 portrait templates support controllable style, density, background, header, and seed variations.
+- **Paper-grounded content:** MinerU extracts text and visual assets; Marker is retained as an automatic fallback.
+- **Bounded quality repair:** deterministic geometry checks and VLM review target only failed aspects instead of repeatedly rebuilding the poster.
+- **Reproducible evaluation:** request-level PRR, conditional CHE, Universal Score, and Keypoint BERTScore are provided as a separate package.
 
-## Method
-
-<p align="center">
-  <img src="docs/readme/framework.png" width="100%" alt="PosterMELD agent-skill generation pipeline" />
-</p>
-
-PosterMELD follows a structure-first, quality-guided pipeline:
-
-1. **Parse and ground.** MinerU extracts text, figures, tables, formulas, and document structure; Marker remains available as a fallback backend.
-2. **Plan capacity.** The selected template exposes slot geometry, reading order, prominence, character budgets, and compatible visual types.
-3. **Compose with agents and skills.** Content, template, layout, and visual agents distill keypoints, write within area budgets, and place paper-grounded evidence.
-4. **Render editable artifacts.** The renderer creates native PowerPoint elements and a matching PNG preview.
-5. **Review and repair.** Deterministic checks and VLM review inspect grounding, bounds, overlap, readability, assets, hierarchy, and occupancy. Failures receive bounded rewrite, reflow, resize, or rerender actions.
-
-Every run records its controls, provenance, latency, token usage, repair history, and final acceptance state.
-
-### Template library
-
-<p align="center">
-  <img src="docs/readme/template-construction.png" width="96%" alt="PosterMELD template library construction from real posters" />
-</p>
-
-The repository includes **16 landscape** and **8 portrait** templates mined from real poster topologies. A template describes structure rather than content. Runtime geometry can absorb small gaps while preserving page bounds, reading order, and non-overlap constraints.
-
-PosterMELD also provides `adaptive_auto`, a template-independent adaptive layout mode for papers that do not fit a standard topology.
-
-## Benchmark
-
-<p align="center">
-  <img src="docs/readme/benchmark-composition.png" width="72%" alt="Composition of the 621-paper PosterMELD benchmark" />
-</p>
-
-The benchmark contains **621 papers**, covering **14 publication-source groups** and **10 research domains**. Each method is evaluated at the request level, so failed or missing generations remain in the denominator.
+### Results at a glance
 
 | Method | PRR (%) ↑ | CHE ↑ | Universal ↑ | Editable | Cost / request ↓ |
 |---|---:|---:|---:|:---:|---:|
@@ -107,72 +66,47 @@ The benchmark contains **621 papers**, covering **14 publication-source groups**
 | **PosterMELD** | **81.3** | **3.247** | **4.456** | **Yes** | **$0.38** |
 | Human reference | 98.7 | 3.287 | 4.995 | Yes | - |
 
-> **Metric scope.** PRR measures request-level artifact validity. CHE averages Craftsmanship, Harmony, and Expressiveness only over print-ready outputs. Universal scores missing generations as zero. Cost includes failed requests and all generation-internal model calls.
+PRR is computed over all requests. CHE is conditional on print-ready outputs, while Universal Score keeps missing generations in the full-benchmark aggregate.
 
-### Qualitative comparison
+## Method
 
 <p align="center">
-  <img src="docs/readme/case-study.png" width="100%" alt="Qualitative comparison of P2P, PosterGen, GPT-Image-2, and PosterMELD on five papers" />
+  <img src="docs/readme/framework.png" width="100%" alt="PosterMELD generation pipeline" />
 </p>
 
-Across five research areas, PosterMELD varies template topology, palette, and text-figure allocation while preserving native editability. The full-resolution comparison is also available on the [project page](https://jackey0903.github.io/PosterMELD/).
+The generator follows a structure-first pipeline:
+
+1. Parse the PDF into grounded text, figures, tables, formulas, and metadata.
+2. Select a template and expose slot geometry, reading order, and capacity budgets.
+3. Distill poster keypoints and compose sections within those budgets.
+4. Place visuals, render an editable PPTX, and produce a consistent PNG preview.
+5. Apply local and global quality checks, followed by bounded repair when needed.
 
 ## Quick Start
 
-### 1. Install
-
-PosterMELD requires Python `3.11`. [LibreOffice](https://www.libreoffice.org/) is recommended for stable PPTX-to-PNG rendering.
+### Generate a poster
 
 ```bash
 git clone https://github.com/Jackey0903/PosterMELD.git
-cd PosterMELD
+cd PosterMELD/poster_generation
 
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-Or install with [`uv`](https://docs.astral.sh/uv/):
-
-```bash
-uv sync
-```
-
-### 2. Configure
-
-Create `.env` from [`.env.example`](.env.example). Never commit real API keys.
-
-```bash
+pip install -e . --no-deps
 cp .env.example .env
-```
 
-At minimum, configure a text-model endpoint:
-
-```bash
-OPENAI_API_KEY=your_key
-OPENAI_BASE_URL=https://your-endpoint/v1
-PAPER2POSTER_TEXT_MODEL=gpt-5.4
-```
-
-For the full pipeline, also configure VLM review, image generation, and MinerU parsing in `.env`.
-
-### 3. Generate a poster
-
-Minimal generation:
-
-```bash
-PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline /path/to/paper.pdf \
+postermeld data/0409_demo/paper.pdf \
   --layout-template auto \
   --disable-generated-teaser \
   --disable-generated-background
 ```
 
-Full generation with visual assets and review:
+Enable the complete visual pipeline after configuring the VLM, image-generation, and MinerU endpoints in `.env`:
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline /path/to/paper.pdf \
+postermeld /path/to/paper.pdf \
   --layout-template auto \
-  --conference AAAI \
   --poster-style navy_serif \
   --visual-density rich \
   --enable-generated-teaser \
@@ -181,107 +115,83 @@ PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline /path/to/paper.pdf \
   --enable-visual-legibility-review
 ```
 
-Outputs are written to `output/<paper_name>/`:
+See the [generation guide](poster_generation/README.md) for all controls, output files, templates, and backend configuration.
 
-```text
-output/<paper_name>/
-├── <paper_name>.pptx          editable poster
-├── <paper_name>.png           final render
-├── <paper_name>_draft.*       pre-review artifact
-├── timing_cost_log.json       latency, calls, and token usage
-├── assets/                    extracted and generated visual assets
-└── content/                   structured planning and quality reports
-```
-
-## Configuration
-
-The following controls are connected to the runtime pipeline and affect planning or rendering:
-
-| Control | Representative values | Effect |
-|---|---|---|
-| Template | `auto`, `adaptive_auto`, registered template ID | Block topology, reading order, and capacity |
-| Poster style | `navy_serif`, `teal_modern`, `burgundy_classic` | Typography, section bars, accents, and panel treatment |
-| Visual density | `lean`, `balanced`, `rich` | Figure, table, and result-asset retention |
-| Background style | `auto`, `minimal_solid`, `tech_grid`, `academic_paper`, `cartographic`, `blueprint`, `geometric_soft` | Background visual language |
-| Background palette | `auto`, `light_blue`, `light_gray`, `warm_ivory`, `mint`, `lavender`, `rose`, `amber` | Background color family |
-| Header route | `auto`, `classic_left`, `centered`, `right_title`, `split_logos` | Title, author, and logo composition |
-| Title wrap | `auto`, `single_line`, `two_line` | Header line count and title sizing |
-| Seed | integer | Reproducible request variation |
-
-List all available templates:
+### Evaluate generated posters
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline --list-layout-templates
+cd ../benchmark_eval
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+
+python -m prr_che.evaluate \
+  --manifest examples/manifest.jsonl \
+  --output-dir outputs/prr_che \
+  --model gpt-5.5
 ```
 
-Inspect all command-line options:
+See the [evaluation guide](benchmark_eval/README.md) for manifest schemas, aggregation rules, GPU evaluation, and reproducibility details.
 
-```bash
-PYTHONPATH=. .venv/bin/python -m src.workflow.pipeline --help
-```
+## Benchmark
 
-## Quality and provenance
+<p align="center">
+  <img src="docs/readme/benchmark-composition.png" width="72%" alt="Composition of the PosterMELD benchmark" />
+</p>
 
-PosterMELD treats print-readiness as a hard outcome rather than an assumed property.
+PosterMELD was evaluated end-to-end on 621 papers across 14 publication-source groups and 10 research domains. The evaluation module preserves missing generations in request-level denominators and separates print readiness from conditional visual quality.
 
-- **Paper-grounded:** claims, numbers, captions, and visual summaries must be supported by parsed paper content.
-- **Editable first:** native PPTX text, shapes, images, and tables are preferred over flattened page images.
-- **Readability first:** small figures are enlarged, moved, or summarized before font sizes are reduced.
-- **Bounded repair:** only the failed aspect is revised, with a fixed iteration budget.
-- **Explicit failures:** an enabled VLM or image service cannot silently pass with a placeholder artifact.
-- **Auditable runs:** story boards, slot contracts, occupancy reports, quality-gate results, timing, and token usage are persisted.
-
-Key reports include:
-
-| Report | Purpose |
+| Metric | Scope |
 |---|---|
-| `poster_keypoint_selection.json` | Selected paper-grounded poster keypoints |
-| `story_board.json` | Section grouping and source-keypoint traceability |
-| `styled_layout.json` | Geometry, typography, and visual references |
-| `block_occupancy_report.json` | Per-block utilization and whitespace status |
-| `final_quality_gate.json` | Acceptance state and blocking defects |
-| `timing_cost_log.json` | Runtime, model calls, and input/output tokens |
+| **PRR** | Binary request-level print readiness |
+| **CHE** | Craftsmanship, Harmony, and Expressiveness for print-ready outputs |
+| **Universal Score** | Ten reference-aware poster criteria with missing outputs scored as zero |
+| **Keypoint BERTScore** | OCR-based content coverage against ordered paper keypoints |
 
-## Repository layout
+<p align="center">
+  <img src="docs/readme/case-study.png" width="100%" alt="Qualitative poster comparison across five papers" />
+</p>
+
+## Project Layout
 
 ```text
 PosterMELD/
-├── assets/                  conference and institution assets
-├── config/                  pipeline configuration and prompts
-├── docs/                    project page, figures, and design records
-├── scripts/                 benchmark and maintenance utilities
-├── src/
-│   ├── agents/              content, layout, visual, and review agents
-│   ├── layout/              template selection and layout helpers
-│   ├── state/               shared PosterState contract
-│   ├── template_extraction/ template registry and geometry extraction
-│   ├── tools/               model, MinerU, PPTX, and image adapters
-│   └── workflow/            pipeline graph and CLI
-├── tests/                   contract and regression tests
-├── 模版-横向/               16 landscape templates
-└── 模版-竖向/               8 portrait templates
+├── poster_generation/        complete generation subproject
+│   ├── assets/               conference and bundled visual assets
+│   ├── config/               prompts and pipeline configuration
+│   ├── data/                 runnable example papers
+│   ├── scripts/              batch-generation utilities
+│   ├── src/                  agents, layout, tools, state, and workflow
+│   ├── templates/            16 landscape + 8 portrait templates
+│   ├── tests/                generation regression tests
+│   └── requirements.txt
+├── benchmark_eval/           standalone benchmark-evaluation subproject
+│   ├── common/               manifest, API, image, and JSON utilities
+│   ├── prr_che/              print-ready and conditional aesthetic metrics
+│   ├── universal_score/      reference-aware universal evaluation
+│   ├── keypoint_bertscore/   OCR and content-coverage evaluation
+│   ├── examples/             manifest and annotation examples
+│   └── tests/                offline evaluation tests
+├── docs/                     GitHub Pages project site and paper figures
+├── Makefile                  repository-level validation commands
+└── LICENSE
 ```
 
-## Testing
+## Validation
 
-Run the full test suite:
+Run both offline validation suites from the repository root:
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m pytest -q
+make test
 ```
 
-The regression suite covers template registration, capacity planning, keypoint grouping, visual references, MinerU mapping, generation retries, and final quality-gate behavior.
+Or validate each module independently:
 
-## Documentation
-
-- [`CONTEXT.md`](CONTEXT.md) defines the project vocabulary, boundaries, and system invariants.
-- [`docs/adr/`](docs/adr/) records architectural decisions for controllable diversity, explicit failure semantics, template selection, and quality gates.
-- [`src/workflow/pipeline.py`](src/workflow/pipeline.py) is the authoritative CLI and workflow entry point.
-- [`config/poster_config.yaml`](config/poster_config.yaml) contains the default style, layout, capacity, and review policies.
-
-## Acknowledgements
-
-PosterMELD builds on [LangGraph](https://github.com/langchain-ai/langgraph), [MinerU](https://github.com/opendatalab/MinerU), [python-pptx](https://github.com/scanny/python-pptx), and [LibreOffice](https://www.libreoffice.org/). The project page follows the [Academic Project Page Template](https://github.com/eliahuhorwitz/Academic-project-page-template).
+```bash
+make test-generation
+make test-evaluation
+```
 
 ## License
 

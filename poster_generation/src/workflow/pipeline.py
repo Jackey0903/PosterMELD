@@ -29,7 +29,10 @@ from src.utils.style_options import (
 )
 from utils.src.logging_utils import log_agent_info, log_agent_success, log_agent_error
 
-env_path = Path(__file__).parent.parent.parent / '.env'
+project_root = Path(__file__).parent.parent.parent
+env_path = project_root / '.env'
+if not env_path.exists():
+    env_path = project_root.parent / '.env'
 load_dotenv(env_path, override=False)
 
 DEFAULT_STANDARD_TEMPLATE = "cluster_43_landscape"

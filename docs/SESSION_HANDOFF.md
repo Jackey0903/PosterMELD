@@ -1,4 +1,4 @@
-# Paper2Poster 会话交接文档（2026-07-09）
+# PosterMELD 会话交接文档（2026-07-09）
 
 给下一个会话的完整上下文。项目投稿 **AAAI 2027**，目标：把论文 PDF 稳定转成美观、零留白的学术海报，并批量跑 621 篇 benchmark。
 
@@ -6,10 +6,10 @@
 
 ## 1. 仓库当前状态
 
-- 主检出 `/Users/jack/paper2poster` 在 `chore/repo-cleanup` 分支；`main` 已 fast-forward 到同一处并推送到 `github.com/Jackey0903/paper2poster`。
-- 测试 `tests/test_pipeline_contracts.py`：**222 passed**（`PYTHONPATH=. .venv/bin/python -m pytest tests/test_pipeline_contracts.py -q`，~90s）。
+- 公开仓库为 `github.com/Jackey0903/PosterMELD`；生成和评测代码分别位于 `poster_generation/` 与 `benchmark_eval/`。
+- 生成模块完整测试：**271 passed**（在 `poster_generation/` 内运行 `PYTHONPATH=. python -m pytest -q`）。
 - 安全备份分支 `wip/adr-stabilization-snapshot`（4b7ab3b）保留。
-- 设计事实来源：`CONTEXT.md`（术语）+ `docs/adr/0001-0008`（架构决策）。真实流程以 `src/workflow/pipeline.py:create_workflow_graph` 为准。默认模板 = `cluster_43_landscape`。
+- 设计事实来源：`poster_generation/CONTEXT.md`（术语）+ `docs/adr/0001-0008`（架构决策）。真实流程以 `poster_generation/src/workflow/pipeline.py:create_workflow_graph` 为准。默认模板 = `cluster_43_landscape`。
 
 ## 2. 本会话已完成（都已提交+推送）
 
