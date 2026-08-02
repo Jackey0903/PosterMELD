@@ -1,6 +1,7 @@
 """LangGraph utilities"""
 
 import os
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
 import json
@@ -15,7 +16,11 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from src.state.poster_state import ModelConfig
 
-load_dotenv(override=True) # reload env every time
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_PATH = PROJECT_ROOT / ".env"
+if not ENV_PATH.exists():
+    ENV_PATH = PROJECT_ROOT.parent / ".env"
+load_dotenv(ENV_PATH, override=True)
 
 
 def _status_code_from_exception(exc: Exception) -> Optional[int]:
@@ -450,5 +455,8 @@ def extract_json(response: str) -> Dict[str, Any]:
 
 def load_prompt(path: str) -> str:
     """load prompt template from file"""
-    with open(path, 'r', encoding='utf-8') as f:
+    prompt_path = Path(path)
+    if not prompt_path.is_absolute() and not prompt_path.exists():
+        prompt_path = Path(__file__).resolve().parents[1] / prompt_path
+    with open(prompt_path, 'r', encoding='utf-8') as f:
         return f.read()

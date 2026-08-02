@@ -8,8 +8,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 DEFAULT_PORTRAIT_WIDTH = 36.0
 DEFAULT_LANDSCAPE_WIDTH = 54.0
 DEFAULT_TEMPLATE_LIBRARY_DIRS = (
-    ("landscape", "模版-横向"),
-    ("portrait", "模版-竖向"),
+    ("landscape", "templates/landscape"),
+    ("portrait", "templates/portrait"),
 )
 SOFT_GEOMETRY_TEMPLATES: set[str] = set()
 

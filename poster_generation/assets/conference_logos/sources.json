@@ -2,7 +2,7 @@
   "records": [
     {
       "slug": "cvpr",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/cvpr.png",
+      "file": "assets/conference_logos/cvpr.png",
       "source_url": "https://cvpr.thecvf.com/static/core/img/cvpr-navbar-logo.svg",
       "note": "CVPR official navbar SVG",
       "kind": "svg->png",
@@ -12,7 +12,7 @@
     },
     {
       "slug": "icml",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/icml.png",
+      "file": "assets/conference_logos/icml.png",
       "source_url": "https://icml.cc/static/core/img/ICML-logo.svg",
       "note": "ICML official SVG",
       "kind": "svg->png",
@@ -21,7 +21,7 @@
     },
     {
       "slug": "acl",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/acl.png",
+      "file": "assets/conference_logos/acl.png",
       "source_url": "https://aclanthology.org/images/acl-logo.svg",
       "note": "ACL Anthology official SVG",
       "kind": "svg->png",
@@ -30,7 +30,7 @@
     },
     {
       "slug": "findings_acl",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/findings_acl.png",
+      "file": "assets/conference_logos/findings_acl.png",
       "source_url": "https://aclanthology.org/images/acl-logo.svg",
       "note": "ACL logo reused for Findings of ACL",
       "kind": "svg->png",
@@ -39,7 +39,7 @@
     },
     {
       "slug": "coling",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/coling.png",
+      "file": "assets/conference_logos/coling.png",
       "source_url": "https://coling2025.org/assets/images/logo/logo-full.png",
       "note": "COLING 2025 official PNG",
       "kind": "raster->png",
@@ -48,7 +48,7 @@
     },
     {
       "slug": "colm",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/colm.png",
+      "file": "assets/conference_logos/colm.png",
       "source_url": "https://colmweb.org/static/images/logo.svg",
       "note": "COLM official SVG",
       "kind": "svg->png",
@@ -57,7 +57,7 @@
     },
     {
       "slug": "jmlr",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/jmlr.png",
+      "file": "assets/conference_logos/jmlr.png",
       "source_url": "https://www.jmlr.org/img/jmlr.jpg",
       "note": "JMLR site logo image",
       "kind": "raster->png",
@@ -66,7 +66,7 @@
     },
     {
       "slug": "arxiv",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/arxiv.png",
+      "file": "assets/conference_logos/arxiv.png",
       "source_url": "https://arxiv.org/static/base/1.0.1/images/arxiv-logo-primary-light.svg",
       "note": "arXiv official SVG",
       "kind": "svg->png",
@@ -75,7 +75,7 @@
     },
     {
       "slug": "f1000research",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/f1000research.png",
+      "file": "assets/conference_logos/f1000research.png",
       "source_url": "https://f1000research.com/img/research/F1000Research_white_solid.svg",
       "note": "F1000Research official SVG",
       "kind": "svg->png",
@@ -85,7 +85,7 @@
     },
     {
       "slug": "plos",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/plos.png",
+      "file": "assets/conference_logos/plos.png",
       "source_url": "https://journals.plos.org/resource/img/logo-plos-footer.png",
       "note": "PLOS official PNG",
       "kind": "raster->png",
@@ -95,7 +95,7 @@
     },
     {
       "slug": "bmc",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/bmc.png",
+      "file": "assets/conference_logos/bmc.png",
       "source_url": "https://link.springer.com/oscar-static/images/brand-hubs/bmc-logo-45f106ad03.svg",
       "note": "BMC/Springer Link official SVG",
       "kind": "svg->png",
@@ -105,7 +105,7 @@
     },
     {
       "slug": "springer_nature",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/springer_nature.png",
+      "file": "assets/conference_logos/springer_nature.png",
       "source_url": "https://www.springernature.com/app-sn/public/images/logo-springernature.svg",
       "note": "Springer Nature official SVG",
       "kind": "svg->png",
@@ -114,7 +114,7 @@
     },
     {
       "slug": "oup",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/oup.png",
+      "file": "assets/conference_logos/oup.png",
       "source_url": "https://corp.oup.com/wp-content/themes/oup-theme/img/university-press-logo.svg",
       "note": "Oxford University Press official SVG",
       "kind": "svg->png",
@@ -124,7 +124,7 @@
     },
     {
       "slug": "bioinformatics",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/bioinformatics.png",
+      "file": "assets/conference_logos/bioinformatics.png",
       "source_url": "https://corp.oup.com/wp-content/themes/oup-theme/img/university-press-logo.svg",
       "note": "OUP logo used for Bioinformatics",
       "kind": "svg->png",
@@ -134,7 +134,7 @@
     },
     {
       "slug": "nucleic_acids_research",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/nucleic_acids_research.png",
+      "file": "assets/conference_logos/nucleic_acids_research.png",
       "source_url": "https://corp.oup.com/wp-content/themes/oup-theme/img/university-press-logo.svg",
       "note": "OUP logo used for Nucleic Acids Research",
       "kind": "svg->png",
@@ -144,7 +144,7 @@
     },
     {
       "slug": "frontiers",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/frontiers.png",
+      "file": "assets/conference_logos/frontiers.png",
       "source_url": "https://www.frontiersin.org/favicons/safari-pinned-tab.svg",
       "note": "Frontiers pinned-tab SVG",
       "kind": "svg->png",
@@ -153,7 +153,7 @@
     },
     {
       "slug": "genome_biology",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/genome_biology.png",
+      "file": "assets/conference_logos/genome_biology.png",
       "source_url": "https://link.springer.com/oscar-static/images/link-bmc-logo-ad8a1301aa.svg",
       "note": "BMC logo used for Genome Biology",
       "kind": "svg->png",
@@ -163,7 +163,7 @@
     },
     {
       "slug": "genome_research",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/genome_research.png",
+      "file": "assets/conference_logos/genome_research.png",
       "source_url": "https://www.biorxiv.org/sites/default/files/cshl_logo_bioarchives.png",
       "note": "CSHL/Bioarchives logo used for Genome Research source family",
       "kind": "raster->png",
@@ -172,7 +172,7 @@
     },
     {
       "slug": "biorxiv",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/biorxiv.png",
+      "file": "assets/conference_logos/biorxiv.png",
       "source_url": "https://www.biorxiv.org/sites/default/files/biorxiv_logo_homepage.png",
       "note": "bioRxiv official PNG",
       "kind": "raster->png",
@@ -181,7 +181,7 @@
     },
     {
       "slug": "medrxiv",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/medrxiv.png",
+      "file": "assets/conference_logos/medrxiv.png",
       "source_url": "https://www.medrxiv.org/sites/default/files/medRxiv_homepage_logo.png",
       "note": "medRxiv official PNG",
       "kind": "raster->png",
@@ -190,7 +190,7 @@
     },
     {
       "slug": "ccai",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/ccai.png",
+      "file": "assets/conference_logos/ccai.png",
       "source_url": "local:iclr.png",
       "note": "Workshop/track alias uses parent conference logo: iclr",
       "kind": "parent-logo-alias",
@@ -199,7 +199,7 @@
     },
     {
       "slug": "climate_change_ai",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/climate_change_ai.png",
+      "file": "assets/conference_logos/climate_change_ai.png",
       "source_url": "local:iclr.png",
       "note": "Workshop/track alias uses parent conference logo: iclr",
       "kind": "parent-logo-alias",
@@ -208,7 +208,7 @@
     },
     {
       "slug": "climate_change_ai_workshop",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/climate_change_ai_workshop.png",
+      "file": "assets/conference_logos/climate_change_ai_workshop.png",
       "source_url": "local:iclr.png",
       "note": "Workshop/track alias uses parent conference logo: iclr",
       "kind": "parent-logo-alias",
@@ -217,7 +217,7 @@
     },
     {
       "slug": "counterfactuals_icml",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/counterfactuals_icml.png",
+      "file": "assets/conference_logos/counterfactuals_icml.png",
       "source_url": "local:icml.png",
       "note": "Workshop/track alias uses parent conference logo: icml",
       "kind": "parent-logo-alias",
@@ -226,7 +226,7 @@
     },
     {
       "slug": "counterfactuals_in_minds_and_machines",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/counterfactuals_in_minds_and_machines.png",
+      "file": "assets/conference_logos/counterfactuals_in_minds_and_machines.png",
       "source_url": "local:icml.png",
       "note": "Workshop/track alias uses parent conference logo: icml",
       "kind": "parent-logo-alias",
@@ -235,7 +235,7 @@
     },
     {
       "slug": "gem",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/gem.png",
+      "file": "assets/conference_logos/gem.png",
       "source_url": "local:iclr.png",
       "note": "Workshop/track alias uses parent conference logo: iclr",
       "kind": "parent-logo-alias",
@@ -244,7 +244,7 @@
     },
     {
       "slug": "gem_workshop",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/gem_workshop.png",
+      "file": "assets/conference_logos/gem_workshop.png",
       "source_url": "local:iclr.png",
       "note": "Workshop/track alias uses parent conference logo: iclr",
       "kind": "parent-logo-alias",
@@ -253,7 +253,7 @@
     },
     {
       "slug": "icbinb",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/icbinb.png",
+      "file": "assets/conference_logos/icbinb.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -262,7 +262,7 @@
     },
     {
       "slug": "icbinb_workshop",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/icbinb_workshop.png",
+      "file": "assets/conference_logos/icbinb_workshop.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -271,7 +271,7 @@
     },
     {
       "slug": "icml_counterfactuals",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/icml_counterfactuals.png",
+      "file": "assets/conference_logos/icml_counterfactuals.png",
       "source_url": "local:icml.png",
       "note": "Workshop/track alias uses parent conference logo: icml",
       "kind": "parent-logo-alias",
@@ -280,7 +280,7 @@
     },
     {
       "slug": "machine_learning_and_the_physical_sciences",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/machine_learning_and_the_physical_sciences.png",
+      "file": "assets/conference_logos/machine_learning_and_the_physical_sciences.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -289,7 +289,7 @@
     },
     {
       "slug": "machine_learning_for_structural_biology",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/machine_learning_for_structural_biology.png",
+      "file": "assets/conference_logos/machine_learning_for_structural_biology.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -298,7 +298,7 @@
     },
     {
       "slug": "machine_learning_physical_sciences",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/machine_learning_physical_sciences.png",
+      "file": "assets/conference_logos/machine_learning_physical_sciences.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -307,7 +307,7 @@
     },
     {
       "slug": "ml4ad",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/ml4ad.png",
+      "file": "assets/conference_logos/ml4ad.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -316,7 +316,7 @@
     },
     {
       "slug": "ml4ad_workshop",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/ml4ad_workshop.png",
+      "file": "assets/conference_logos/ml4ad_workshop.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -325,7 +325,7 @@
     },
     {
       "slug": "ml4physical_sciences",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/ml4physical_sciences.png",
+      "file": "assets/conference_logos/ml4physical_sciences.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -334,7 +334,7 @@
     },
     {
       "slug": "ml4physicalsciences",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/ml4physicalsciences.png",
+      "file": "assets/conference_logos/ml4physicalsciences.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -343,7 +343,7 @@
     },
     {
       "slug": "ml_reproducibility_challenge",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/ml_reproducibility_challenge.png",
+      "file": "assets/conference_logos/ml_reproducibility_challenge.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -352,7 +352,7 @@
     },
     {
       "slug": "mlrc",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/mlrc.png",
+      "file": "assets/conference_logos/mlrc.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -361,7 +361,7 @@
     },
     {
       "slug": "mlsb",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/mlsb.png",
+      "file": "assets/conference_logos/mlsb.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -370,7 +370,7 @@
     },
     {
       "slug": "mlsb_workshop",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/mlsb_workshop.png",
+      "file": "assets/conference_logos/mlsb_workshop.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -379,7 +379,7 @@
     },
     {
       "slug": "neurips_datasets_and_benchmarks",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/neurips_datasets_and_benchmarks.png",
+      "file": "assets/conference_logos/neurips_datasets_and_benchmarks.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -388,7 +388,7 @@
     },
     {
       "slug": "neurips_datasets_benchmarks",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/neurips_datasets_benchmarks.png",
+      "file": "assets/conference_logos/neurips_datasets_benchmarks.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -397,7 +397,7 @@
     },
     {
       "slug": "table_representation_learning",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/table_representation_learning.png",
+      "file": "assets/conference_logos/table_representation_learning.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -406,7 +406,7 @@
     },
     {
       "slug": "table_representation_learning_workshop",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/table_representation_learning_workshop.png",
+      "file": "assets/conference_logos/table_representation_learning_workshop.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -415,7 +415,7 @@
     },
     {
       "slug": "trustworthy_ml",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/trustworthy_ml.png",
+      "file": "assets/conference_logos/trustworthy_ml.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -424,7 +424,7 @@
     },
     {
       "slug": "ts4h",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/ts4h.png",
+      "file": "assets/conference_logos/ts4h.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -433,7 +433,7 @@
     },
     {
       "slug": "ts4h_workshop",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/ts4h_workshop.png",
+      "file": "assets/conference_logos/ts4h_workshop.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -442,7 +442,7 @@
     },
     {
       "slug": "tsrml",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/tsrml.png",
+      "file": "assets/conference_logos/tsrml.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -451,7 +451,7 @@
     },
     {
       "slug": "tsrml_workshop",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/tsrml_workshop.png",
+      "file": "assets/conference_logos/tsrml_workshop.png",
       "source_url": "local:neurips.png",
       "note": "Workshop/track alias uses parent conference logo: neurips",
       "kind": "parent-logo-alias",
@@ -460,7 +460,7 @@
     },
     {
       "slug": "wiley",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/wiley.png",
+      "file": "assets/conference_logos/wiley.png",
       "source_url": "https://www.wiley.com/content/dam/global/logos/wiley/wiley-logo-footer.svg",
       "note": "Wiley official footer SVG",
       "kind": "svg->png",
@@ -469,7 +469,7 @@
     },
     {
       "slug": "mdpi",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/mdpi.png",
+      "file": "assets/conference_logos/mdpi.png",
       "source_url": "https://pub.mdpi-res.com/data/mdpi_primary_logo_blue.svg",
       "note": "MDPI official primary logo SVG",
       "kind": "svg->png",
@@ -478,7 +478,7 @@
     },
     {
       "slug": "elsevier",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/elsevier.png",
+      "file": "assets/conference_logos/elsevier.png",
       "source_url": "https://www.elsevier.com/images/elsevier-logo-orange.svg",
       "note": "Elsevier official orange SVG",
       "kind": "svg->png",
@@ -487,7 +487,7 @@
     },
     {
       "slug": "asbmb",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/asbmb.png",
+      "file": "assets/conference_logos/asbmb.png",
       "source_url": "https://www.asbmb.org/img/template-images/logo.svg",
       "note": "ASBMB official SVG",
       "kind": "svg->png",
@@ -496,7 +496,7 @@
     },
     {
       "slug": "mary_ann_liebert",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/mary_ann_liebert.png",
+      "file": "assets/conference_logos/mary_ann_liebert.png",
       "source_url": "https://cdn.worldvectorlogo.com/logos/mary-ann-liebert.svg",
       "note": "Mary Ann Liebert vector logo",
       "kind": "svg->png",
@@ -505,7 +505,7 @@
     },
     {
       "slug": "bmj",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/bmj.png",
+      "file": "assets/conference_logos/bmj.png",
       "source_url": "https://bmjgroup.com/wp-content/uploads/2024/02/BMJ-Logo-Retina.png",
       "note": "BMJ Group official logo PNG",
       "kind": "raster->png",
@@ -514,7 +514,7 @@
     },
     {
       "slug": "the_union",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/the_union.png",
+      "file": "assets/conference_logos/the_union.png",
       "source_url": "https://theunion.org/ (inline SVG)",
       "note": "The Union official inline SVG from homepage",
       "kind": "inline-svg->png",
@@ -523,7 +523,7 @@
     },
     {
       "slug": "biology_direct",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/biology_direct.png",
+      "file": "assets/conference_logos/biology_direct.png",
       "source_url": "local:bmc.png",
       "note": "Source/journal alias uses bmc logo",
       "kind": "parent-logo-alias",
@@ -532,7 +532,7 @@
     },
     {
       "slug": "bmj_open",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/bmj_open.png",
+      "file": "assets/conference_logos/bmj_open.png",
       "source_url": "local:bmj.png",
       "note": "Source/journal alias uses bmj logo",
       "kind": "parent-logo-alias",
@@ -541,7 +541,7 @@
     },
     {
       "slug": "cerebral_cortex",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/cerebral_cortex.png",
+      "file": "assets/conference_logos/cerebral_cortex.png",
       "source_url": "local:oup.png",
       "note": "Source/journal alias uses oup logo",
       "kind": "parent-logo-alias",
@@ -550,7 +550,7 @@
     },
     {
       "slug": "conflict_and_health",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/conflict_and_health.png",
+      "file": "assets/conference_logos/conflict_and_health.png",
       "source_url": "local:bmc.png",
       "note": "Source/journal alias uses bmc logo",
       "kind": "parent-logo-alias",
@@ -559,7 +559,7 @@
     },
     {
       "slug": "conservation_letters",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/conservation_letters.png",
+      "file": "assets/conference_logos/conservation_letters.png",
       "source_url": "local:wiley.png",
       "note": "Source/journal alias uses wiley logo",
       "kind": "parent-logo-alias",
@@ -568,7 +568,7 @@
     },
     {
       "slug": "current_biology",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/current_biology.png",
+      "file": "assets/conference_logos/current_biology.png",
       "source_url": "local:elsevier.png",
       "note": "Source/journal alias uses elsevier logo",
       "kind": "parent-logo-alias",
@@ -577,7 +577,7 @@
     },
     {
       "slug": "diagnostics",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/diagnostics.png",
+      "file": "assets/conference_logos/diagnostics.png",
       "source_url": "local:mdpi.png",
       "note": "Source/journal alias uses mdpi logo",
       "kind": "parent-logo-alias",
@@ -586,7 +586,7 @@
     },
     {
       "slug": "ecology_and_evolution",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/ecology_and_evolution.png",
+      "file": "assets/conference_logos/ecology_and_evolution.png",
       "source_url": "local:wiley.png",
       "note": "Source/journal alias uses wiley logo",
       "kind": "parent-logo-alias",
@@ -595,7 +595,7 @@
     },
     {
       "slug": "human_genomics",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/human_genomics.png",
+      "file": "assets/conference_logos/human_genomics.png",
       "source_url": "local:bmc.png",
       "note": "Source/journal alias uses bmc logo",
       "kind": "parent-logo-alias",
@@ -604,7 +604,7 @@
     },
     {
       "slug": "international_journal_of_molecular_sciences",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/international_journal_of_molecular_sciences.png",
+      "file": "assets/conference_logos/international_journal_of_molecular_sciences.png",
       "source_url": "local:mdpi.png",
       "note": "Source/journal alias uses mdpi logo",
       "kind": "parent-logo-alias",
@@ -613,7 +613,7 @@
     },
     {
       "slug": "journal_of_biomedical_semantics",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/journal_of_biomedical_semantics.png",
+      "file": "assets/conference_logos/journal_of_biomedical_semantics.png",
       "source_url": "local:bmc.png",
       "note": "Source/journal alias uses bmc logo",
       "kind": "parent-logo-alias",
@@ -622,7 +622,7 @@
     },
     {
       "slug": "journal_of_computational_biology",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/journal_of_computational_biology.png",
+      "file": "assets/conference_logos/journal_of_computational_biology.png",
       "source_url": "local:mary_ann_liebert.png",
       "note": "Source/journal alias uses mary_ann_liebert logo",
       "kind": "parent-logo-alias",
@@ -631,7 +631,7 @@
     },
     {
       "slug": "journal_of_translational_medicine",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/journal_of_translational_medicine.png",
+      "file": "assets/conference_logos/journal_of_translational_medicine.png",
       "source_url": "local:bmc.png",
       "note": "Source/journal alias uses bmc logo",
       "kind": "parent-logo-alias",
@@ -640,7 +640,7 @@
     },
     {
       "slug": "microbiome",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/microbiome.png",
+      "file": "assets/conference_logos/microbiome.png",
       "source_url": "local:bmc.png",
       "note": "Source/journal alias uses bmc logo",
       "kind": "parent-logo-alias",
@@ -649,7 +649,7 @@
     },
     {
       "slug": "molecular_cellular_proteomics",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/molecular_cellular_proteomics.png",
+      "file": "assets/conference_logos/molecular_cellular_proteomics.png",
       "source_url": "local:asbmb.png",
       "note": "Source/journal alias uses asbmb logo",
       "kind": "parent-logo-alias",
@@ -658,7 +658,7 @@
     },
     {
       "slug": "parasitology_research",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/parasitology_research.png",
+      "file": "assets/conference_logos/parasitology_research.png",
       "source_url": "local:springer_nature.png",
       "note": "Source/journal alias uses springer_nature logo",
       "kind": "parent-logo-alias",
@@ -667,7 +667,7 @@
     },
     {
       "slug": "psychopharmacology",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/psychopharmacology.png",
+      "file": "assets/conference_logos/psychopharmacology.png",
       "source_url": "local:springer_nature.png",
       "note": "Source/journal alias uses springer_nature logo",
       "kind": "parent-logo-alias",
@@ -676,7 +676,7 @@
     },
     {
       "slug": "public_health_action",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/public_health_action.png",
+      "file": "assets/conference_logos/public_health_action.png",
       "source_url": "local:the_union.png",
       "note": "Source/journal alias uses the_union logo",
       "kind": "parent-logo-alias",
@@ -685,7 +685,7 @@
     },
     {
       "slug": "acs",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/acs.png",
+      "file": "assets/conference_logos/acs.png",
       "source_url": "https://cdn.worldvectorlogo.com/logos/acs-8.svg",
       "note": "ACS vector logo; ACS official downloadable brand assets require login",
       "kind": "svg->png",
@@ -694,7 +694,7 @@
     },
     {
       "slug": "acs_publications",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/acs_publications.png",
+      "file": "assets/conference_logos/acs_publications.png",
       "source_url": "local:acs.png",
       "note": "Source/journal alias uses ACS logo",
       "kind": "parent-logo-alias",
@@ -703,7 +703,7 @@
     },
     {
       "slug": "journal_of_chemical_information_and_modeling",
-      "file": "/Users/jack/paper2poster/assets/conference_logos/journal_of_chemical_information_and_modeling.png",
+      "file": "assets/conference_logos/journal_of_chemical_information_and_modeling.png",
       "source_url": "local:acs.png",
       "note": "Source/journal alias uses ACS logo",
       "kind": "parent-logo-alias",
